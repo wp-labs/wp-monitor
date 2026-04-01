@@ -21,13 +21,24 @@ pub struct LayerService {
 
 impl LayerService {
     /// 通过依赖注入方式接入 VM 仓储抽象，便于后续替换实现/测试。
-    pub fn new(vm_repo: Arc<dyn VmRepository>, vlog_repo: Arc<dyn VlogRepository>, config: AppConfig) -> Self {
-        Self { vm_repo, vlog_repo, config }
+    pub fn new(
+        vm_repo: Arc<dyn VmRepository>,
+        vlog_repo: Arc<dyn VlogRepository>,
+        config: AppConfig,
+    ) -> Self {
+        Self {
+            vm_repo,
+            vlog_repo,
+            config,
+        }
     }
 
     /// 获取全量分层快照。
     /// 返回内容包括：source/parse/sink/miss/sys_metrics + meta。
-    pub async fn get_layers_snapshot(&self, query: TimeRangeQuery) -> Result<LayerSnapshot, VmRepoError> {
+    pub async fn get_layers_snapshot(
+        &self,
+        query: TimeRangeQuery,
+    ) -> Result<LayerSnapshot, VmRepoError> {
         let snapshot_data = self.vm_repo.fetch_snapshot_data(&query).await?;
 
         // 版本号采用“结构稳定哈希”，用于前端识别层结构是否变化。
@@ -157,12 +168,14 @@ impl LayerService {
                     return Ok(NodeDetail {
                         id: l.id,
                         name: l.name,
-                    node_type: "log_type".to_string(),
-                    package_name: Some(node_id.split(':').nth(1).unwrap_or_default().to_string()),
-                    metrics: l.metrics,
-                });
+                        node_type: "log_type".to_string(),
+                        package_name: Some(
+                            node_id.split(':').nth(1).unwrap_or_default().to_string(),
+                        ),
+                        metrics: l.metrics,
+                    });
+                }
             }
-        }
         }
 
         for g in snapshot.sinks {
@@ -232,7 +245,9 @@ impl LayerService {
                 log_count: Vec::new(),
             });
         }
-        self.vm_repo.fetch_node_timeseries(node_id, &query, step).await
+        self.vm_repo
+            .fetch_node_timeseries(node_id, &query, step)
+            .await
     }
 
     /// 返回前端初始化配置（从配置文件读取结果回传）。

@@ -82,6 +82,14 @@ export interface NodeDetail {
   metrics: MetricsSnapshot;
 }
 
+export interface VlogRecord {
+  time: string;
+  stream_id: string;
+  stream: string;
+  msg: string;
+  raw: string;
+}
+
 export interface TimePoint {
   ts: string;
   value: number;

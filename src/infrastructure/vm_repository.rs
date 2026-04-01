@@ -33,7 +33,10 @@ pub struct VmSnapshotData {
 /// - fetch_node_timeseries：按节点拉区间序列。
 #[async_trait]
 pub trait VmRepository: Send + Sync {
-    async fn fetch_snapshot_data(&self, query: &TimeRangeQuery) -> Result<VmSnapshotData, VmRepoError>;
+    async fn fetch_snapshot_data(
+        &self,
+        query: &TimeRangeQuery,
+    ) -> Result<VmSnapshotData, VmRepoError>;
     async fn fetch_node_timeseries(
         &self,
         node_id: &str,
@@ -283,12 +286,15 @@ impl VmHttpRepository {
                 .cloned()
                 .unwrap_or(0.0)
                 .round() as u64;
-            grouped.entry(group.clone()).or_default().push(SinkLeafNode {
-                id: format!("sink:{}:{}", group, name),
-                sink_group: group,
-                sink_name: name,
-                metrics: Self::metric(rate, count, &collected_at),
-            });
+            grouped
+                .entry(group.clone())
+                .or_default()
+                .push(SinkLeafNode {
+                    id: format!("sink:{}:{}", group, name),
+                    sink_group: group,
+                    sink_name: name,
+                    metrics: Self::metric(rate, count, &collected_at),
+                });
         }
 
         let mut out = Vec::new();
@@ -328,7 +334,10 @@ impl VmRepository for VmHttpRepository {
     /// 1. 按业务指标构造 PromQL；
     /// 2. 并发查询 source/parse/sink/cpu/mem；
     /// 3. 按层级聚合并返回统一结构。
-    async fn fetch_snapshot_data(&self, query: &TimeRangeQuery) -> Result<VmSnapshotData, VmRepoError> {
+    async fn fetch_snapshot_data(
+        &self,
+        query: &TimeRangeQuery,
+    ) -> Result<VmSnapshotData, VmRepoError> {
         let window = Self::window_from_range(query);
         let at = query.end_time.timestamp();
 
@@ -344,20 +353,27 @@ impl VmRepository for VmHttpRepository {
             window
         );
 
-        let sink_group_rate_q =
-            "sum by (sink_group) (rate(wparse_send_to_sink{sink_group!~\"monitor|default|miss|residue|error\"}[1m]))";
+        let sink_group_rate_q = "sum by (sink_group) (rate(wparse_send_to_sink{sink_group!~\"monitor|default|miss|residue|error\"}[1m]))";
         let sink_group_count_q = format!(
             "sum by (sink_group) (increase(wparse_send_to_sink{{sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
             window
         );
-        let sink_rate_q =
-            "sum by (sink_group, sink_name) (rate(wparse_send_to_sink{sink_group!~\"monitor|default|miss|residue|error\"}[1m]))";
+        let sink_rate_q = "sum by (sink_group, sink_name) (rate(wparse_send_to_sink{sink_group!~\"monitor|default|miss|residue|error\"}[1m]))";
         let sink_count_q = format!(
             "sum by (sink_group, sink_name) (increase(wparse_send_to_sink{{sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
             window
         );
 
-        let (source_rate, source_count, parse_rate, parse_count, sink_group_rate, sink_group_count, sink_rate, sink_count) = tokio::try_join!(
+        let (
+            source_rate,
+            source_count,
+            parse_rate,
+            parse_count,
+            sink_group_rate,
+            sink_group_count,
+            sink_rate,
+            sink_count,
+        ) = tokio::try_join!(
             self.instant_query(source_rate_q, at),
             self.instant_query(&source_count_q, at),
             self.instant_query(parse_rate_q, at),
@@ -382,12 +398,7 @@ impl VmRepository for VmHttpRepository {
         Ok(VmSnapshotData {
             sources: self.build_source_nodes(source_rate, source_count),
             parses: self.build_parse_nodes(parse_rate, parse_count),
-            sinks: self.build_sink_groups(
-                sink_group_rate,
-                sink_group_count,
-                sink_rate,
-                sink_count,
-            ),
+            sinks: self.build_sink_groups(sink_group_rate, sink_group_count, sink_rate, sink_count),
             sys_metrics: SysMetrics {
                 cpu_usage_pct: cpu,
                 memory_used_mb: mem.round() as u64,
@@ -469,10 +480,7 @@ impl VmRepository for VmHttpRepository {
                     ),
                 )
             }
-            _ => (
-                "vector(0)".to_string(),
-                "vector(0)".to_string(),
-            ),
+            _ => ("vector(0)".to_string(), "vector(0)".to_string()),
         };
 
         let (rate_series, count_series) = tokio::try_join!(

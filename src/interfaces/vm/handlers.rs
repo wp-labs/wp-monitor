@@ -4,8 +4,7 @@ use crate::shared::api::{ApiResponse, ReadyResponse};
 use actix_web::{
     HttpResponse, Result,
     error::{ErrorBadRequest, ErrorInternalServerError},
-    get,
-    web,
+    get, web,
 };
 
 /// HTTP 查询参数：通用时间窗口。
@@ -55,10 +54,11 @@ pub async fn get_layers_metrics(
 ) -> Result<HttpResponse> {
     let query = TimeRangeQuery::new(&req.start_time, &req.end_time)
         .map_err(|e| ErrorBadRequest(e.to_string()))?;
-    let node_ids = req
-        .node_ids
-        .as_ref()
-        .map(|s| s.split(',').map(|x| x.trim().to_string()).collect::<Vec<_>>());
+    let node_ids = req.node_ids.as_ref().map(|s| {
+        s.split(',')
+            .map(|x| x.trim().to_string())
+            .collect::<Vec<_>>()
+    });
 
     let data = svc
         .get_layers_metrics(query, node_ids)

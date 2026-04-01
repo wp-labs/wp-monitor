@@ -159,8 +159,10 @@ pub enum QueryParseError {
 impl TimeRangeQuery {
     /// 从 RFC3339 字符串构造时间窗口，并校验 start < end。
     pub fn new(start_time: &str, end_time: &str) -> Result<Self, QueryParseError> {
-        let start = DateTime::parse_from_rfc3339(start_time).map_err(|_| QueryParseError::InvalidStart)?;
-        let end = DateTime::parse_from_rfc3339(end_time).map_err(|_| QueryParseError::InvalidEnd)?;
+        let start =
+            DateTime::parse_from_rfc3339(start_time).map_err(|_| QueryParseError::InvalidStart)?;
+        let end =
+            DateTime::parse_from_rfc3339(end_time).map_err(|_| QueryParseError::InvalidEnd)?;
         if start >= end {
             return Err(QueryParseError::InvalidRange);
         }

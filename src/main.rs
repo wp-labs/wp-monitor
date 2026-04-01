@@ -6,10 +6,14 @@ mod shared;
 
 use actix_web::{App, HttpServer, web};
 use infrastructure::vm_repository::{VmHttpRepository, VmRepository};
-use interfaces::http::routes::register_routes;
-use interfaces::http::static_assets::register_static_assets;
+use interfaces::vm::routes::register_vm_routes;
+use interfaces::vm::static_assets::register_static_assets;
 use shared::config::AppConfig;
 use std::sync::Arc;
+
+use infrastructure::vlog_repository::{VlogHttpRepository, VlogRepository};
+
+use crate::interfaces::vlog::routers::register_vlog_routes;
 
 /// 后端启动入口：
 /// 1. 初始化日志；
@@ -31,17 +35,21 @@ async fn main() -> std::io::Result<()> {
 
     let vlog_base = app_cfg.vlog_base_url.clone();
     let vlog_repo: Arc<dyn VlogRepository> = Arc::new(VlogHttpRepository::new(vlog_base));
+    let vlog_http_repo = web::Data::new(VlogHttpRepository::new(app_cfg.vlog_base_url.clone()));
 
     let app_service = web::Data::new(application::layer_service::LayerService::new(
         vm_repo, vlog_repo, app_cfg,
     ));
 
-
-
     HttpServer::new(move || {
         App::new()
             .app_data(app_service.clone())
-            .configure(register_routes)
+            .app_data(vlog_http_repo.clone())
+            .service(
+                web::scope("/api/v1/wp-monitor")
+                    .configure(register_vm_routes)
+                    .configure(register_vlog_routes),
+            )
             .configure(register_static_assets)
     })
     .bind(("0.0.0.0", 18080))?

@@ -7,12 +7,13 @@ import {
 } from '../../components/monitor/flowHelpers';
 import TimeSeriesChart from '../../components/monitor/TimeSeriesChart';
 import {
+  fetchMissedLogs,
   fetchMetrics,
   fetchNodeDetail,
   fetchNodeTimeSeries,
   fetchSnapshot,
 } from '../../services/monitor';
-import type { LayerSnapshot, NodeDetail, NodeTimeSeries } from '../../types/monitor';
+import type { LayerSnapshot, NodeDetail, NodeTimeSeries, VlogRecord } from '../../types/monitor';
 import './index.css';
 
 const QUICK_RANGES = [
@@ -22,6 +23,7 @@ const QUICK_RANGES = [
   { key: '6h', label: '最近 6 小时', minutes: 360 },
   { key: '24h', label: '最近 24 小时', minutes: 1440 },
 ] as const;
+const MISS_PAGE_SIZE = 10;
 
 type LegendType = 'source' | 'package' | 'log' | 'group' | 'sink' | 'miss' | null;
 type ParseSearchItem =
@@ -91,6 +93,12 @@ export default function WpMonitorPage() {
   const [detailEndTime, setDetailEndTime] = useState('');
   const [drawerLoading, setDrawerLoading] = useState(false);
   const [drawerError, setDrawerError] = useState('');
+  const [missLogsLoading, setMissLogsLoading] = useState(false);
+  const [missLogsError, setMissLogsError] = useState('');
+  const [missLogs, setMissLogs] = useState<VlogRecord[]>([]);
+  const [missQueryLimit, setMissQueryLimit] = useState(10);
+  const [missLimitInput, setMissLimitInput] = useState('10');
+  const [missPage, setMissPage] = useState(1);
 
   const [expandedPackages, setExpandedPackages] = useState<string[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
@@ -173,6 +181,16 @@ export default function WpMonitorPage() {
   }, [snapshot]);
 
   const rateChartPoints = useMemo(() => series?.log_rate_eps ?? [], [series?.log_rate_eps]);
+  const isMissSelected = useMemo(
+    () => Boolean(snapshot && selectedNode && selectedNode === snapshot.miss.id),
+    [snapshot, selectedNode],
+  );
+  const missTotalPages = useMemo(() => Math.max(1, Math.ceil(missLogs.length / MISS_PAGE_SIZE)), [missLogs.length]);
+  const missPageItems = useMemo(() => {
+    const page = Math.min(Math.max(missPage, 1), missTotalPages);
+    const start = (page - 1) * MISS_PAGE_SIZE;
+    return missLogs.slice(start, start + MISS_PAGE_SIZE);
+  }, [missLogs, missPage, missTotalPages]);
 
   const parseSearchGroups = useMemo(() => {
     if (!snapshot) return [];
@@ -220,6 +238,12 @@ export default function WpMonitorPage() {
     setParseSearchActiveIndex(0);
   }, [parseQuery, parseSearchOpen]);
 
+  useEffect(() => {
+    if (missPage > missTotalPages) {
+      setMissPage(missTotalPages);
+    }
+  }, [missPage, missTotalPages]);
+
   function isDim(type: Exclude<LegendType, null>) {
     return activeLegend !== null && activeLegend !== type;
   }
@@ -232,7 +256,63 @@ export default function WpMonitorPage() {
     return classes.join(' ');
   }
 
+  function normalizeMissLimit(value: number) {
+    return Math.max(1, Math.min(100, Math.floor(value || 10)));
+  }
+
+  async function loadMissedLogs(start: string, end: string, limit: number, resetPage = true) {
+    try {
+      setMissLogsLoading(true);
+      setMissLogsError('');
+      const data = await fetchMissedLogs(start, end, limit);
+      setMissLogs(data);
+      if (resetPage) {
+        setMissPage(1);
+      }
+      return data;
+    } catch (e) {
+      setMissLogs([]);
+      setMissLogsError((e as Error).message || 'MISS 日志获取失败');
+      return null;
+    } finally {
+      setMissLogsLoading(false);
+    }
+  }
+
+  async function onApplyMissLimit() {
+    if (!isMissSelected) return;
+    const parsed = normalizeMissLimit(Number(missLimitInput));
+    setMissLimitInput(String(parsed));
+    setMissQueryLimit(parsed);
+    await loadMissedLogs(detailStartTime, detailEndTime, parsed);
+  }
+
+  async function onPrevMissPage() {
+    setMissPage((p) => Math.max(1, p - 1));
+  }
+
+  async function onNextMissPage() {
+    const wantedPage = missPage + 1;
+    if (wantedPage <= missTotalPages) {
+      setMissPage(wantedPage);
+      return;
+    }
+
+    const canExpandLimit = missQueryLimit < 100 && missLogs.length >= missQueryLimit;
+    if (!canExpandLimit) return;
+
+    const nextLimit = normalizeMissLimit(Math.min(100, missQueryLimit + MISS_PAGE_SIZE));
+    setMissLimitInput(String(nextLimit));
+    setMissQueryLimit(nextLimit);
+    const data = await loadMissedLogs(detailStartTime, detailEndTime, nextLimit, false);
+    if (data && data.length > (wantedPage - 1) * MISS_PAGE_SIZE) {
+      setMissPage(wantedPage);
+    }
+  }
+
   async function openDetail(nodeId: string) {
+    const missNodeId = snapshot?.miss.id ?? '';
+    const isMissNode = nodeId === missNodeId;
     const currentStart = startTime;
     const currentEnd = new Date().toISOString();
     setSelectedNode(nodeId);
@@ -242,14 +322,36 @@ export default function WpMonitorPage() {
     setDrawerError('');
     setDetail(null);
     setSeries(null);
+    setMissLogs([]);
+    setMissLogsError('');
+    setMissLogsLoading(false);
     try {
-      const [detailResp, seriesResp] = await Promise.all([
-        fetchNodeDetail(nodeId, currentStart, currentEnd),
-        fetchNodeTimeSeries(nodeId, currentStart, currentEnd, '30s'),
-      ]);
+      const detailPromise = fetchNodeDetail(nodeId, currentStart, currentEnd);
+      const seriesPromise = fetchNodeTimeSeries(nodeId, currentStart, currentEnd, '30s');
+      if (isMissNode) {
+        setMissLogsLoading(true);
+        const [detailResp, seriesResp, missedResp] = await Promise.all([
+          detailPromise,
+          seriesPromise,
+          fetchMissedLogs(currentStart, currentEnd, missQueryLimit),
+        ]);
+        setMissLogs(missedResp);
+        setMissPage(1);
+        setMissLogsError('');
+        setMissLogsLoading(false);
+        setDetail(detailResp.data);
+        setSeries(seriesResp.data);
+        return;
+      }
+      const [detailResp, seriesResp] = await Promise.all([detailPromise, seriesPromise]);
       setDetail(detailResp.data);
       setSeries(seriesResp.data);
     } catch (e) {
+      if (isMissNode) {
+        setMissLogs([]);
+        setMissLogsError((e as Error).message || 'MISS 日志获取失败');
+        setMissLogsLoading(false);
+      }
       setDrawerError((e as Error).message || '节点详情获取失败');
     } finally {
       setDrawerLoading(false);
@@ -642,30 +744,102 @@ export default function WpMonitorPage() {
             <section className="panel card">
               <div className="panel-title">实时指标</div>
               <p>日志速率：{fmtRate(detail.metrics.log_rate_eps)}</p>
-              <TimeSeriesChart
-                title="速率趋势"
-                points={rateChartPoints}
-                color="#2f6df6"
-                valueFormatter={formatRate2}
-                axisValueFormatter={formatRate2}
-                rangeStartLabel={formatLocalTime(detailStartTime)}
-                rangeEndLabel={formatLocalTime(detailEndTime)}
-                showRangeMeta={false}
-              />
               <p>日志数量：{fmtCount(detail.metrics.log_count)}</p>
-              <TimeSeriesChart
-                title="数量趋势"
-                points={series?.log_count ?? []}
-                color="#2f6df6"
-                valueFormatter={formatCount}
-                axisValueFormatter={formatCountAxis}
-                rangeStartLabel={formatLocalTime(detailStartTime)}
-                rangeEndLabel={formatLocalTime(detailEndTime)}
-                showRangeMeta={false}
-              />
+              {!isMissSelected && (
+                <>
+                  <TimeSeriesChart
+                    title="速率趋势"
+                    points={rateChartPoints}
+                    color="#2f6df6"
+                    valueFormatter={formatRate2}
+                    axisValueFormatter={formatRate2}
+                    rangeStartLabel={formatLocalTime(detailStartTime)}
+                    rangeEndLabel={formatLocalTime(detailEndTime)}
+                    showRangeMeta={false}
+                  />
+                  <TimeSeriesChart
+                    title="数量趋势"
+                    points={series?.log_count ?? []}
+                    color="#2f6df6"
+                    valueFormatter={formatCount}
+                    axisValueFormatter={formatCountAxis}
+                    rangeStartLabel={formatLocalTime(detailStartTime)}
+                    rangeEndLabel={formatLocalTime(detailEndTime)}
+                    showRangeMeta={false}
+                  />
+                </>
+              )}
               <p>时间窗口：{formatLocalDateTime(detailStartTime)} - {formatLocalDateTime(detailEndTime)}</p>
-              <p>最后更新：{detail.metrics.collected_at ? formatLocalDateTime(detail.metrics.collected_at) : '-'}</p>
             </section>
+
+            {isMissSelected && (
+              <section className="panel card">
+                <div className="panel-title">MISS 原始日志</div>
+                <div className="miss-query-toolbar">
+                  <label className="miss-limit-label" htmlFor="miss-limit-input">查询条数上限(1-100)</label>
+                  <input
+                    id="miss-limit-input"
+                    className="miss-limit-input"
+                    type="number"
+                    min={1}
+                    max={100}
+                    step={1}
+                    value={missLimitInput}
+                    onChange={(e) => setMissLimitInput(e.target.value)}
+                  />
+                  <button className="mini-btn" type="button" onClick={() => void onApplyMissLimit()}>
+                    重新查询
+                  </button>
+                </div>
+                {missLogsLoading && <p>MISS 日志加载中...</p>}
+                {!missLogsLoading && missLogsError && <p className="error">错误: {missLogsError}</p>}
+                {!missLogsLoading && !missLogsError && missLogs.length === 0 && <p>当前时间窗口无 MISS 日志</p>}
+                {!missLogsLoading && !missLogsError && missLogs.length > 0 && (
+                  <>
+                    <p className="miss-page-meta">
+                      已加载 {missLogs.length} 条（查询上限 {missQueryLimit}），当前第 {Math.min(missPage, missTotalPages)} / {missTotalPages} 页（每页 10 条）
+                    </p>
+                    <div className="miss-scroll">
+                      <div className="miss-list">
+                        {missPageItems.map((item, idx) => {
+                          const offset = (Math.min(missPage, missTotalPages) - 1) * MISS_PAGE_SIZE;
+                          const rowNo = offset + idx + 1;
+                          return (
+                            <article key={`${item.time}-${item.stream_id}-${rowNo}`} className="miss-record">
+                              <div className="miss-record-head">#{rowNo} | {formatLocalDateTime(item.time)}</div>
+                              <pre className="miss-record-raw">{item.raw}</pre>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="miss-pager">
+                      <button
+                        className="mini-btn"
+                        type="button"
+                        disabled={missPage <= 1 || missLogsLoading}
+                        onClick={() => void onPrevMissPage()}
+                      >
+                        上一页
+                      </button>
+                      <button
+                        className="mini-btn"
+                        type="button"
+                        disabled={
+                          missLogsLoading || (
+                            missPage >= missTotalPages &&
+                            !(missQueryLimit < 100 && missLogs.length >= missQueryLimit)
+                          )
+                        }
+                        onClick={() => void onNextMissPage()}
+                      >
+                        下一页
+                      </button>
+                    </div>
+                  </>
+                )}
+              </section>
+            )}
           </>
         )}
 

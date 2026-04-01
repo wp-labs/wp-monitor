@@ -647,7 +647,7 @@ body {
   position: fixed;
   top: 0;
   right: 0;
-  width: clamp(320px, 32vw, 480px);
+  width: clamp(380px, 38vw, 620px);
   height: 100%;
   background: #fff;
   box-shadow: -4px 0 16px rgba(0, 0, 0, 0.15);
@@ -701,6 +701,76 @@ body {
   margin: 4px 0;
   font-size: 13px;
   line-height: 1.45;
+}
+
+.miss-query-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.miss-limit-label {
+  font-size: 12px;
+  color: #475569;
+}
+
+.miss-limit-input {
+  width: 90px;
+  height: 30px;
+  border: 1px solid #dbe5f3;
+  border-radius: 8px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: #334155;
+}
+
+.miss-page-meta {
+  color: #64748b;
+}
+
+.miss-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.miss-scroll {
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.miss-record {
+  border: 1px solid #f1d5d5;
+  border-radius: 8px;
+  background: #fff8f8;
+  padding: 10px;
+}
+
+.miss-record-head {
+  font-size: 12px;
+  color: #7f1d1d;
+  font-family: var(--font-mono);
+  margin-bottom: 6px;
+}
+
+.miss-record-raw {
+  margin: 0;
+  font-size: 12px;
+  color: #111827;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+}
+
+.miss-pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .spark {

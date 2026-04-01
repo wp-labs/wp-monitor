@@ -4,6 +4,7 @@ import type {
   LayersMetricsResponse,
   NodeDetail,
   NodeTimeSeries,
+  VlogRecord,
 } from '../types/monitor';
 
 function isoMinutesAgo(min: number) {
@@ -52,4 +53,13 @@ export async function fetchNodeTimeSeries(
   const resp = await fetch(url);
   if (!resp.ok) throw new Error('timeseries request failed');
   return (await resp.json()) as ApiResp<NodeTimeSeries>;
+}
+
+export async function fetchMissedLogs(startTime: string, endTime: string, limit = 10) {
+  const safeLimit = Math.max(1, Math.min(100, Math.floor(limit || 10)));
+  const url = `/api/v1/wp-monitor/vlog/missed?query=${encodeURIComponent('wp_stage:miss')}&limit=${safeLimit}&start=${encodeURIComponent(startTime)}&end=${encodeURIComponent(endTime)}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error('missed logs request failed');
+  const data = (await resp.json()) as ApiResp<VlogRecord[]>;
+  return data.data;
 }
