@@ -431,7 +431,8 @@ impl VmRepository for VmHttpRepository {
     ) -> Result<MetricsSnapshot, VmRepoError> {
         let window = Self::window_from_range(query);
         let at = query.end_time.timestamp();
-        let miss_selector = r#"wparse_send_to_sink{sink_group="miss",sink_name="victorialogs_output"}"#;
+        let miss_selector =
+            r#"wparse_send_to_sink{sink_group="miss",sink_name="victorialogs_output"}"#;
         let rate_q = format!("sum(rate({}[{}]))", miss_selector, window);
         let count_q = format!("sum(increase({}[{}]))", miss_selector, window);
 

@@ -11,7 +11,7 @@ use interfaces::vm::static_assets::register_static_assets;
 use shared::config::AppConfig;
 use std::sync::Arc;
 
-use infrastructure::vlog_repository::{VlogHttpRepository, VlogRepository};
+use infrastructure::vlog_repository::VlogHttpRepository;
 
 use crate::interfaces::vlog::routers::register_vlog_routes;
 
@@ -33,12 +33,10 @@ async fn main() -> std::io::Result<()> {
     let vm_base = app_cfg.vm_base_url.clone();
     let vm_repo: Arc<dyn VmRepository> = Arc::new(VmHttpRepository::new(vm_base));
 
-    let vlog_base = app_cfg.vlog_base_url.clone();
-    let vlog_repo: Arc<dyn VlogRepository> = Arc::new(VlogHttpRepository::new(vlog_base));
     let vlog_http_repo = web::Data::new(VlogHttpRepository::new(app_cfg.vlog_base_url.clone()));
 
     let app_service = web::Data::new(application::layer_service::LayerService::new(
-        vm_repo, vlog_repo, app_cfg,
+        vm_repo, app_cfg,
     ));
 
     HttpServer::new(move || {

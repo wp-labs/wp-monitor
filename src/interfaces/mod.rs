@@ -1,2 +1,2 @@
-pub mod vm;
 pub mod vlog;
+pub mod vm;

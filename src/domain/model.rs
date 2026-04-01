@@ -146,6 +146,7 @@ pub struct TimeRangeQuery {
 }
 
 /// 时间窗口解析错误。
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, thiserror::Error)]
 pub enum QueryParseError {
     #[error("invalid start_time format")]

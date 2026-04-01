@@ -1,12 +1,10 @@
-use actix_web::{
-    HttpResponse, Result,
-    error::ErrorInternalServerError,
-    http::header,
-    get, web,
-};
+use actix_web::{HttpResponse, Result, error::ErrorInternalServerError, get, http::header, web};
 use chrono::{DateTime, Utc};
 
-use crate::{infrastructure::vlog_repository::{VlogHttpRepository, VlogRepository}, shared::api::ApiResponse};
+use crate::{
+    infrastructure::vlog_repository::{VlogHttpRepository, VlogRepository},
+    shared::api::ApiResponse,
+};
 
 #[derive(Debug, serde::Deserialize)]
 pub struct VlogInstantQuery {
@@ -53,7 +51,9 @@ fn normalize_page(page: Option<u32>) -> u32 {
 }
 
 fn normalize_page_size(page_size: Option<u32>) -> u32 {
-    page_size.unwrap_or(DEFAULT_PAGE_SIZE).clamp(1, MAX_PAGE_SIZE)
+    page_size
+        .unwrap_or(DEFAULT_PAGE_SIZE)
+        .clamp(1, MAX_PAGE_SIZE)
 }
 
 fn normalize_query(query: &Option<String>) -> String {
@@ -91,7 +91,10 @@ pub async fn get_missed_data(
         .await
         .map_err(|e| ErrorInternalServerError(e.to_string()))?;
     let has_more = data.len() > page_size as usize;
-    let items = data.into_iter().take(page_size as usize).collect::<Vec<_>>();
+    let items = data
+        .into_iter()
+        .take(page_size as usize)
+        .collect::<Vec<_>>();
 
     Ok(HttpResponse::Ok().json(ApiResponse::ok(VlogMissedPageData {
         start: req.start.to_rfc3339(),

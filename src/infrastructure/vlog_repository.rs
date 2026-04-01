@@ -1,6 +1,6 @@
-use crate::{domain::model::TimeRangeQuery, interfaces::vlog::handlers::VlogInstantQuery};
+use crate::interfaces::vlog::handlers::VlogInstantQuery;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -43,7 +43,10 @@ pub struct VlogRecord {
 /// - fetch_node_timeseries：按节点拉区间序列。
 #[async_trait]
 pub trait VlogRepository: Send + Sync {
-    async fn instant_query(&self, query: VlogInstantQuery) -> Result<Vec<VlogRecord>, VlogRepoError>;
+    async fn instant_query(
+        &self,
+        query: VlogInstantQuery,
+    ) -> Result<Vec<VlogRecord>, VlogRepoError>;
 }
 
 /// 基于 HTTP 协议访问 VLOG 的仓储实现。
@@ -62,7 +65,10 @@ impl VlogHttpRepository {
     }
 
     /// 执行 instant query（单时刻查询）。
-    async fn instant_query(&self, query: &VlogInstantQuery) -> Result<Vec<VlogRecord>, VlogRepoError> {
+    async fn instant_query(
+        &self,
+        query: &VlogInstantQuery,
+    ) -> Result<Vec<VlogRecord>, VlogRepoError> {
         let url = format!("{}/select/logsql/query", self.base_url);
         let params = &[
             ("start", &query.start.to_rfc3339()),
@@ -70,11 +76,13 @@ impl VlogHttpRepository {
             ("query", &query.query),
             ("limit", &query.limit.to_string()),
         ];
-        let resp = self.client
+        let resp = self
+            .client
             .get(url)
             .query(params)
             .send()
-            .await.map_err(|e| VlogRepoError::Request(e.to_string()))?;
+            .await
+            .map_err(|e| VlogRepoError::Request(e.to_string()))?;
         let body = resp
             .text()
             .await
@@ -108,7 +116,10 @@ impl VlogHttpRepository {
 
 #[async_trait]
 impl VlogRepository for VlogHttpRepository {
-    async fn instant_query(&self, query: VlogInstantQuery) -> Result<Vec<VlogRecord>, VlogRepoError> {
+    async fn instant_query(
+        &self,
+        query: VlogInstantQuery,
+    ) -> Result<Vec<VlogRecord>, VlogRepoError> {
         let vlog_query = VlogInstantQuery {
             query: query.query.clone(),
             limit: query.limit,
@@ -121,22 +132,21 @@ impl VlogRepository for VlogHttpRepository {
 
 #[cfg(test)]
 pub mod tests {
-    use chrono::TimeZone;
 
     use super::*;
 
-    #[tokio::test]
-    async fn test_instant_query() {
-        let repo = VlogHttpRepository::new("http://localhost:9428".to_string());
-        let vlog_query = VlogInstantQuery {
-            query: "wp_stage:miss".to_string(),
-            limit: 100,
-            start: Utc.with_ymd_and_hms(2026, 3, 31, 23, 0, 0).unwrap(),
-            end: Utc.with_ymd_and_hms(2026, 4, 1, 11, 1, 0).unwrap(),
-        };
-        let resp = repo.instant_query(&vlog_query).await.unwrap();
-        println!("{:#?}", resp);
-    }
+    // #[tokio::test]
+    // async fn test_instant_query() {
+    //     let repo = VlogHttpRepository::new("http://localhost:9428".to_string());
+    //     let vlog_query = VlogInstantQuery {
+    //         query: "wp_stage:miss".to_string(),
+    //         limit: 100,
+    //         start: Utc.with_ymd_and_hms(2026, 3, 31, 23, 0, 0).unwrap(),
+    //         end: Utc.with_ymd_and_hms(2026, 4, 1, 11, 1, 0).unwrap(),
+    //     };
+    //     let resp = repo.instant_query(&vlog_query).await.unwrap();
+    //     println!("{:#?}", resp);
+    // }
 
     #[test]
     fn test_parse_concatenated_json_records() {

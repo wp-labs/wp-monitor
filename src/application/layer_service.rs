@@ -2,7 +2,6 @@ use crate::domain::model::{
     LayerSnapshot, LayerVersions, LayersMetricsResponse, MetricsSnapshot, MissNode, NodeDetail,
     NodeMetricsItem, NodeTimeSeries, SnapshotMeta, TimeRangeQuery,
 };
-use crate::infrastructure::vlog_repository::VlogRepository;
 use crate::infrastructure::vm_repository::{VmRepoError, VmRepository};
 use crate::shared::config::AppConfig;
 use crate::shared::hash::stable_hash_json;
@@ -16,21 +15,12 @@ use std::sync::Arc;
 pub struct LayerService {
     vm_repo: Arc<dyn VmRepository>,
     config: AppConfig,
-    vlog_repo: Arc<dyn VlogRepository>,
 }
 
 impl LayerService {
     /// 通过依赖注入方式接入 VM 仓储抽象，便于后续替换实现/测试。
-    pub fn new(
-        vm_repo: Arc<dyn VmRepository>,
-        vlog_repo: Arc<dyn VlogRepository>,
-        config: AppConfig,
-    ) -> Self {
-        Self {
-            vm_repo,
-            vlog_repo,
-            config,
-        }
+    pub fn new(vm_repo: Arc<dyn VmRepository>, config: AppConfig) -> Self {
+        Self { vm_repo, config }
     }
 
     /// 获取全量分层快照。
