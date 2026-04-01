@@ -829,7 +829,7 @@ export default function WpMonitorPage() {
                 {!missLogsLoading && !missLogsError && missLogs.length > 0 && (
                   <>
                     <p className="miss-page-meta">
-                      当前第 {missPage} 页（每页 10 条）{missHasMore ? '，还有下一页' : '，已到最后一页'}
+                      第 {missPage} 页 / 每页 10 条{missHasMore ? '（可继续翻页）' : '（已到末页）'}
                     </p>
                     <div className="miss-scroll">
                       <div className="miss-list">

@@ -2,11 +2,264 @@ use crate::domain::model::{
     LayerSnapshot, LayerVersions, LayersMetricsResponse, MetricsSnapshot, MissNode, NodeDetail,
     NodeMetricsItem, NodeTimeSeries, SnapshotMeta, TimeRangeQuery,
 };
-use crate::infrastructure::vm_repository::{VmRepoError, VmRepository};
+use crate::infrastructure::vm_repository::{VmRepoError, VmRepository, VmSnapshotData};
 use crate::shared::config::AppConfig;
 use crate::shared::hash::stable_hash_json;
 use chrono::Utc;
+use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::RwLock;
+
+#[derive(Debug, Clone)]
+struct CachedSourceNode {
+    id: String,
+    name: String,
+    protocol: String,
+}
+
+#[derive(Debug, Clone)]
+struct CachedLogNode {
+    id: String,
+    name: String,
+}
+
+#[derive(Debug, Clone)]
+struct CachedParseNode {
+    id: String,
+    package_name: String,
+    logs: Vec<CachedLogNode>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedSinkLeafNode {
+    id: String,
+    sink_group: String,
+    sink_name: String,
+}
+
+#[derive(Debug, Clone)]
+struct CachedSinkGroupNode {
+    id: String,
+    sink_group: String,
+    sinks: Vec<CachedSinkLeafNode>,
+}
+
+#[derive(Debug, Default)]
+struct LayerNodeCache {
+    sources: Vec<CachedSourceNode>,
+    parses: Vec<CachedParseNode>,
+    sinks: Vec<CachedSinkGroupNode>,
+}
+
+impl LayerNodeCache {
+    fn upsert_from_snapshot(&mut self, data: &VmSnapshotData) {
+        for s in &data.sources {
+            if self.sources.iter().all(|x| x.id != s.id) {
+                self.sources.push(CachedSourceNode {
+                    id: s.id.clone(),
+                    name: s.name.clone(),
+                    protocol: s.protocol.clone(),
+                });
+            }
+        }
+
+        for p in &data.parses {
+            if let Some(existing) = self.parses.iter_mut().find(|x| x.id == p.id) {
+                if existing.package_name.is_empty() && !p.package_name.is_empty() {
+                    existing.package_name = p.package_name.clone();
+                }
+                for l in &p.logs {
+                    if existing.logs.iter().all(|x| x.id != l.id) {
+                        existing.logs.push(CachedLogNode {
+                            id: l.id.clone(),
+                            name: l.name.clone(),
+                        });
+                    }
+                }
+            } else {
+                self.parses.push(CachedParseNode {
+                    id: p.id.clone(),
+                    package_name: p.package_name.clone(),
+                    logs: p
+                        .logs
+                        .iter()
+                        .map(|l| CachedLogNode {
+                            id: l.id.clone(),
+                            name: l.name.clone(),
+                        })
+                        .collect(),
+                });
+            }
+        }
+
+        for g in &data.sinks {
+            if let Some(existing) = self.sinks.iter_mut().find(|x| x.id == g.id) {
+                if existing.sink_group.is_empty() && !g.sink_group.is_empty() {
+                    existing.sink_group = g.sink_group.clone();
+                }
+                for s in &g.sinks {
+                    if existing.sinks.iter().all(|x| x.id != s.id) {
+                        existing.sinks.push(CachedSinkLeafNode {
+                            id: s.id.clone(),
+                            sink_group: s.sink_group.clone(),
+                            sink_name: s.sink_name.clone(),
+                        });
+                    }
+                }
+            } else {
+                self.sinks.push(CachedSinkGroupNode {
+                    id: g.id.clone(),
+                    sink_group: g.sink_group.clone(),
+                    sinks: g
+                        .sinks
+                        .iter()
+                        .map(|s| CachedSinkLeafNode {
+                            id: s.id.clone(),
+                            sink_group: s.sink_group.clone(),
+                            sink_name: s.sink_name.clone(),
+                        })
+                        .collect(),
+                });
+            }
+        }
+    }
+
+    fn merge_snapshot(&self, data: VmSnapshotData) -> VmSnapshotData {
+        let collected_at = Utc::now().to_rfc3339();
+        let zero_metrics = || MetricsSnapshot {
+            log_rate_eps: 0.0,
+            log_count: 0,
+            collected_at: collected_at.clone(),
+        };
+
+        let mut source_map = data
+            .sources
+            .into_iter()
+            .map(|s| (s.id.clone(), s))
+            .collect::<HashMap<_, _>>();
+        let sources = self
+            .sources
+            .iter()
+            .map(|cached| {
+                source_map
+                    .remove(&cached.id)
+                    .unwrap_or_else(|| crate::domain::model::SourceNode {
+                        id: cached.id.clone(),
+                        name: cached.name.clone(),
+                        protocol: cached.protocol.clone(),
+                        metrics: zero_metrics(),
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        let mut parse_map = data
+            .parses
+            .into_iter()
+            .map(|p| (p.id.clone(), p))
+            .collect::<HashMap<_, _>>();
+        let parses = self
+            .parses
+            .iter()
+            .map(|cached_pkg| {
+                if let Some(mut curr_pkg) = parse_map.remove(&cached_pkg.id) {
+                    let mut curr_log_map = curr_pkg
+                        .logs
+                        .into_iter()
+                        .map(|l| (l.id.clone(), l))
+                        .collect::<HashMap<_, _>>();
+                    let logs = cached_pkg
+                        .logs
+                        .iter()
+                        .map(|cached_log| {
+                            curr_log_map.remove(&cached_log.id).unwrap_or_else(|| {
+                                crate::domain::model::LogTypeNode {
+                                    id: cached_log.id.clone(),
+                                    name: cached_log.name.clone(),
+                                    metrics: zero_metrics(),
+                                }
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    curr_pkg.logs = logs;
+                    curr_pkg
+                } else {
+                    crate::domain::model::ParseNode {
+                        id: cached_pkg.id.clone(),
+                        package_name: cached_pkg.package_name.clone(),
+                        metrics: zero_metrics(),
+                        logs: cached_pkg
+                            .logs
+                            .iter()
+                            .map(|cached_log| crate::domain::model::LogTypeNode {
+                                id: cached_log.id.clone(),
+                                name: cached_log.name.clone(),
+                                metrics: zero_metrics(),
+                            })
+                            .collect(),
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let mut sink_group_map = data
+            .sinks
+            .into_iter()
+            .map(|g| (g.id.clone(), g))
+            .collect::<HashMap<_, _>>();
+        let sinks = self
+            .sinks
+            .iter()
+            .map(|cached_group| {
+                if let Some(mut curr_group) = sink_group_map.remove(&cached_group.id) {
+                    let mut curr_sink_map = curr_group
+                        .sinks
+                        .into_iter()
+                        .map(|s| (s.id.clone(), s))
+                        .collect::<HashMap<_, _>>();
+                    let sink_nodes = cached_group
+                        .sinks
+                        .iter()
+                        .map(|cached_sink| {
+                            curr_sink_map.remove(&cached_sink.id).unwrap_or_else(|| {
+                                crate::domain::model::SinkLeafNode {
+                                    id: cached_sink.id.clone(),
+                                    sink_group: cached_sink.sink_group.clone(),
+                                    sink_name: cached_sink.sink_name.clone(),
+                                    metrics: zero_metrics(),
+                                }
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    curr_group.sinks = sink_nodes;
+                    curr_group
+                } else {
+                    crate::domain::model::SinkGroupNode {
+                        id: cached_group.id.clone(),
+                        sink_group: cached_group.sink_group.clone(),
+                        metrics: zero_metrics(),
+                        sinks: cached_group
+                            .sinks
+                            .iter()
+                            .map(|cached_sink| crate::domain::model::SinkLeafNode {
+                                id: cached_sink.id.clone(),
+                                sink_group: cached_sink.sink_group.clone(),
+                                sink_name: cached_sink.sink_name.clone(),
+                                metrics: zero_metrics(),
+                            })
+                            .collect(),
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
+        VmSnapshotData {
+            sources,
+            parses,
+            sinks,
+            sys_metrics: data.sys_metrics,
+        }
+    }
+}
 
 /// 应用服务层：
 /// - 负责把基础设施层拿到的原始数据组装成接口响应模型；
@@ -15,12 +268,23 @@ use std::sync::Arc;
 pub struct LayerService {
     vm_repo: Arc<dyn VmRepository>,
     config: AppConfig,
+    node_cache: RwLock<LayerNodeCache>,
 }
 
 impl LayerService {
     /// 通过依赖注入方式接入 VM 仓储抽象，便于后续替换实现/测试。
     pub fn new(vm_repo: Arc<dyn VmRepository>, config: AppConfig) -> Self {
-        Self { vm_repo, config }
+        Self {
+            vm_repo,
+            config,
+            node_cache: RwLock::new(LayerNodeCache::default()),
+        }
+    }
+
+    async fn merge_snapshot_with_cache(&self, snapshot_data: VmSnapshotData) -> VmSnapshotData {
+        let mut cache = self.node_cache.write().await;
+        cache.upsert_from_snapshot(&snapshot_data);
+        cache.merge_snapshot(snapshot_data)
     }
 
     /// 获取全量分层快照。
@@ -29,7 +293,8 @@ impl LayerService {
         &self,
         query: TimeRangeQuery,
     ) -> Result<LayerSnapshot, VmRepoError> {
-        let snapshot_data = self.vm_repo.fetch_snapshot_data(&query).await?;
+        let raw_snapshot = self.vm_repo.fetch_snapshot_data(&query).await?;
+        let snapshot_data = self.merge_snapshot_with_cache(raw_snapshot).await;
 
         // 版本号采用“结构稳定哈希”，用于前端识别层结构是否变化。
         let versions = LayerVersions {

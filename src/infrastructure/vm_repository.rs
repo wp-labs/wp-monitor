@@ -424,7 +424,6 @@ impl VmRepository for VmHttpRepository {
 
     /// 查询 MISS 指标快照（速率 + 时间窗口累计数量）。
     /// 指标来源：
-    /// wparse_send_to_sink{pid="90452",sink_group="miss",sink_name="miss/victorialogs_output"}
     async fn fetch_miss_metrics(
         &self,
         query: &TimeRangeQuery,
@@ -435,7 +434,6 @@ impl VmRepository for VmHttpRepository {
             r#"wparse_send_to_sink{sink_group="miss",sink_name="victorialogs_output"}"#;
         let rate_q = format!("sum(rate({}[{}]))", miss_selector, window);
         let count_q = format!("sum(increase({}[{}]))", miss_selector, window);
-
         let (rate_rows, count_rows) = tokio::try_join!(
             self.instant_query(&rate_q, at),
             self.instant_query(&count_q, at),
