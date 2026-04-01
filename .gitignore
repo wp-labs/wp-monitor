@@ -1,0 +1,12 @@
+# Rust
+/target/
+
+# Frontend
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.vite/
+/frontend/coverage/
+/frontend/*.tsbuildinfo
+
+# Common
+.DS_Store

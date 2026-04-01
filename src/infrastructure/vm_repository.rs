@@ -1,0 +1,574 @@
+use crate::domain::model::{
+    LogTypeNode, MetricsSnapshot, NodeTimeSeries, ParseNode, SinkGroupNode, SinkLeafNode,
+    SourceNode, SysMetrics, TimePoint, TimeRangeQuery,
+};
+use async_trait::async_trait;
+use chrono::Utc;
+use reqwest::Client;
+use serde::Deserialize;
+use std::collections::HashMap;
+
+/// VM 仓储错误：
+/// - Request：网络请求/连接错误；
+/// - InvalidResponse：响应 JSON 结构不符合预期。
+#[derive(Debug, thiserror::Error)]
+pub enum VmRepoError {
+    #[error("vm request failed: {0}")]
+    Request(String),
+    #[error("vm response invalid: {0}")]
+    InvalidResponse(String),
+}
+
+/// 从 VM 查询后，应用层所需的基础快照原始数据。
+#[derive(Debug, Clone)]
+pub struct VmSnapshotData {
+    pub sources: Vec<SourceNode>,
+    pub parses: Vec<ParseNode>,
+    pub sinks: Vec<SinkGroupNode>,
+    pub sys_metrics: SysMetrics,
+}
+
+/// VM 仓储抽象：
+/// - fetch_snapshot_data：查一次“当前时刻”聚合快照；
+/// - fetch_node_timeseries：按节点拉区间序列。
+#[async_trait]
+pub trait VmRepository: Send + Sync {
+    async fn fetch_snapshot_data(&self, query: &TimeRangeQuery) -> Result<VmSnapshotData, VmRepoError>;
+    async fn fetch_node_timeseries(
+        &self,
+        node_id: &str,
+        query: &TimeRangeQuery,
+        step: Option<String>,
+    ) -> Result<NodeTimeSeries, VmRepoError>;
+}
+
+/// 基于 HTTP 协议访问 VictoriaMetrics 的仓储实现。
+pub struct VmHttpRepository {
+    client: Client,
+    base_url: String,
+}
+
+impl VmHttpRepository {
+    /// 创建仓储实例，自动去掉 base_url 尾部 `/`，避免 URL 拼接重复分隔符。
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            client: Client::new(),
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+        }
+    }
+
+    /// 把时间范围转换成 PromQL 窗口表达式（如 15m / 1h）。
+    fn window_from_range(query: &TimeRangeQuery) -> String {
+        let secs = (query.end_time.timestamp() - query.start_time.timestamp()).max(1);
+        if secs % 3600 == 0 {
+            format!("{}h", secs / 3600)
+        } else if secs % 60 == 0 {
+            format!("{}m", secs / 60)
+        } else {
+            format!("{}s", secs)
+        }
+    }
+
+    /// VM 返回 value 为字符串，这里统一兜底解析为 f64。
+    fn parse_value(v: &str) -> f64 {
+        v.parse::<f64>().unwrap_or(0.0)
+    }
+
+    /// 执行 instant query（单时刻查询）。
+    async fn instant_query(
+        &self,
+        promql: &str,
+        at_unix: i64,
+    ) -> Result<Vec<VmSeriesValue>, VmRepoError> {
+        let url = format!("{}/api/v1/query", self.base_url);
+        let resp = self
+            .client
+            .get(url)
+            .query(&[("query", promql), ("time", &at_unix.to_string())])
+            .send()
+            .await
+            .map_err(|e| VmRepoError::Request(e.to_string()))?;
+
+        let data = resp
+            .json::<VmQueryResp>()
+            .await
+            .map_err(|e| VmRepoError::InvalidResponse(e.to_string()))?;
+
+        Ok(data
+            .data
+            .result
+            .into_iter()
+            .map(|item| VmSeriesValue {
+                metric: item.metric,
+                ts: item.value[0].as_f64().unwrap_or(0.0),
+                value: Self::parse_value(item.value[1].as_str().unwrap_or("0")),
+            })
+            .collect())
+    }
+
+    /// 执行 range query（时间区间序列查询）。
+    async fn range_query(
+        &self,
+        promql: &str,
+        start_unix: i64,
+        end_unix: i64,
+        step: &str,
+    ) -> Result<Vec<VmRangeSeries>, VmRepoError> {
+        let url = format!("{}/api/v1/query_range", self.base_url);
+        let resp = self
+            .client
+            .get(url)
+            .query(&[
+                ("query", promql),
+                ("start", &start_unix.to_string()),
+                ("end", &end_unix.to_string()),
+                ("step", step),
+            ])
+            .send()
+            .await
+            .map_err(|e| VmRepoError::Request(e.to_string()))?;
+
+        let data = resp
+            .json::<VmRangeResp>()
+            .await
+            .map_err(|e| VmRepoError::InvalidResponse(e.to_string()))?;
+
+        Ok(data
+            .data
+            .result
+            .into_iter()
+            .map(|item| VmRangeSeries {
+                metric: item.metric,
+                values: item
+                    .values
+                    .into_iter()
+                    .map(|vv| VmPoint {
+                        ts: vv[0].as_f64().unwrap_or(0.0),
+                        value: Self::parse_value(vv[1].as_str().unwrap_or("0")),
+                    })
+                    .collect(),
+            })
+            .collect())
+    }
+
+    /// 构建统一的指标快照结构。
+    fn metric(rate: f64, count: u64, collected_at: &str) -> MetricsSnapshot {
+        MetricsSnapshot {
+            log_rate_eps: rate,
+            log_count: count,
+            collected_at: collected_at.to_string(),
+        }
+    }
+
+    /// 将 source 的 rate/increase 结果合并成 SourceNode。
+    fn build_source_nodes(
+        &self,
+        rate_rows: Vec<VmSeriesValue>,
+        count_rows: Vec<VmSeriesValue>,
+    ) -> Vec<SourceNode> {
+        let mut count_map: HashMap<(String, String), f64> = HashMap::new();
+        for c in count_rows {
+            let st = c.metric.get("source_type").cloned().unwrap_or_default();
+            let sn = c.metric.get("source_name").cloned().unwrap_or_default();
+            count_map.insert((st, sn), c.value);
+        }
+
+        let collected_at = Utc::now().to_rfc3339();
+        let mut out = Vec::new();
+        for r in rate_rows {
+            let source_type = r.metric.get("source_type").cloned().unwrap_or_default();
+            let source_name = r.metric.get("source_name").cloned().unwrap_or_default();
+            let count = count_map
+                .get(&(source_type.clone(), source_name.clone()))
+                .cloned()
+                .unwrap_or(0.0)
+                .round() as u64;
+            out.push(SourceNode {
+                id: format!("source:{}:{}", source_type, source_name),
+                name: format!("{}:{}", source_type, source_name),
+                protocol: source_type,
+                metrics: Self::metric(r.value, count, &collected_at),
+            });
+        }
+        out
+    }
+
+    /// 将 parse 的 rate/increase 结果先聚成 log，再聚成 package。
+    fn build_parse_nodes(
+        &self,
+        rate_rows: Vec<VmSeriesValue>,
+        count_rows: Vec<VmSeriesValue>,
+    ) -> Vec<ParseNode> {
+        let mut count_map: HashMap<(String, String), f64> = HashMap::new();
+        for c in count_rows {
+            let pkg = c.metric.get("package_name").cloned().unwrap_or_default();
+            let rule = c.metric.get("rule_name").cloned().unwrap_or_default();
+            count_map.insert((pkg, rule), c.value);
+        }
+
+        let mut pkg_map: HashMap<String, Vec<LogTypeNode>> = HashMap::new();
+        let collected_at = Utc::now().to_rfc3339();
+
+        for r in rate_rows {
+            let pkg = r.metric.get("package_name").cloned().unwrap_or_default();
+            let rule = r.metric.get("rule_name").cloned().unwrap_or_default();
+            let count = count_map
+                .get(&(pkg.clone(), rule.clone()))
+                .cloned()
+                .unwrap_or(0.0)
+                .round() as u64;
+            let log = LogTypeNode {
+                id: format!("log:{}:{}", pkg, rule),
+                name: rule,
+                metrics: Self::metric(r.value, count, &collected_at),
+            };
+            pkg_map.entry(pkg).or_default().push(log);
+        }
+
+        let mut out = Vec::new();
+        for (pkg, logs) in pkg_map {
+            let total_rate = logs.iter().map(|x| x.metrics.log_rate_eps).sum::<f64>();
+            let total_count = logs.iter().map(|x| x.metrics.log_count).sum::<u64>();
+            out.push(ParseNode {
+                id: format!("package:{}", pkg),
+                package_name: pkg,
+                metrics: Self::metric(total_rate, total_count, &collected_at),
+                logs,
+            });
+        }
+        out
+    }
+
+    /// 将 sink_group / sink_name 两层结果组装成输出层节点。
+    /// 约定：
+    /// - group 指标按 sink_group 聚合；
+    /// - sink 指标按 sink_group + sink_name 聚合。
+    fn build_sink_groups(
+        &self,
+        group_rate_rows: Vec<VmSeriesValue>,
+        group_count_rows: Vec<VmSeriesValue>,
+        sink_rate_rows: Vec<VmSeriesValue>,
+        sink_count_rows: Vec<VmSeriesValue>,
+    ) -> Vec<SinkGroupNode> {
+        let mut group_rate_map: HashMap<String, f64> = HashMap::new();
+        let mut group_count_map: HashMap<String, f64> = HashMap::new();
+        let mut sink_rate_map: HashMap<(String, String), f64> = HashMap::new();
+        let mut sink_count_map: HashMap<(String, String), f64> = HashMap::new();
+
+        for r in group_rate_rows {
+            let g = r.metric.get("sink_group").cloned().unwrap_or_default();
+            group_rate_map.insert(g, r.value);
+        }
+        for c in group_count_rows {
+            let g = c.metric.get("sink_group").cloned().unwrap_or_default();
+            group_count_map.insert(g, c.value);
+        }
+        for r in sink_rate_rows {
+            let g = r.metric.get("sink_group").cloned().unwrap_or_default();
+            let n = r.metric.get("sink_name").cloned().unwrap_or_default();
+            sink_rate_map.insert((g, n), r.value);
+        }
+        for c in sink_count_rows {
+            let g = c.metric.get("sink_group").cloned().unwrap_or_default();
+            let n = c.metric.get("sink_name").cloned().unwrap_or_default();
+            sink_count_map.insert((g, n), c.value);
+        }
+
+        let collected_at = Utc::now().to_rfc3339();
+        let mut grouped: HashMap<String, Vec<SinkLeafNode>> = HashMap::new();
+
+        for ((group, name), rate) in sink_rate_map {
+            let count = sink_count_map
+                .get(&(group.clone(), name.clone()))
+                .cloned()
+                .unwrap_or(0.0)
+                .round() as u64;
+            grouped.entry(group.clone()).or_default().push(SinkLeafNode {
+                id: format!("sink:{}:{}", group, name),
+                sink_group: group,
+                sink_name: name,
+                metrics: Self::metric(rate, count, &collected_at),
+            });
+        }
+
+        let mut out = Vec::new();
+        for (group, sinks) in grouped {
+            out.push(SinkGroupNode {
+                id: format!("group:{}", group),
+                sink_group: group.clone(),
+                metrics: Self::metric(
+                    group_rate_map.get(&group).cloned().unwrap_or(0.0),
+                    group_count_map.get(&group).cloned().unwrap_or(0.0).round() as u64,
+                    &collected_at,
+                ),
+                sinks,
+            });
+        }
+
+        out
+    }
+
+    /// 节点 ID 解析规则：
+    /// - source:source_type:source_name
+    /// - log:package_name:rule_name
+    /// - group:sink_group
+    /// - sink:sink_group:sink_name
+    fn parse_node_id(node_id: &str) -> (&str, Vec<&str>) {
+        let parts = node_id.split(':').collect::<Vec<_>>();
+        if parts.is_empty() {
+            return ("unknown", vec![]);
+        }
+        (parts[0], parts[1..].to_vec())
+    }
+}
+
+#[async_trait]
+impl VmRepository for VmHttpRepository {
+    /// 查询分层快照：
+    /// 1. 按业务指标构造 PromQL；
+    /// 2. 并发查询 source/parse/sink/cpu/mem；
+    /// 3. 按层级聚合并返回统一结构。
+    async fn fetch_snapshot_data(&self, query: &TimeRangeQuery) -> Result<VmSnapshotData, VmRepoError> {
+        let window = Self::window_from_range(query);
+        let at = query.end_time.timestamp();
+
+        let source_rate_q = "sum by (source_type, source_name) (rate(wparse_receive_data[1m]))";
+        let source_count_q = format!(
+            "sum by (source_type, source_name) (increase(wparse_receive_data[{}]))",
+            window
+        );
+
+        let parse_rate_q = "sum by (package_name, rule_name) (rate(wparse_parse_all[1m]))";
+        let parse_count_q = format!(
+            "sum by (package_name, rule_name) (increase(wparse_parse_all[{}]))",
+            window
+        );
+
+        let sink_group_rate_q =
+            "sum by (sink_group) (rate(wparse_send_to_sink{sink_group!~\"monitor|default|miss|residue|error\"}[1m]))";
+        let sink_group_count_q = format!(
+            "sum by (sink_group) (increase(wparse_send_to_sink{{sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
+            window
+        );
+        let sink_rate_q =
+            "sum by (sink_group, sink_name) (rate(wparse_send_to_sink{sink_group!~\"monitor|default|miss|residue|error\"}[1m]))";
+        let sink_count_q = format!(
+            "sum by (sink_group, sink_name) (increase(wparse_send_to_sink{{sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
+            window
+        );
+
+        let (source_rate, source_count, parse_rate, parse_count, sink_group_rate, sink_group_count, sink_rate, sink_count) = tokio::try_join!(
+            self.instant_query(source_rate_q, at),
+            self.instant_query(&source_count_q, at),
+            self.instant_query(parse_rate_q, at),
+            self.instant_query(&parse_count_q, at),
+            self.instant_query(sink_group_rate_q, at),
+            self.instant_query(&sink_group_count_q, at),
+            self.instant_query(sink_rate_q, at),
+            self.instant_query(&sink_count_q, at),
+        )
+        .map_err(|e| VmRepoError::Request(e.to_string()))?;
+
+        // 系统指标只取全局最大值，避免多序列场景出现重复。
+        let (cpu_rows, mem_rows) = tokio::try_join!(
+            self.instant_query("max(wparse_cpu_usage)", at),
+            self.instant_query("max(wparse_memory_usage)", at),
+        )
+        .map_err(|e| VmRepoError::Request(e.to_string()))?;
+
+        let cpu = cpu_rows.first().map(|x| x.value).unwrap_or(0.0);
+        let mem = mem_rows.first().map(|x| x.value).unwrap_or(0.0);
+
+        Ok(VmSnapshotData {
+            sources: self.build_source_nodes(source_rate, source_count),
+            parses: self.build_parse_nodes(parse_rate, parse_count),
+            sinks: self.build_sink_groups(
+                sink_group_rate,
+                sink_group_count,
+                sink_rate,
+                sink_count,
+            ),
+            sys_metrics: SysMetrics {
+                cpu_usage_pct: cpu,
+                memory_used_mb: mem.round() as u64,
+            },
+        })
+    }
+
+    /// 查询单节点时间序列：
+    /// 1. 根据 node_id 解析节点类型和标签；
+    /// 2. 生成 rate/increase 两条 PromQL；
+    /// 3. 走 range query 返回折线数据点。
+    async fn fetch_node_timeseries(
+        &self,
+        node_id: &str,
+        query: &TimeRangeQuery,
+        step: Option<String>,
+    ) -> Result<NodeTimeSeries, VmRepoError> {
+        let window = Self::window_from_range(query);
+        let step = step.unwrap_or_else(|| "30s".to_string());
+        let start = query.start_time.timestamp();
+        let end = query.end_time.timestamp();
+
+        let (kind, parts) = Self::parse_node_id(node_id);
+
+        // 未识别节点类型时返回 vector(0)，保证接口语义稳定且不报错。
+        let (rate_q, count_q) = match kind {
+            "source" if parts.len() >= 2 => {
+                let source_type = parts[0];
+                let source_name = parts[1];
+                (
+                    format!(
+                        "sum(rate(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}}[1m]))",
+                        source_type, source_name
+                    ),
+                    format!(
+                        "sum(increase(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}}[{}]))",
+                        source_type, source_name, window
+                    ),
+                )
+            }
+            "log" if parts.len() >= 2 => {
+                let package = parts[0];
+                let rule = parts[1];
+                (
+                    format!(
+                        "sum(rate(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}}[1m]))",
+                        package, rule
+                    ),
+                    format!(
+                        "sum(increase(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}}[{}]))",
+                        package, rule, window
+                    ),
+                )
+            }
+            "group" if !parts.is_empty() => {
+                let g = parts[0];
+                (
+                    format!(
+                        "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[1m]))",
+                        g
+                    ),
+                    format!(
+                        "sum(increase(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
+                        g, window
+                    ),
+                )
+            }
+            "sink" if parts.len() >= 2 => {
+                let g = parts[0];
+                let s = parts[1];
+                (
+                    format!(
+                        "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[1m]))",
+                        g, s
+                    ),
+                    format!(
+                        "sum(increase(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
+                        g, s, window
+                    ),
+                )
+            }
+            _ => (
+                "vector(0)".to_string(),
+                "vector(0)".to_string(),
+            ),
+        };
+
+        let (rate_series, count_series) = tokio::try_join!(
+            self.range_query(&rate_q, start, end, &step),
+            self.range_query(&count_q, start, end, &step)
+        )
+        .map_err(|e| VmRepoError::Request(e.to_string()))?;
+
+        let rate_points = rate_series
+            .first()
+            .map(|s| {
+                s.values
+                    .iter()
+                    .map(|p| TimePoint {
+                        ts: chrono::DateTime::from_timestamp(p.ts as i64, 0)
+                            .map(|d| d.to_rfc3339())
+                            .unwrap_or_else(|| Utc::now().to_rfc3339()),
+                        value: p.value,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let count_points = count_series
+            .first()
+            .map(|s| {
+                s.values
+                    .iter()
+                    .map(|p| TimePoint {
+                        ts: chrono::DateTime::from_timestamp(p.ts as i64, 0)
+                            .map(|d| d.to_rfc3339())
+                            .unwrap_or_else(|| Utc::now().to_rfc3339()),
+                        value: p.value,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        Ok(NodeTimeSeries {
+            node_id: node_id.to_string(),
+            log_rate_eps: rate_points,
+            log_count: count_points,
+        })
+    }
+}
+
+/// -------- VictoriaMetrics 响应结构定义（仅用于反序列化） --------
+#[derive(Debug, Deserialize)]
+struct VmQueryResp {
+    data: VmQueryData,
+}
+
+#[derive(Debug, Deserialize)]
+struct VmQueryData {
+    result: Vec<VmQueryItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VmQueryItem {
+    metric: HashMap<String, String>,
+    value: [serde_json::Value; 2],
+}
+
+#[derive(Debug, Clone)]
+struct VmSeriesValue {
+    metric: HashMap<String, String>,
+    #[allow(dead_code)]
+    ts: f64,
+    value: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct VmRangeResp {
+    data: VmRangeData,
+}
+
+#[derive(Debug, Deserialize)]
+struct VmRangeData {
+    result: Vec<VmRangeItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VmRangeItem {
+    metric: HashMap<String, String>,
+    values: Vec<[serde_json::Value; 2]>,
+}
+
+#[derive(Debug, Clone)]
+struct VmRangeSeries {
+    #[allow(dead_code)]
+    metric: HashMap<String, String>,
+    values: Vec<VmPoint>,
+}
+
+#[derive(Debug, Clone)]
+struct VmPoint {
+    ts: f64,
+    value: f64,
+}
