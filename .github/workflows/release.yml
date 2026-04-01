@@ -63,14 +63,14 @@ jobs:
 
       - name: Show version
         if: matrix.can-run == true
-        run: ./target/${{ matrix.target }}/release/wp-monitor --version
+        run: ./target/${{ matrix.target }}/release/wp_monitor --version
 
       - name: Package artifacts
         run: |
           set -euo pipefail
           ARTIFACT="${{ github.event.repository.name }}-${{ github.ref_name }}-${{ matrix.target }}"
           mkdir -p artifacts
-          cp -av target/${{ matrix.target }}/release/wp-monitor artifacts/
+          cp -av target/${{ matrix.target }}/release/wp_monitor artifacts/wp-monitor
           tar -czf "${ARTIFACT}.tar.gz" artifacts
 
       - name: Attest Build Provenance
@@ -202,7 +202,13 @@ jobs:
       - name: Extract changelog
         id: changelog
         run: |
-          bash scripts/extract-changelog.sh ${{ github.ref_name }}
+          if [ -f scripts/extract-changelog.sh ]; then
+            bash scripts/extract-changelog.sh ${{ github.ref_name }}
+          else
+            echo "未找到 scripts/extract-changelog.sh，使用默认发布说明。" >&2
+            printf "Release %s\n" "${{ github.ref_name }}" > /tmp/changelog-zh.md
+            printf "Release %s\n" "${{ github.ref_name }}" > /tmp/changelog-en.md
+          fi
 
           # Read the extracted changelogs
           CHANGELOG_ZH=$(cat /tmp/changelog-zh.md)
