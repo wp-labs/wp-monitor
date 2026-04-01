@@ -7,6 +7,7 @@ import {
 } from '../../components/monitor/flowHelpers';
 import TimeSeriesChart from '../../components/monitor/TimeSeriesChart';
 import {
+  exportMissedLogs,
   fetchMissedLogs,
   fetchMetrics,
   fetchNodeDetail,
@@ -96,9 +97,11 @@ export default function WpMonitorPage() {
   const [missLogsLoading, setMissLogsLoading] = useState(false);
   const [missLogsError, setMissLogsError] = useState('');
   const [missLogs, setMissLogs] = useState<VlogRecord[]>([]);
-  const [missQueryLimit, setMissQueryLimit] = useState(10);
-  const [missLimitInput, setMissLimitInput] = useState('10');
+  const [missHasMore, setMissHasMore] = useState(false);
   const [missPage, setMissPage] = useState(1);
+  const [missExporting, setMissExporting] = useState(false);
+  const [missWindowStart, setMissWindowStart] = useState('');
+  const [missWindowEnd, setMissWindowEnd] = useState('');
 
   const [expandedPackages, setExpandedPackages] = useState<string[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
@@ -108,6 +111,7 @@ export default function WpMonitorPage() {
   const [draftStart, setDraftStart] = useState(() => toInputValue(toIsoByMinutesAgo(15)));
   const [draftEnd, setDraftEnd] = useState(() => toInputValue(new Date().toISOString()));
   const [rangeLabel, setRangeLabel] = useState('最近 15 分钟');
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const timePickerRef = useRef<HTMLDivElement | null>(null);
 
   const [activeLegend, setActiveLegend] = useState<LegendType>(null);
@@ -149,12 +153,12 @@ export default function WpMonitorPage() {
   }, []);
 
   useEffect(() => {
-    if (selectedNode) return;
+    if (selectedNode || !autoRefreshEnabled) return;
     const timer = setInterval(() => {
       void refreshMetricsOnly();
     }, 5000);
     return () => clearInterval(timer);
-  }, [snapshot, startTime, selectedNode]);
+  }, [snapshot, startTime, selectedNode, autoRefreshEnabled]);
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
@@ -185,12 +189,7 @@ export default function WpMonitorPage() {
     () => Boolean(snapshot && selectedNode && selectedNode === snapshot.miss.id),
     [snapshot, selectedNode],
   );
-  const missTotalPages = useMemo(() => Math.max(1, Math.ceil(missLogs.length / MISS_PAGE_SIZE)), [missLogs.length]);
-  const missPageItems = useMemo(() => {
-    const page = Math.min(Math.max(missPage, 1), missTotalPages);
-    const start = (page - 1) * MISS_PAGE_SIZE;
-    return missLogs.slice(start, start + MISS_PAGE_SIZE);
-  }, [missLogs, missPage, missTotalPages]);
+  const missPageItems = useMemo(() => missLogs, [missLogs]);
 
   const parseSearchGroups = useMemo(() => {
     if (!snapshot) return [];
@@ -238,12 +237,6 @@ export default function WpMonitorPage() {
     setParseSearchActiveIndex(0);
   }, [parseQuery, parseSearchOpen]);
 
-  useEffect(() => {
-    if (missPage > missTotalPages) {
-      setMissPage(missTotalPages);
-    }
-  }, [missPage, missTotalPages]);
-
   function isDim(type: Exclude<LegendType, null>) {
     return activeLegend !== null && activeLegend !== type;
   }
@@ -256,65 +249,78 @@ export default function WpMonitorPage() {
     return classes.join(' ');
   }
 
-  function normalizeMissLimit(value: number) {
-    return Math.max(1, Math.min(100, Math.floor(value || 10)));
-  }
-
-  async function loadMissedLogs(start: string, end: string, limit: number, resetPage = true) {
+  async function loadMissedLogs(start: string, end: string, page: number) {
     try {
       setMissLogsLoading(true);
       setMissLogsError('');
-      const data = await fetchMissedLogs(start, end, limit);
-      setMissLogs(data);
-      if (resetPage) {
-        setMissPage(1);
-      }
-      return data;
+      const data = await fetchMissedLogs(start, end, page, MISS_PAGE_SIZE);
+      setMissLogs(data.items);
+      setMissHasMore(data.has_more);
+      setMissPage(data.page);
+      return true;
     } catch (e) {
       setMissLogs([]);
+      setMissHasMore(false);
       setMissLogsError((e as Error).message || 'MISS 日志获取失败');
-      return null;
+      return false;
     } finally {
       setMissLogsLoading(false);
     }
   }
 
-  async function onApplyMissLimit() {
+  async function onExportMissed() {
     if (!isMissSelected) return;
-    const parsed = normalizeMissLimit(Number(missLimitInput));
-    setMissLimitInput(String(parsed));
-    setMissQueryLimit(parsed);
-    await loadMissedLogs(detailStartTime, detailEndTime, parsed);
+    try {
+      setMissExporting(true);
+      const exportStart = missWindowStart || detailStartTime;
+      const exportEnd = missWindowEnd || detailEndTime;
+      const resp = await exportMissedLogs(exportStart, exportEnd);
+      const blob = await resp.blob();
+      const contentDisposition = resp.headers.get('content-disposition') || '';
+      const matched = contentDisposition.match(/filename="([^"]+)"/i);
+      const filename = matched?.[1] || `miss-${Date.now()}.csv`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.dispatchEvent(new MouseEvent('click', { bubbles: false, cancelable: true, view: window }));
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setMissLogsError((e as Error).message || 'MISS 日志导出失败');
+    } finally {
+      setMissExporting(false);
+    }
   }
 
   async function onPrevMissPage() {
-    setMissPage((p) => Math.max(1, p - 1));
+    if (missPage <= 1) return;
+    const pageStart = missWindowStart || detailStartTime;
+    const pageEnd = missWindowEnd || detailEndTime;
+    await loadMissedLogs(pageStart, pageEnd, missPage - 1);
   }
 
   async function onNextMissPage() {
-    const wantedPage = missPage + 1;
-    if (wantedPage <= missTotalPages) {
-      setMissPage(wantedPage);
-      return;
-    }
-
-    const canExpandLimit = missQueryLimit < 100 && missLogs.length >= missQueryLimit;
-    if (!canExpandLimit) return;
-
-    const nextLimit = normalizeMissLimit(Math.min(100, missQueryLimit + MISS_PAGE_SIZE));
-    setMissLimitInput(String(nextLimit));
-    setMissQueryLimit(nextLimit);
-    const data = await loadMissedLogs(detailStartTime, detailEndTime, nextLimit, false);
-    if (data && data.length > (wantedPage - 1) * MISS_PAGE_SIZE) {
-      setMissPage(wantedPage);
-    }
+    if (!missHasMore) return;
+    const pageStart = missWindowStart || detailStartTime;
+    const pageEnd = missWindowEnd || detailEndTime;
+    await loadMissedLogs(pageStart, pageEnd, missPage + 1);
   }
 
   async function openDetail(nodeId: string) {
     const missNodeId = snapshot?.miss.id ?? '';
     const isMissNode = nodeId === missNodeId;
-    const currentStart = startTime;
-    const currentEnd = new Date().toISOString();
+    let currentStart = startTime;
+    let currentEnd = endTime || new Date().toISOString();
+    const startMs = new Date(currentStart).getTime();
+    const endMs = new Date(currentEnd).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs >= endMs) {
+      currentEnd = new Date(Date.now()).toISOString();
+      const fallbackStart = new Date(new Date(currentEnd).getTime() - 15 * 60 * 1000).toISOString();
+      currentStart = Number.isFinite(startMs) ? currentStart : fallbackStart;
+      if (new Date(currentStart).getTime() >= new Date(currentEnd).getTime()) {
+        currentStart = fallbackStart;
+      }
+    }
     setSelectedNode(nodeId);
     setDetailStartTime(currentStart);
     setDetailEndTime(currentEnd);
@@ -323,20 +329,26 @@ export default function WpMonitorPage() {
     setDetail(null);
     setSeries(null);
     setMissLogs([]);
+    setMissHasMore(false);
     setMissLogsError('');
     setMissLogsLoading(false);
+    setMissWindowStart('');
+    setMissWindowEnd('');
     try {
       const detailPromise = fetchNodeDetail(nodeId, currentStart, currentEnd);
       const seriesPromise = fetchNodeTimeSeries(nodeId, currentStart, currentEnd, '30s');
       if (isMissNode) {
         setMissLogsLoading(true);
+        setMissWindowStart(currentStart);
+        setMissWindowEnd(currentEnd);
         const [detailResp, seriesResp, missedResp] = await Promise.all([
           detailPromise,
           seriesPromise,
-          fetchMissedLogs(currentStart, currentEnd, missQueryLimit),
+          fetchMissedLogs(currentStart, currentEnd, 1, MISS_PAGE_SIZE),
         ]);
-        setMissLogs(missedResp);
-        setMissPage(1);
+        setMissLogs(missedResp.items);
+        setMissHasMore(missedResp.has_more);
+        setMissPage(missedResp.page);
         setMissLogsError('');
         setMissLogsLoading(false);
         setDetail(detailResp.data);
@@ -383,8 +395,8 @@ export default function WpMonitorPage() {
       setError('时间格式无效');
       return;
     }
-    if (new Date(nextStart).getTime() > new Date(nextEnd).getTime()) {
-      setError('开始时间不能大于结束时间');
+    if (new Date(nextStart).getTime() >= new Date(nextEnd).getTime()) {
+      setError('开始时间必须早于结束时间');
       return;
     }
 
@@ -392,7 +404,8 @@ export default function WpMonitorPage() {
     setStartTime(nextStart);
     setEndTime(nextEnd);
     const preset = QUICK_RANGES.find((x) => x.key === draftRange);
-    setRangeLabel(preset?.label ?? `${draftStart} - ${draftEnd}`);
+    setRangeLabel(preset?.label ?? `${formatLocalDateTime(nextStart)} - ${formatLocalDateTime(nextEnd)}`);
+    setAutoRefreshEnabled(Boolean(preset));
     setTimePanelOpen(false);
     await loadSnapshot(nextStart, nextEnd);
   }
@@ -477,11 +490,29 @@ export default function WpMonitorPage() {
                 <h4 className="wd-time-panel-title">From:</h4>
                 <div className="wd-time-custom-inputs">
                   <div className="wd-chip">
-                    <input className="wd-time-input" type="datetime-local" step={1} value={draftStart} onChange={(e) => setDraftStart(e.target.value)} />
+                    <input
+                      className="wd-time-input"
+                      type="datetime-local"
+                      step={1}
+                      value={draftStart}
+                      onChange={(e) => {
+                        setDraftRange('custom');
+                        setDraftStart(e.target.value);
+                      }}
+                    />
                   </div>
                   <h4 className="wd-time-panel-title">To:</h4>
                   <div className="wd-chip">
-                    <input className="wd-time-input" type="datetime-local" step={1} value={draftEnd} onChange={(e) => setDraftEnd(e.target.value)} />
+                    <input
+                      className="wd-time-input"
+                      type="datetime-local"
+                      step={1}
+                      value={draftEnd}
+                      onChange={(e) => {
+                        setDraftRange('custom');
+                        setDraftEnd(e.target.value);
+                      }}
+                    />
                   </div>
                 </div>
                 <div className="wd-time-inline">
@@ -725,7 +756,11 @@ export default function WpMonitorPage() {
         </div>
       )}
 
-      <aside ref={drawerRef} className={`drawer card ${selectedNode ? 'open' : ''}`}>
+      <aside
+        ref={drawerRef}
+        className={`drawer card ${selectedNode ? 'open' : ''}`}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="drawer-head">
           <div className="drawer-title">节点详情</div>
           <button className="drawer-close" onClick={() => setSelectedNode('')}>✕</button>
@@ -776,19 +811,16 @@ export default function WpMonitorPage() {
               <section className="panel card">
                 <div className="panel-title">MISS 原始日志</div>
                 <div className="miss-query-toolbar">
-                  <label className="miss-limit-label" htmlFor="miss-limit-input">查询条数上限(1-100)</label>
-                  <input
-                    id="miss-limit-input"
-                    className="miss-limit-input"
-                    type="number"
-                    min={1}
-                    max={100}
-                    step={1}
-                    value={missLimitInput}
-                    onChange={(e) => setMissLimitInput(e.target.value)}
-                  />
-                  <button className="mini-btn" type="button" onClick={() => void onApplyMissLimit()}>
-                    重新查询
+                  <button
+                    className="mini-btn"
+                    type="button"
+                    onClick={() => void loadMissedLogs(missWindowStart || detailStartTime, missWindowEnd || detailEndTime, missPage)}
+                    disabled={missLogsLoading}
+                  >
+                    刷新本页
+                  </button>
+                  <button className="mini-btn" type="button" onClick={() => void onExportMissed()} disabled={missExporting}>
+                    {missExporting ? '导出中...' : '数据导出'}
                   </button>
                 </div>
                 {missLogsLoading && <p>MISS 日志加载中...</p>}
@@ -797,12 +829,12 @@ export default function WpMonitorPage() {
                 {!missLogsLoading && !missLogsError && missLogs.length > 0 && (
                   <>
                     <p className="miss-page-meta">
-                      已加载 {missLogs.length} 条（查询上限 {missQueryLimit}），当前第 {Math.min(missPage, missTotalPages)} / {missTotalPages} 页（每页 10 条）
+                      当前第 {missPage} 页（每页 10 条）{missHasMore ? '，还有下一页' : '，已到最后一页'}
                     </p>
                     <div className="miss-scroll">
                       <div className="miss-list">
                         {missPageItems.map((item, idx) => {
-                          const offset = (Math.min(missPage, missTotalPages) - 1) * MISS_PAGE_SIZE;
+                          const offset = (missPage - 1) * MISS_PAGE_SIZE;
                           const rowNo = offset + idx + 1;
                           return (
                             <article key={`${item.time}-${item.stream_id}-${rowNo}`} className="miss-record">
@@ -825,12 +857,7 @@ export default function WpMonitorPage() {
                       <button
                         className="mini-btn"
                         type="button"
-                        disabled={
-                          missLogsLoading || (
-                            missPage >= missTotalPages &&
-                            !(missQueryLimit < 100 && missLogs.length >= missQueryLimit)
-                          )
-                        }
+                        disabled={missLogsLoading || !missHasMore}
                         onClick={() => void onNextMissPage()}
                       >
                         下一页

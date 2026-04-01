@@ -55,7 +55,9 @@ impl LayerService {
             end_time: query.end_time.to_rfc3339(),
         };
 
-        // 当前版本 MISS 节点按产品要求使用固定值，不从 VM 实时查询。
+        // MISS 节点指标改为走 VM 实时查询（速率 + 时间窗口累计数量）。
+        let miss_metrics = self.vm_repo.fetch_miss_metrics(&query).await?;
+
         Ok(LayerSnapshot {
             meta,
             sources: snapshot_data.sources,
@@ -64,12 +66,8 @@ impl LayerService {
             miss: MissNode {
                 id: "miss".to_string(),
                 name: "MISS".to_string(),
-                fixed: true,
-                metrics: MetricsSnapshot {
-                    log_rate_eps: 15.0,
-                    log_count: 13_500,
-                    collected_at: Utc::now().to_rfc3339(),
-                },
+                fixed: false,
+                metrics: miss_metrics,
             },
             sys_metrics: snapshot_data.sys_metrics,
         })
@@ -139,7 +137,7 @@ impl LayerService {
         node_id: &str,
         query: TimeRangeQuery,
     ) -> Result<NodeDetail, VmRepoError> {
-        let snapshot = self.get_layers_snapshot(query).await?;
+        let snapshot = self.get_layers_snapshot(query.clone()).await?;
 
         for s in snapshot.sources {
             if s.id == node_id {
@@ -202,16 +200,13 @@ impl LayerService {
         }
 
         if node_id == "miss" {
+            let miss_metrics = self.vm_repo.fetch_miss_metrics(&query).await?;
             return Ok(NodeDetail {
                 id: "miss".to_string(),
                 name: "MISS".to_string(),
                 node_type: "miss".to_string(),
                 package_name: None,
-                metrics: MetricsSnapshot {
-                    log_rate_eps: 15.0,
-                    log_count: 13_500,
-                    collected_at: Utc::now().to_rfc3339(),
-                },
+                metrics: miss_metrics,
             });
         }
 

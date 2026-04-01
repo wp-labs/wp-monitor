@@ -2,9 +2,9 @@ import type {
   ApiResp,
   LayerSnapshot,
   LayersMetricsResponse,
+  MissedLogsPage,
   NodeDetail,
   NodeTimeSeries,
-  VlogRecord,
 } from '../types/monitor';
 
 function isoMinutesAgo(min: number) {
@@ -55,11 +55,19 @@ export async function fetchNodeTimeSeries(
   return (await resp.json()) as ApiResp<NodeTimeSeries>;
 }
 
-export async function fetchMissedLogs(startTime: string, endTime: string, limit = 10) {
-  const safeLimit = Math.max(1, Math.min(100, Math.floor(limit || 10)));
-  const url = `/api/v1/wp-monitor/vlog/missed?query=${encodeURIComponent('wp_stage:miss')}&limit=${safeLimit}&start=${encodeURIComponent(startTime)}&end=${encodeURIComponent(endTime)}`;
+export async function fetchMissedLogs(startTime: string, endTime: string, page = 1, pageSize = 10) {
+  const safePage = Math.max(1, Math.floor(page || 1));
+  const safePageSize = Math.max(1, Math.min(100, Math.floor(pageSize || 10)));
+  const url = `/api/v1/wp-monitor/vlog/missed?query=${encodeURIComponent('wp_stage:miss')}&start=${encodeURIComponent(startTime)}&end=${encodeURIComponent(endTime)}&page=${safePage}&page_size=${safePageSize}`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error('missed logs request failed');
-  const data = (await resp.json()) as ApiResp<VlogRecord[]>;
+  const data = (await resp.json()) as ApiResp<MissedLogsPage>;
   return data.data;
+}
+
+export async function exportMissedLogs(startTime: string, endTime: string) {
+  const url = `/api/v1/wp-monitor/vlog/missed/export?query=${encodeURIComponent('wp_stage:miss')}&start=${encodeURIComponent(startTime)}&end=${encodeURIComponent(endTime)}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error('missed logs export failed');
+  return resp;
 }

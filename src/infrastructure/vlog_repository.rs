@@ -65,8 +65,8 @@ impl VlogHttpRepository {
     async fn instant_query(&self, query: &VlogInstantQuery) -> Result<Vec<VlogRecord>, VlogRepoError> {
         let url = format!("{}/select/logsql/query", self.base_url);
         let params = &[
-            ("start_time", &query.start.to_rfc3339()),
-            ("end_time", &query.end.to_rfc3339()),
+            ("start", &query.start.to_rfc3339()),
+            ("end", &query.end.to_rfc3339()),
             ("query", &query.query),
             ("limit", &query.limit.to_string()),
         ];

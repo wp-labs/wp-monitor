@@ -90,6 +90,16 @@ export interface VlogRecord {
   raw: string;
 }
 
+export interface MissedLogsPage {
+  start: string;
+  end: string;
+  query: string;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+  items: VlogRecord[];
+}
+
 export interface TimePoint {
   ts: string;
   value: number;

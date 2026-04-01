@@ -37,6 +37,10 @@ pub trait VmRepository: Send + Sync {
         &self,
         query: &TimeRangeQuery,
     ) -> Result<VmSnapshotData, VmRepoError>;
+    async fn fetch_miss_metrics(
+        &self,
+        query: &TimeRangeQuery,
+    ) -> Result<MetricsSnapshot, VmRepoError>;
     async fn fetch_node_timeseries(
         &self,
         node_id: &str,
@@ -341,24 +345,36 @@ impl VmRepository for VmHttpRepository {
         let window = Self::window_from_range(query);
         let at = query.end_time.timestamp();
 
-        let source_rate_q = "sum by (source_type, source_name) (rate(wparse_receive_data[1m]))";
+        let source_rate_q = format!(
+            "sum by (source_type, source_name) (rate(wparse_receive_data[{}]))",
+            window
+        );
         let source_count_q = format!(
             "sum by (source_type, source_name) (increase(wparse_receive_data[{}]))",
             window
         );
 
-        let parse_rate_q = "sum by (package_name, rule_name) (rate(wparse_parse_all[1m]))";
+        let parse_rate_q = format!(
+            "sum by (package_name, rule_name) (rate(wparse_parse_all[{}]))",
+            window
+        );
         let parse_count_q = format!(
             "sum by (package_name, rule_name) (increase(wparse_parse_all[{}]))",
             window
         );
 
-        let sink_group_rate_q = "sum by (sink_group) (rate(wparse_send_to_sink{sink_group!~\"monitor|default|miss|residue|error\"}[1m]))";
+        let sink_group_rate_q = format!(
+            "sum by (sink_group) (rate(wparse_send_to_sink{{sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
+            window
+        );
         let sink_group_count_q = format!(
             "sum by (sink_group) (increase(wparse_send_to_sink{{sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
             window
         );
-        let sink_rate_q = "sum by (sink_group, sink_name) (rate(wparse_send_to_sink{sink_group!~\"monitor|default|miss|residue|error\"}[1m]))";
+        let sink_rate_q = format!(
+            "sum by (sink_group, sink_name) (rate(wparse_send_to_sink{{sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
+            window
+        );
         let sink_count_q = format!(
             "sum by (sink_group, sink_name) (increase(wparse_send_to_sink{{sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
             window
@@ -374,13 +390,13 @@ impl VmRepository for VmHttpRepository {
             sink_rate,
             sink_count,
         ) = tokio::try_join!(
-            self.instant_query(source_rate_q, at),
+            self.instant_query(&source_rate_q, at),
             self.instant_query(&source_count_q, at),
-            self.instant_query(parse_rate_q, at),
+            self.instant_query(&parse_rate_q, at),
             self.instant_query(&parse_count_q, at),
-            self.instant_query(sink_group_rate_q, at),
+            self.instant_query(&sink_group_rate_q, at),
             self.instant_query(&sink_group_count_q, at),
-            self.instant_query(sink_rate_q, at),
+            self.instant_query(&sink_rate_q, at),
             self.instant_query(&sink_count_q, at),
         )
         .map_err(|e| VmRepoError::Request(e.to_string()))?;
@@ -403,6 +419,34 @@ impl VmRepository for VmHttpRepository {
                 cpu_usage_pct: cpu,
                 memory_used_mb: mem.round() as u64,
             },
+        })
+    }
+
+    /// 查询 MISS 指标快照（速率 + 时间窗口累计数量）。
+    /// 指标来源：
+    /// wparse_send_to_sink{pid="90452",sink_group="miss",sink_name="miss/victorialogs_output"}
+    async fn fetch_miss_metrics(
+        &self,
+        query: &TimeRangeQuery,
+    ) -> Result<MetricsSnapshot, VmRepoError> {
+        let window = Self::window_from_range(query);
+        let at = query.end_time.timestamp();
+        let miss_selector = r#"wparse_send_to_sink{sink_group="miss",sink_name="victorialogs_output"}"#;
+        let rate_q = format!("sum(rate({}[{}]))", miss_selector, window);
+        let count_q = format!("sum(increase({}[{}]))", miss_selector, window);
+
+        let (rate_rows, count_rows) = tokio::try_join!(
+            self.instant_query(&rate_q, at),
+            self.instant_query(&count_q, at),
+        )
+        .map_err(|e| VmRepoError::Request(e.to_string()))?;
+
+        let rate = rate_rows.first().map(|x| x.value).unwrap_or(0.0);
+        let count = count_rows.first().map(|x| x.value).unwrap_or(0.0).round() as u64;
+        Ok(MetricsSnapshot {
+            log_rate_eps: rate,
+            log_count: count,
+            collected_at: Utc::now().to_rfc3339(),
         })
     }
 
@@ -430,8 +474,8 @@ impl VmRepository for VmHttpRepository {
                 let source_name = parts[1];
                 (
                     format!(
-                        "sum(rate(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}}[1m]))",
-                        source_type, source_name
+                        "sum(rate(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}}[{}]))",
+                        source_type, source_name, window
                     ),
                     format!(
                         "sum(increase(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}}[{}]))",
@@ -444,8 +488,8 @@ impl VmRepository for VmHttpRepository {
                 let rule = parts[1];
                 (
                     format!(
-                        "sum(rate(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}}[1m]))",
-                        package, rule
+                        "sum(rate(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}}[{}]))",
+                        package, rule, window
                     ),
                     format!(
                         "sum(increase(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}}[{}]))",
@@ -457,8 +501,8 @@ impl VmRepository for VmHttpRepository {
                 let g = parts[0];
                 (
                     format!(
-                        "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[1m]))",
-                        g
+                        "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
+                        g, window
                     ),
                     format!(
                         "sum(increase(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
@@ -471,8 +515,8 @@ impl VmRepository for VmHttpRepository {
                 let s = parts[1];
                 (
                     format!(
-                        "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[1m]))",
-                        g, s
+                        "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
+                        g, s, window
                     ),
                     format!(
                         "sum(increase(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
