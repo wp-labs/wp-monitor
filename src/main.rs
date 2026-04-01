@@ -22,6 +22,12 @@ use crate::interfaces::vlog::routers::register_vlog_routes;
 /// 4. 注册 HTTP 路由并监听端口。
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    // CI 需要可执行文件支持 `--version` 并立即退出。
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     tracing_subscriber::fmt().with_env_filter("info").init();
 
     // 从配置文件加载应用配置（默认路径：config/app.toml）。
