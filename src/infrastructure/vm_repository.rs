@@ -108,7 +108,7 @@ impl VmHttpRepository {
             .map(|item| VmSeriesValue {
                 metric: item.metric,
                 ts: item.value[0].as_f64().unwrap_or(0.0),
-                value: Self::parse_value(item.value[1].as_str().unwrap_or("0")),
+                value: Self::parse_value(item.value[1].as_str().unwrap_or("0.00")),
             })
             .collect())
     }
@@ -408,8 +408,8 @@ impl VmRepository for VmHttpRepository {
         )
         .map_err(|e| VmRepoError::Request(e.to_string()))?;
 
-        let cpu = cpu_rows.first().map(|x| x.value).unwrap_or(0.0);
-        let mem = mem_rows.first().map(|x| x.value).unwrap_or(0.0);
+        let cpu = cpu_rows.first().map(|x| x.value).unwrap_or(0.0000);
+        let mem = mem_rows.first().map(|x| x.value).unwrap_or(0.0000);
 
         Ok(VmSnapshotData {
             sources: self.build_source_nodes(source_rate, source_count),

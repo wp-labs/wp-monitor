@@ -3,6 +3,7 @@ import {
   applyMetricsToSnapshot,
   collectAllNodeIds,
   fmtCount,
+  fmtPercentWithMin,
   fmtRate,
 } from '../../components/monitor/flowHelpers';
 import TimeSeriesChart from '../../components/monitor/TimeSeriesChart';
@@ -19,10 +20,12 @@ import './index.css';
 
 const QUICK_RANGES = [
   { key: '5m', label: '最近 5 分钟', minutes: 5 },
-  { key: '15m', label: '最近 15 分钟', minutes: 15 },
   { key: '1h', label: '最近 1 小时', minutes: 60 },
   { key: '6h', label: '最近 6 小时', minutes: 360 },
   { key: '24h', label: '最近 24 小时', minutes: 1440 },
+  { key: 'today', label: '今天' },
+  { key: 'yesterday', label: '昨天' },
+  { key: 'week', label: '本周' },
 ] as const;
 const MISS_PAGE_SIZE = 10;
 
@@ -46,7 +49,7 @@ function toIsoByMinutesAgo(minutes: number) {
 function toInputValue(iso: string) {
   const d = new Date(iso);
   const p = (v: number) => String(v).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 function toIsoFromInput(v: string) {
@@ -75,16 +78,39 @@ function formatLocalTime(iso: string) {
   return d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
 }
 
+function buildQuickRange(key: string) {
+  const now = new Date();
+  if (key === 'today') {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return { start: start.toISOString(), end: now.toISOString() };
+  }
+  if (key === 'yesterday') {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return { start: start.toISOString(), end: end.toISOString() };
+  }
+  if (key === 'week') {
+    const weekday = now.getDay() === 0 ? 7 : now.getDay();
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (weekday - 1));
+    return { start: start.toISOString(), end: now.toISOString() };
+  }
+  const selected = QUICK_RANGES.find((x) => x.key === key && 'minutes' in x);
+  if (!selected || !('minutes' in selected)) return null;
+  const end = now;
+  const start = new Date(end.getTime() - selected.minutes * 60 * 1000);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
 export default function WpMonitorPage() {
   const formatCount = useCallback((v: number) => fmtCount(v), []);
-  const formatCountAxis = useCallback((v: number) => new Intl.NumberFormat('zh-CN').format(Math.round(v)), []);
   const formatRate2 = useCallback((v: number) => `${v.toFixed(2)} e/s`, []);
 
   const [snapshot, setSnapshot] = useState<LayerSnapshot | null>(null);
-  const [startTime, setStartTime] = useState(() => toIsoByMinutesAgo(15));
+  const [startTime, setStartTime] = useState(() => toIsoByMinutesAgo(5));
   const [endTime, setEndTime] = useState(() => new Date().toISOString());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [toastVisible, setToastVisible] = useState(false);
 
   const [selectedNode, setSelectedNode] = useState('');
   const [hoveredNode, setHoveredNode] = useState('');
@@ -94,6 +120,7 @@ export default function WpMonitorPage() {
   const [detailEndTime, setDetailEndTime] = useState('');
   const [drawerLoading, setDrawerLoading] = useState(false);
   const [drawerError, setDrawerError] = useState('');
+  const [detailPanelHeight, setDetailPanelHeight] = useState(360);
   const [missLogsLoading, setMissLogsLoading] = useState(false);
   const [missLogsError, setMissLogsError] = useState('');
   const [missLogs, setMissLogs] = useState<VlogRecord[]>([]);
@@ -106,20 +133,25 @@ export default function WpMonitorPage() {
   const [expandedPackages, setExpandedPackages] = useState<string[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
 
-  const [timePanelOpen, setTimePanelOpen] = useState(false);
-  const [draftRange, setDraftRange] = useState('15m');
-  const [draftStart, setDraftStart] = useState(() => toInputValue(toIsoByMinutesAgo(15)));
+  const [draftRange, setDraftRange] = useState('5m');
+  const [draftStart, setDraftStart] = useState(() => toInputValue(toIsoByMinutesAgo(5)));
   const [draftEnd, setDraftEnd] = useState(() => toInputValue(new Date().toISOString()));
-  const [rangeLabel, setRangeLabel] = useState('最近 15 分钟');
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
-  const timePickerRef = useRef<HTMLDivElement | null>(null);
 
   const [activeLegend, setActiveLegend] = useState<LegendType>(null);
   const [parseQuery, setParseQuery] = useState('');
   const [parseSearchOpen, setParseSearchOpen] = useState(false);
   const [parseSearchActiveIndex, setParseSearchActiveIndex] = useState(0);
   const parseSearchRef = useRef<HTMLDivElement | null>(null);
-  const drawerRef = useRef<HTMLElement | null>(null);
+  const detailPanelRef = useRef<HTMLElement | null>(null);
+  const resizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
+
+  const clampDetailPanelHeight = useCallback((h: number) => {
+    const isMobile = window.innerWidth <= 768;
+    const minHeight = isMobile ? Math.floor(window.innerHeight * 0.56) : 220;
+    const maxHeight = isMobile ? Math.floor(window.innerHeight * 0.9) : Math.floor(window.innerHeight * 0.86);
+    return Math.min(maxHeight, Math.max(minHeight, h));
+  }, []);
 
   async function loadSnapshot(start = startTime, end = endTime) {
     try {
@@ -163,11 +195,10 @@ export default function WpMonitorPage() {
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       const target = e.target as Node;
-      if (!timePickerRef.current?.contains(target)) setTimePanelOpen(false);
       if (!parseSearchRef.current?.contains(target)) setParseSearchOpen(false);
       if (
         selectedNode &&
-        !drawerRef.current?.contains(target) &&
+        !detailPanelRef.current?.contains(target) &&
         !(target as Element).closest('.node, .package, .group, .log-item, .sink-item, .miss')
       ) {
         setSelectedNode('');
@@ -176,6 +207,27 @@ export default function WpMonitorPage() {
     document.addEventListener('click', onDocClick);
     return () => document.removeEventListener('click', onDocClick);
   }, [selectedNode]);
+
+  useEffect(() => {
+    const onResize = () => {
+      setDetailPanelHeight((prev) => clampDetailPanelHeight(prev));
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [clampDetailPanelHeight]);
+
+  useEffect(() => {
+    if (!error) {
+      setToastVisible(false);
+      return;
+    }
+    setToastVisible(true);
+    const timer = window.setTimeout(() => {
+      setToastVisible(false);
+      setError('');
+    }, 2800);
+    return () => window.clearTimeout(timer);
+  }, [error]);
 
   const nodesCount = useMemo(() => {
     if (!snapshot) return 0;
@@ -315,7 +367,7 @@ export default function WpMonitorPage() {
     const endMs = new Date(currentEnd).getTime();
     if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs >= endMs) {
       currentEnd = new Date(Date.now()).toISOString();
-      const fallbackStart = new Date(new Date(currentEnd).getTime() - 15 * 60 * 1000).toISOString();
+      const fallbackStart = new Date(new Date(currentEnd).getTime() - 5 * 60 * 1000).toISOString();
       currentStart = Number.isFinite(startMs) ? currentStart : fallbackStart;
       if (new Date(currentStart).getTime() >= new Date(currentEnd).getTime()) {
         currentStart = fallbackStart;
@@ -378,14 +430,25 @@ export default function WpMonitorPage() {
     setExpandedGroups((prev) => (prev.includes(groupId) ? prev.filter((id) => id !== groupId) : [...prev, groupId]));
   }
 
-  function onPickRange(key: string) {
+  async function applyTimeRange(nextStart: string, nextEnd: string, enableAutoRefresh: boolean) {
+    if (new Date(nextStart).getTime() >= new Date(nextEnd).getTime()) {
+      setError('开始时间必须早于结束时间');
+      return;
+    }
+    setError('');
+    setStartTime(nextStart);
+    setEndTime(nextEnd);
+    setAutoRefreshEnabled(enableAutoRefresh);
+    await loadSnapshot(nextStart, nextEnd);
+  }
+
+  async function onPickRange(key: string) {
     setDraftRange(key);
-    const selected = QUICK_RANGES.find((x) => x.key === key);
-    if (!selected) return;
-    const end = new Date();
-    const start = new Date(end.getTime() - selected.minutes * 60 * 1000);
-    setDraftStart(toInputValue(start.toISOString()));
-    setDraftEnd(toInputValue(end.toISOString()));
+    const range = buildQuickRange(key);
+    if (!range) return;
+    setDraftStart(toInputValue(range.start));
+    setDraftEnd(toInputValue(range.end));
+    await applyTimeRange(range.start, range.end, true);
   }
 
   async function onApplyTime() {
@@ -395,19 +458,7 @@ export default function WpMonitorPage() {
       setError('时间格式无效');
       return;
     }
-    if (new Date(nextStart).getTime() >= new Date(nextEnd).getTime()) {
-      setError('开始时间必须早于结束时间');
-      return;
-    }
-
-    setError('');
-    setStartTime(nextStart);
-    setEndTime(nextEnd);
-    const preset = QUICK_RANGES.find((x) => x.key === draftRange);
-    setRangeLabel(preset?.label ?? `${formatLocalDateTime(nextStart)} - ${formatLocalDateTime(nextEnd)}`);
-    setAutoRefreshEnabled(Boolean(preset));
-    setTimePanelOpen(false);
-    await loadSnapshot(nextStart, nextEnd);
+    await applyTimeRange(nextStart, nextEnd, draftRange !== 'custom');
   }
 
   async function onSelectParsePackage(packageId: string, packageName: string) {
@@ -468,97 +519,92 @@ export default function WpMonitorPage() {
     setParseSearchActiveIndex((prev) => (prev + delta + parseSearchFlatItems.length) % parseSearchFlatItems.length);
   }
 
+  function onDetailPanelResizeMove(e: PointerEvent) {
+    const state = resizeStateRef.current;
+    if (!state) return;
+    const delta = state.startY - e.clientY;
+    setDetailPanelHeight(clampDetailPanelHeight(state.startHeight + delta));
+  }
+
+  function onDetailPanelResizeEnd() {
+    resizeStateRef.current = null;
+    window.removeEventListener('pointermove', onDetailPanelResizeMove);
+    window.removeEventListener('pointerup', onDetailPanelResizeEnd);
+  }
+
+  function onDetailPanelResizeStart(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    resizeStateRef.current = {
+      startY: e.clientY,
+      startHeight: detailPanelHeight,
+    };
+    window.addEventListener('pointermove', onDetailPanelResizeMove);
+    window.addEventListener('pointerup', onDetailPanelResizeEnd);
+  }
+
   return (
-    <div className="app" id="app">
+    <div
+      className="app"
+      id="app"
+      style={selectedNode ? { paddingBottom: `${detailPanelHeight + 22}px` } : undefined}
+    >
       <div className="title-wrap">
-        <div className="title">WP 监控 - 日志链路总览（V3）</div>
+        <div className="title">WP MONITOR</div>
         <div className="toolbar-right">
-          <div ref={timePickerRef} className={`wd-time-picker ${timePanelOpen ? 'open' : ''}`}>
-            <button
-              className="wd-chip wd-time-toggle"
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setTimePanelOpen((v) => !v);
-              }}
-            >
-              <span>{rangeLabel}</span>
-              <span className="wd-time-toggle-caret">▾</span>
+          <div className="wd-quick-inline">
+            {QUICK_RANGES.map((r) => (
+              <button
+                key={r.key}
+                className={`wd-time-quick-btn ${draftRange === r.key ? 'active' : ''} ${['today', 'yesterday', 'week'].includes(r.key) ? 'short' : ''}`}
+                type="button"
+                onClick={() => void onPickRange(r.key)}
+              >
+                {r.label}
+              </button>
+            ))}
+            <button className={`wd-time-quick-btn short ${draftRange === 'custom' ? 'active' : ''}`} type="button" onClick={() => setDraftRange('custom')}>
+              自定义
             </button>
-            <div className={`wd-time-panel ${timePanelOpen ? '' : 'hidden'}`}>
-              <section className="wd-time-panel-col">
-                <h4 className="wd-time-panel-title">From:</h4>
-                <div className="wd-time-custom-inputs">
-                  <div className="wd-chip">
-                    <input
-                      className="wd-time-input"
-                      type="datetime-local"
-                      step={1}
-                      value={draftStart}
-                      onChange={(e) => {
-                        setDraftRange('custom');
-                        setDraftStart(e.target.value);
-                      }}
-                    />
-                  </div>
-                  <h4 className="wd-time-panel-title">To:</h4>
-                  <div className="wd-chip">
-                    <input
-                      className="wd-time-input"
-                      type="datetime-local"
-                      step={1}
-                      value={draftEnd}
-                      onChange={(e) => {
-                        setDraftRange('custom');
-                        setDraftEnd(e.target.value);
-                      }}
-                    />
-                  </div>
-                </div>
-                <div className="wd-time-inline">
-                  <span>UTC</span>
-                  <span className="wd-time-inline-badge">UTC+08:00</span>
-                </div>
-                <button
-                  className="wd-time-now"
-                  type="button"
-                  onClick={() => {
-                    setDraftRange('15m');
-                    onPickRange('15m');
-                  }}
-                >
-                  ⏱ 切换到当前
-                </button>
-                <div className="wd-time-panel-actions">
-                  <button className="wd-time-btn btn-wow-ghost" type="button" onClick={() => setTimePanelOpen(false)}>
-                    取消
-                  </button>
-                  <button className="wd-time-btn btn-wow-primary" type="button" onClick={() => void onApplyTime()}>
-                    应用
-                  </button>
-                </div>
-              </section>
-              <section className="wd-time-panel-col">
-                <h4 className="wd-time-panel-title">快捷时间</h4>
-                <p className="wd-time-panel-note">选择后点击应用</p>
-                <div className="wd-time-quick-list">
-                  {QUICK_RANGES.map((r) => (
-                    <button key={r.key} className={`wd-time-quick-btn ${draftRange === r.key ? 'active' : ''}`} type="button" onClick={() => onPickRange(r.key)}>
-                      {r.label}
-                    </button>
-                  ))}
-                  <button className={`wd-time-quick-btn ${draftRange === 'custom' ? 'active' : ''}`} type="button" onClick={() => setDraftRange('custom')}>
-                    自定义时间段
-                  </button>
-                </div>
-              </section>
-            </div>
+          </div>
+          <div className="wd-chip">
+            <input
+              className="wd-time-input"
+              type="datetime-local"
+              step={60}
+              value={draftStart}
+              onChange={(e) => {
+                setDraftRange('custom');
+                setDraftStart(e.target.value);
+              }}
+            />
+          </div>
+          <div className="wd-chip">
+            <input
+              className="wd-time-input"
+              type="datetime-local"
+              step={60}
+              value={draftEnd}
+              onChange={(e) => {
+                setDraftRange('custom');
+                setDraftEnd(e.target.value);
+              }}
+            />
           </div>
           <button className="btn-wow-primary wd-time-btn" onClick={() => void onApplyTime()} disabled={loading}>
             查询
           </button>
         </div>
       </div>
+      {toastVisible && error && (
+        <div className="error-toast" role="alert" aria-live="assertive">
+          <span className="error-toast-icon">!</span>
+          <span className="error-toast-text">{error}</span>
+          <button className="error-toast-close" type="button" onClick={() => { setToastVisible(false); setError(''); }}>
+            ×
+          </button>
+        </div>
+      )}
 
       <div className="legend">
         <div className="legend-left">
@@ -570,15 +616,14 @@ export default function WpMonitorPage() {
           <span className={`legend-item ${activeLegend && activeLegend !== 'miss' ? 'dim' : ''}`} onMouseEnter={() => setActiveLegend('miss')} onMouseLeave={() => setActiveLegend(null)}><span className="symbol">⚠</span><span>MISS</span></span>
         </div>
         <div className="legend-metrics">
-          <span className="metric-pill badge">CPU: {snapshot?.sys_metrics.cpu_usage_pct.toFixed(1) ?? '0.0'}%</span>
-          <span className="metric-pill badge">MEM: {snapshot?.sys_metrics.memory_used_mb ?? 0} MB</span>
+          <span className="metric-pill badge">CPU: {fmtPercentWithMin(snapshot?.sys_metrics.cpu_usage_pct ?? 0, 2)}%</span>
+          <span className="metric-pill badge">MEM: {snapshot?.sys_metrics.memory_used_mb ?? '0.00'} MB</span>
           <span className="metric-pill badge">节点: {nodesCount}</span>
           <span className="metric-pill">自动刷新: 5s</span>
         </div>
       </div>
 
       {loading && <p>加载中...</p>}
-      {error && <p className="error">错误: {error}</p>}
 
       {snapshot && (
         <div className="canvas" id="canvas">
@@ -757,31 +802,54 @@ export default function WpMonitorPage() {
       )}
 
       <aside
-        ref={drawerRef}
-        className={`drawer card ${selectedNode ? 'open' : ''}`}
+        ref={detailPanelRef}
+        className={`detail-panel card ${selectedNode ? 'open' : ''}`}
+        style={{ height: `${detailPanelHeight}px` }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="drawer-head">
-          <div className="drawer-title">节点详情</div>
-          <button className="drawer-close" onClick={() => setSelectedNode('')}>✕</button>
+        <div className="detail-resize-bar">
+          <div
+            className="detail-drag-handle"
+            onPointerDown={onDetailPanelResizeStart}
+            title="拖拽调整高度"
+          />
+        </div>
+        <div className="detail-panel-head">
+          <div className="detail-panel-head-left">
+            <div className="detail-panel-title">节点详情</div>
+            {detail && <span className="detail-node-pill">{detail.name}</span>}
+          </div>
+          <div className="detail-panel-head-right">
+            <button className="drawer-close" onClick={() => setSelectedNode('')}>✕</button>
+          </div>
         </div>
 
-        {drawerLoading && <p>详情加载中...</p>}
-        {!drawerLoading && drawerError && <p className="error">错误: {drawerError}</p>}
-        {!drawerLoading && !drawerError && detail && (
-          <>
-            <section className="panel card">
-              <div className="panel-title">基本信息</div>
-              <p>名称：{detail.name}</p>
-              <p>类型：{detail.node_type}</p>
-            </section>
+        <div className="detail-panel-body">
+          {drawerLoading && <p>详情加载中...</p>}
+          {!drawerLoading && drawerError && <p className="error">错误: {drawerError}</p>}
+          {!drawerLoading && !drawerError && detail && (
+            <div className={`detail-grid ${isMissSelected ? 'miss-mode' : ''}`}>
+              <section className="panel card detail-col">
+                <div className="panel-title">基本信息</div>
+                <div className="detail-name-type-row">
+                  <span className="detail-kv-value detail-name-only" title={detail.name}>{detail.name}</span>
+                  <span className="detail-type-badge">{detail.node_type}</span>
+                </div>
+                <div className="detail-metric-badges">
+                  <span className="detail-metric-badge">速率 {fmtRate(detail.metrics.log_rate_eps)}</span>
+                  <span className="detail-metric-badge">数量 {fmtCount(detail.metrics.log_count)}</span>
+                </div>
+                <div className="detail-time-row">
+                  <span className="detail-kv-label">时间窗口</span>
+                  <span className="detail-kv-value detail-time-value">
+                    {formatLocalDateTime(detailStartTime)} - {formatLocalDateTime(detailEndTime)}
+                  </span>
+                </div>
+              </section>
 
-            <section className="panel card">
-              <div className="panel-title">实时指标</div>
-              <p>日志速率：{fmtRate(detail.metrics.log_rate_eps)}</p>
-              <p>日志数量：{fmtCount(detail.metrics.log_count)}</p>
               {!isMissSelected && (
-                <>
+                <section className="panel card detail-col">
+                  <div className="panel-title">速率趋势</div>
                   <TimeSeriesChart
                     title="速率趋势"
                     points={rateChartPoints}
@@ -792,85 +860,74 @@ export default function WpMonitorPage() {
                     rangeEndLabel={formatLocalTime(detailEndTime)}
                     showRangeMeta={false}
                   />
-                  <TimeSeriesChart
-                    title="数量趋势"
-                    points={series?.log_count ?? []}
-                    color="#2f6df6"
-                    valueFormatter={formatCount}
-                    axisValueFormatter={formatCountAxis}
-                    rangeStartLabel={formatLocalTime(detailStartTime)}
-                    rangeEndLabel={formatLocalTime(detailEndTime)}
-                    showRangeMeta={false}
-                  />
-                </>
+                </section>
               )}
-              <p>时间窗口：{formatLocalDateTime(detailStartTime)} - {formatLocalDateTime(detailEndTime)}</p>
-            </section>
 
-            {isMissSelected && (
-              <section className="panel card">
-                <div className="panel-title">MISS 原始日志</div>
-                <div className="miss-query-toolbar">
-                  <button
-                    className="mini-btn"
-                    type="button"
-                    onClick={() => void loadMissedLogs(missWindowStart || detailStartTime, missWindowEnd || detailEndTime, missPage)}
-                    disabled={missLogsLoading}
-                  >
-                    刷新本页
-                  </button>
-                  <button className="mini-btn" type="button" onClick={() => void onExportMissed()} disabled={missExporting}>
-                    {missExporting ? '导出中...' : '数据导出'}
-                  </button>
-                </div>
-                {missLogsLoading && <p>MISS 日志加载中...</p>}
-                {!missLogsLoading && missLogsError && <p className="error">错误: {missLogsError}</p>}
-                {!missLogsLoading && !missLogsError && missLogs.length === 0 && <p>当前时间窗口无 MISS 日志</p>}
-                {!missLogsLoading && !missLogsError && missLogs.length > 0 && (
-                  <>
-                    <p className="miss-page-meta">
-                      第 {missPage} 页 / 每页 10 条{missHasMore ? '（可继续翻页）' : '（已到末页）'}
-                    </p>
-                    <div className="miss-scroll">
-                      <div className="miss-list">
-                        {missPageItems.map((item, idx) => {
-                          const offset = (missPage - 1) * MISS_PAGE_SIZE;
-                          const rowNo = offset + idx + 1;
-                          return (
-                            <article key={`${item.time}-${item.stream_id}-${rowNo}`} className="miss-record">
-                              <div className="miss-record-head">#{rowNo} | {formatLocalDateTime(item.time)}</div>
-                              <pre className="miss-record-raw">{item.raw}</pre>
-                            </article>
-                          );
-                        })}
+              {isMissSelected && (
+                <section className="panel card detail-col detail-miss-col">
+                  <div className="panel-title">MISS 原始日志</div>
+                  <div className="miss-query-toolbar">
+                    <button
+                      className="mini-btn"
+                      type="button"
+                      onClick={() => void loadMissedLogs(missWindowStart || detailStartTime, missWindowEnd || detailEndTime, missPage)}
+                      disabled={missLogsLoading}
+                    >
+                      刷新本页
+                    </button>
+                    <button className="mini-btn" type="button" onClick={() => void onExportMissed()} disabled={missExporting}>
+                      {missExporting ? '导出中...' : '数据导出'}
+                    </button>
+                  </div>
+                  {missLogsLoading && <p>MISS 日志加载中...</p>}
+                  {!missLogsLoading && missLogsError && <p className="error">错误: {missLogsError}</p>}
+                  {!missLogsLoading && !missLogsError && missLogs.length === 0 && <p>当前时间窗口无 MISS 日志</p>}
+                  {!missLogsLoading && !missLogsError && missLogs.length > 0 && (
+                    <>
+                      <p className="miss-page-meta">
+                        第 {missPage} 页 / 每页 10 条{missHasMore ? '（可继续翻页）' : '（已到末页）'}
+                      </p>
+                      <div className="miss-scroll">
+                        <div className="miss-list">
+                          {missPageItems.map((item, idx) => {
+                            const offset = (missPage - 1) * MISS_PAGE_SIZE;
+                            const rowNo = offset + idx + 1;
+                            return (
+                              <article key={`${item.time}-${item.stream_id}-${rowNo}`} className="miss-record">
+                                <div className="miss-record-head">#{rowNo} | {formatLocalDateTime(item.time)}</div>
+                                <pre className="miss-record-raw">{item.raw}</pre>
+                              </article>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                    <div className="miss-pager">
-                      <button
-                        className="mini-btn"
-                        type="button"
-                        disabled={missPage <= 1 || missLogsLoading}
-                        onClick={() => void onPrevMissPage()}
-                      >
-                        上一页
-                      </button>
-                      <button
-                        className="mini-btn"
-                        type="button"
-                        disabled={missLogsLoading || !missHasMore}
-                        onClick={() => void onNextMissPage()}
-                      >
-                        下一页
-                      </button>
-                    </div>
-                  </>
-                )}
-              </section>
-            )}
-          </>
-        )}
+                      <div className="miss-pager">
+                        <button
+                          className="mini-btn"
+                          type="button"
+                          disabled={missPage <= 1 || missLogsLoading}
+                          onClick={() => void onPrevMissPage()}
+                        >
+                          上一页
+                        </button>
+                        <button
+                          className="mini-btn"
+                          type="button"
+                          disabled={missLogsLoading || !missHasMore}
+                          onClick={() => void onNextMissPage()}
+                        >
+                          下一页
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </section>
+              )}
+            </div>
+          )}
 
-        {!drawerLoading && !drawerError && !detail && <p>点击节点查看详情</p>}
+          {!drawerLoading && !drawerError && !detail && <p>点击节点查看详情</p>}
+        </div>
       </aside>
     </div>
   );

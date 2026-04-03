@@ -77,3 +77,10 @@ export function fmtCount(v: number) {
   if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`;
   return `${v}`;
 }
+
+export function fmtPercentWithMin(v: number, digits = 2) {
+  if (!Number.isFinite(v)) return (0).toFixed(digits);
+  const min = 10 ** (-digits);
+  if (v > 0 && v < min) return min.toFixed(digits);
+  return v.toFixed(digits);
+}
