@@ -137,6 +137,7 @@ export default function WpMonitorPage() {
   const [draftStart, setDraftStart] = useState(() => toInputValue(toIsoByMinutesAgo(5)));
   const [draftEnd, setDraftEnd] = useState(() => toInputValue(new Date().toISOString()));
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
+  const [refreshIntervalSec, setRefreshIntervalSec] = useState(5);
 
   const [activeLegend, setActiveLegend] = useState<LegendType>(null);
   const [parseQuery, setParseQuery] = useState('');
@@ -188,9 +189,9 @@ export default function WpMonitorPage() {
     if (selectedNode || !autoRefreshEnabled) return;
     const timer = setInterval(() => {
       void refreshMetricsOnly();
-    }, 5000);
+    }, refreshIntervalSec * 1000);
     return () => clearInterval(timer);
-  }, [snapshot, startTime, selectedNode, autoRefreshEnabled]);
+  }, [snapshot, startTime, selectedNode, autoRefreshEnabled, refreshIntervalSec]);
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
@@ -241,6 +242,10 @@ export default function WpMonitorPage() {
     () => Boolean(snapshot && selectedNode && selectedNode === snapshot.miss.id),
     [snapshot, selectedNode],
   );
+  const missHasData = useMemo(() => {
+    if (!snapshot) return false;
+    return snapshot.miss.metrics.log_count > 0 || snapshot.miss.metrics.log_rate_eps > 0;
+  }, [snapshot]);
   const missPageItems = useMemo(() => missLogs, [missLogs]);
 
   const parseSearchGroups = useMemo(() => {
@@ -461,6 +466,15 @@ export default function WpMonitorPage() {
     await applyTimeRange(nextStart, nextEnd, draftRange !== 'custom');
   }
 
+  function onRefreshIntervalChange(raw: string) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isNaN(parsed)) {
+      setRefreshIntervalSec(1);
+      return;
+    }
+    setRefreshIntervalSec(Math.max(1, parsed));
+  }
+
   async function onSelectParsePackage(packageId: string, packageName: string) {
     setExpandedPackages((prev) => (prev.includes(packageId) ? prev : [...prev, packageId]));
     setParseQuery(packageName);
@@ -619,7 +633,18 @@ export default function WpMonitorPage() {
           <span className="metric-pill badge">CPU: {fmtPercentWithMin(snapshot?.sys_metrics.cpu_usage_pct ?? 0, 2)}%</span>
           <span className="metric-pill badge">MEM: {snapshot?.sys_metrics.memory_used_mb ?? '0.00'} MB</span>
           <span className="metric-pill badge">节点: {nodesCount}</span>
-          <span className="metric-pill">自动刷新: 5s</span>
+          <span className="metric-pill badge refresh-pill">
+            自动刷新:
+            <input
+              className="refresh-interval-input"
+              type="number"
+              min={1}
+              step={1}
+              value={refreshIntervalSec}
+              onChange={(e) => onRefreshIntervalChange(e.target.value)}
+            />
+            s
+          </span>
         </div>
       </div>
 
@@ -734,7 +759,7 @@ export default function WpMonitorPage() {
                 })}
 
                 <article
-                  className={nodeClass('node card miss', snapshot.miss.id, 'miss')}
+                  className={nodeClass(`node card miss ${missHasData ? 'miss-alert' : 'miss-muted'}`, snapshot.miss.id, 'miss')}
                   onMouseEnter={() => setHoveredNode(snapshot.miss.id)}
                   onMouseLeave={() => setHoveredNode('')}
                   onClick={() => void openDetail(snapshot.miss.id)}

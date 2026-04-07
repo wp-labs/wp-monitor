@@ -17,6 +17,26 @@ mod ver {
       gx.echo (  "current version : ${VERSION}"  );
     }
 }
+mod rust_flow  {
+  flow lint        {
+    gx.cmd ( "cargo fmt ", log : "1" , out:"true"  );
+    gx.cmd ( "cargo fix --allow-dirty", log : "1" , out:"true"  );
+    gx.cmd ( "cargo clippy --all-targets --all-features -- -D warnings"  );
+  }
+   #[usage(desp="rust build")]
+   flow build {
+    gx.cmd ( cmd: "cargo build  ${ENV_BUILD_FLAG} ${ENV_TARGET_FLAG} "  );
+  }
+  flow update {
+    gx.cmd ( "cargo update"  );
+  }
+}
+
+mod rust_env {
+  env init     { build_flag  ="" ; build_name = "debug"; target_flag  = "" ; target_name = "" ; }
+  env debug    {}  ;
+  env release  { build_flag   =" --release" ; build_name = "release" ;  }
+}
 mod  envs {
   env default {
     root = "./" ;
@@ -26,10 +46,10 @@ mod main    {
   flow _setup_depends {
     gx.cmd (  "cargo install cargo-semver --vers 1.0.0-alpha.3" );
   }
-  flow ver.patch|  @up_patch    {
+  flow ver.patch|rust_flow.update| @up_patch    {
     gx.cmd (  "cargo semver set ${VERSION}" );
   }
-  flow ver.feature| @up_feat    {
+  flow ver.feature|rust_flow.update| @up_feat    {
     gx.cmd (  "cargo semver set ${VERSION}" );
   }
   flow ver.use | @release_stable  | _dist {

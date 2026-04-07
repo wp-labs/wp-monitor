@@ -18,8 +18,9 @@ use crate::interfaces::vlog::routers::register_vlog_routes;
 /// 后端启动入口：
 /// 1. 初始化日志；
 /// 2. 创建 VictoriaMetrics 仓储实现；
-/// 3. 组装应用服务并注入到 Actix；
-/// 4. 注册 HTTP 路由并监听端口。
+/// 3. 创建 VLOG 仓储实现；
+/// 4. 组装应用服务并注入到 Actix；
+/// 5. 注册 HTTP 路由并监听端口。
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     // CI 需要可执行文件支持 `--version` 并立即退出。
@@ -28,13 +29,22 @@ async fn main() -> std::io::Result<()> {
         return Ok(());
     }
 
-    tracing_subscriber::fmt().with_env_filter("info").init();
-
     // 从配置文件加载应用配置（默认路径：config/app.toml）。
     let cfg_path =
         std::env::var("APP_CONFIG_PATH").unwrap_or_else(|_| "./config/app.toml".to_string());
     let app_cfg = AppConfig::load_from_file(&cfg_path)
         .map_err(|e| std::io::Error::other(format!("load config failed: {}", e)))?;
+
+    // 日志级别从配置读取（如：info/debug/warn/error）。
+    let env_filter = tracing_subscriber::EnvFilter::try_new(app_cfg.log_level.clone())
+        .unwrap_or_else(|e| {
+            eprintln!(
+                "invalid log_level '{}': {}, fallback to 'info'",
+                app_cfg.log_level, e
+            );
+            tracing_subscriber::EnvFilter::new("info")
+        });
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     let vm_base = app_cfg.vm_base_url.clone();
     let vm_repo: Arc<dyn VmRepository> = Arc::new(VmHttpRepository::new(vm_base));

@@ -11,6 +11,8 @@ pub struct AppConfig {
     pub default_window_min: u64,
     pub time_presets: Vec<u64>,
     pub api_version: String,
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
 
     pub vlog_base_url: String,
 }
@@ -24,8 +26,13 @@ impl Default for AppConfig {
             default_window_min: 15,
             time_presets: vec![5, 15, 30, 60],
             api_version: "v1".to_string(),
+            log_level: default_log_level(),
         }
     }
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
 }
 
 #[derive(Debug, thiserror::Error)]
