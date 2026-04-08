@@ -7,6 +7,7 @@ use chrono::Utc;
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
+use tracing::{debug, warn};
 
 /// VM 仓储错误：
 /// - Request：网络请求/连接错误；
@@ -88,6 +89,12 @@ impl VmHttpRepository {
         at_unix: i64,
     ) -> Result<Vec<VmSeriesValue>, VmRepoError> {
         let url = format!("{}/api/v1/query", self.base_url);
+        debug!(
+            endpoint = "/api/v1/query",
+            at_unix = at_unix,
+            promql = promql,
+            "vm_repository.instant_query.start"
+        );
         let resp = self
             .client
             .get(url)
@@ -100,6 +107,11 @@ impl VmHttpRepository {
             .json::<VmQueryResp>()
             .await
             .map_err(|e| VmRepoError::InvalidResponse(e.to_string()))?;
+        debug!(
+            endpoint = "/api/v1/query",
+            result_size = data.data.result.len(),
+            "vm_repository.instant_query.success"
+        );
 
         Ok(data
             .data
@@ -122,6 +134,14 @@ impl VmHttpRepository {
         step: &str,
     ) -> Result<Vec<VmRangeSeries>, VmRepoError> {
         let url = format!("{}/api/v1/query_range", self.base_url);
+        debug!(
+            endpoint = "/api/v1/query_range",
+            start_unix = start_unix,
+            end_unix = end_unix,
+            step = step,
+            promql = promql,
+            "vm_repository.range_query.start"
+        );
         let resp = self
             .client
             .get(url)
@@ -139,6 +159,11 @@ impl VmHttpRepository {
             .json::<VmRangeResp>()
             .await
             .map_err(|e| VmRepoError::InvalidResponse(e.to_string()))?;
+        debug!(
+            endpoint = "/api/v1/query_range",
+            series_size = data.data.result.len(),
+            "vm_repository.range_query.success"
+        );
 
         Ok(data
             .data
@@ -344,6 +369,12 @@ impl VmRepository for VmHttpRepository {
     ) -> Result<VmSnapshotData, VmRepoError> {
         let window = Self::window_from_range(query);
         let at = query.end_time.timestamp();
+        debug!(
+            start_time = %query.start_time,
+            end_time = %query.end_time,
+            window = %window,
+            "vm_repository.snapshot.start"
+        );
 
         let source_rate_q = format!(
             "sum by (source_type, source_name) (rate(wparse_receive_data[{}]))",
@@ -410,6 +441,17 @@ impl VmRepository for VmHttpRepository {
 
         let cpu = cpu_rows.first().map(|x| x.value).unwrap_or(0.0000);
         let mem = mem_rows.first().map(|x| x.value).unwrap_or(0.0000);
+        debug!(
+            source_rate_rows = source_rate.len(),
+            source_count_rows = source_count.len(),
+            parse_rate_rows = parse_rate.len(),
+            parse_count_rows = parse_count.len(),
+            sink_group_rate_rows = sink_group_rate.len(),
+            sink_group_count_rows = sink_group_count.len(),
+            sink_rate_rows = sink_rate.len(),
+            sink_count_rows = sink_count.len(),
+            "vm_repository.snapshot.series_stats"
+        );
 
         Ok(VmSnapshotData {
             sources: self.build_source_nodes(source_rate, source_count),
@@ -430,6 +472,12 @@ impl VmRepository for VmHttpRepository {
     ) -> Result<MetricsSnapshot, VmRepoError> {
         let window = Self::window_from_range(query);
         let at = query.end_time.timestamp();
+        debug!(
+            start_time = %query.start_time,
+            end_time = %query.end_time,
+            window = %window,
+            "vm_repository.miss_metrics.start"
+        );
         let miss_selector =
             r#"wparse_send_to_sink{sink_group="miss",sink_name="victorialogs_output"}"#;
         let rate_q = format!("sum(rate({}[{}]))", miss_selector, window);
@@ -442,6 +490,7 @@ impl VmRepository for VmHttpRepository {
 
         let rate = rate_rows.first().map(|x| x.value).unwrap_or(0.0);
         let count = count_rows.first().map(|x| x.value).unwrap_or(0.0).round() as u64;
+        debug!(rate = rate, count = count, "vm_repository.miss_metrics.success");
         Ok(MetricsSnapshot {
             log_rate_eps: rate,
             log_count: count,
@@ -463,6 +512,14 @@ impl VmRepository for VmHttpRepository {
         let step = step.unwrap_or_else(|| "30s".to_string());
         let start = query.start_time.timestamp();
         let end = query.end_time.timestamp();
+        debug!(
+            node_id = node_id,
+            start_time = %query.start_time,
+            end_time = %query.end_time,
+            step = %step,
+            window = %window,
+            "vm_repository.node_timeseries.start"
+        );
 
         let (kind, parts) = Self::parse_node_id(node_id);
 
@@ -525,6 +582,9 @@ impl VmRepository for VmHttpRepository {
             }
             _ => ("vector(0)".to_string(), "vector(0)".to_string()),
         };
+        if rate_q == "vector(0)" {
+            warn!(node_id = node_id, "vm_repository.node_timeseries.unknown_node");
+        }
 
         let (rate_series, count_series) = tokio::try_join!(
             self.range_query(&rate_q, start, end, &step),
@@ -561,6 +621,12 @@ impl VmRepository for VmHttpRepository {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        debug!(
+            node_id = node_id,
+            rate_points = rate_points.len(),
+            count_points = count_points.len(),
+            "vm_repository.node_timeseries.success"
+        );
 
         Ok(NodeTimeSeries {
             node_id: node_id.to_string(),

@@ -138,6 +138,7 @@ export default function WpMonitorPage() {
   const [draftEnd, setDraftEnd] = useState(() => toInputValue(new Date().toISOString()));
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [refreshIntervalSec, setRefreshIntervalSec] = useState(5);
+  const [detailTrendAutoRefresh, setDetailTrendAutoRefresh] = useState(true);
 
   const [activeLegend, setActiveLegend] = useState<LegendType>(null);
   const [parseQuery, setParseQuery] = useState('');
@@ -247,6 +248,52 @@ export default function WpMonitorPage() {
     return snapshot.miss.metrics.log_count > 0 || snapshot.miss.metrics.log_rate_eps > 0;
   }, [snapshot]);
   const missPageItems = useMemo(() => missLogs, [missLogs]);
+
+  useEffect(() => {
+    if (!selectedNode || isMissSelected || !detailTrendAutoRefresh || drawerLoading) return;
+    const startMs = new Date(detailStartTime).getTime();
+    const endMs = new Date(detailEndTime).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs >= endMs) return;
+    const durationMs = endMs - startMs;
+    let cancelled = false;
+
+    const refreshSelectedNodeDetail = async () => {
+      try {
+        const nextEndMs = Date.now();
+        const nextStart = new Date(nextEndMs - durationMs).toISOString();
+        const nextEnd = new Date(nextEndMs).toISOString();
+        const [detailResp, seriesResp] = await Promise.all([
+          fetchNodeDetail(selectedNode, nextStart, nextEnd),
+          fetchNodeTimeSeries(selectedNode, nextStart, nextEnd, '30s'),
+        ]);
+        if (cancelled) return;
+        setDetail(detailResp.data);
+        setSeries(seriesResp.data);
+        setDetailStartTime(nextStart);
+        setDetailEndTime(nextEnd);
+        setDrawerError('');
+      } catch (e) {
+        if (cancelled) return;
+        setDrawerError((e as Error).message || '节点详情获取失败');
+      }
+    };
+
+    const timer = setInterval(() => {
+      void refreshSelectedNodeDetail();
+    }, refreshIntervalSec * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [
+    selectedNode,
+    isMissSelected,
+    detailTrendAutoRefresh,
+    drawerLoading,
+    detailStartTime,
+    detailEndTime,
+    refreshIntervalSec,
+  ]);
 
   const parseSearchGroups = useMemo(() => {
     if (!snapshot) return [];
@@ -627,7 +674,7 @@ export default function WpMonitorPage() {
           <span className={`legend-item ${activeLegend && activeLegend !== 'log' ? 'dim' : ''}`} onMouseEnter={() => setActiveLegend('log')} onMouseLeave={() => setActiveLegend(null)}><span className="symbol">▣</span><span>日志类型</span></span>
           <span className={`legend-item ${activeLegend && activeLegend !== 'group' ? 'dim' : ''}`} onMouseEnter={() => setActiveLegend('group')} onMouseLeave={() => setActiveLegend(null)}><span className="symbol">⬡</span><span>输出分组(容器)</span></span>
           <span className={`legend-item ${activeLegend && activeLegend !== 'sink' ? 'dim' : ''}`} onMouseEnter={() => setActiveLegend('sink')} onMouseLeave={() => setActiveLegend(null)}><span className="symbol">▢</span><span>输出目标</span></span>
-          <span className={`legend-item ${activeLegend && activeLegend !== 'miss' ? 'dim' : ''}`} onMouseEnter={() => setActiveLegend('miss')} onMouseLeave={() => setActiveLegend(null)}><span className="symbol">⚠</span><span>MISS</span></span>
+          <span className="legend-item static"><span className="symbol">⚠</span><span>MISS</span></span>
         </div>
         <div className="legend-metrics">
           <span className="metric-pill badge">CPU: {fmtPercentWithMin(snapshot?.sys_metrics.cpu_usage_pct ?? 0, 2)}%</span>
@@ -759,10 +806,7 @@ export default function WpMonitorPage() {
                 })}
 
                 <article
-                  className={nodeClass(`node card miss ${missHasData ? 'miss-alert' : 'miss-muted'}`, snapshot.miss.id, 'miss')}
-                  onMouseEnter={() => setHoveredNode(snapshot.miss.id)}
-                  onMouseLeave={() => setHoveredNode('')}
-                  onClick={() => void openDetail(snapshot.miss.id)}
+                  className={nodeClass(`node card miss no-interaction ${missHasData ? 'miss-alert' : 'miss-muted'}`, snapshot.miss.id, 'miss')}
                 >
                   <div className="node-name">⚠ {snapshot.miss.name}</div>
                   <div className="node-sub">未命中任何 WPL 规则</div>
@@ -874,7 +918,22 @@ export default function WpMonitorPage() {
 
               {!isMissSelected && (
                 <section className="panel card detail-col">
-                  <div className="panel-title">速率趋势</div>
+                  <div className="panel-head">
+                    <div className="panel-title">速率趋势</div>
+                    <button
+                      className={`toggle-switch ${detailTrendAutoRefresh ? 'on' : ''}`}
+                      type="button"
+                      role="switch"
+                      aria-checked={detailTrendAutoRefresh}
+                      aria-label="切换速率趋势实时刷新"
+                      onClick={() => setDetailTrendAutoRefresh((prev) => !prev)}
+                    >
+                      <span className="toggle-switch-label">实时刷新</span>
+                      <span className="toggle-switch-track">
+                        <span className="toggle-switch-thumb" />
+                      </span>
+                    </button>
+                  </div>
                   <TimeSeriesChart
                     title="速率趋势"
                     points={rateChartPoints}

@@ -1,5 +1,6 @@
 use actix_web::{HttpResponse, Result, error::ErrorInternalServerError, get, http::header, web};
 use chrono::{DateTime, Utc};
+use tracing::{debug, error, info};
 
 use crate::{
     infrastructure::vlog_repository::{VlogHttpRepository, VlogRepository},
@@ -80,6 +81,13 @@ pub async fn get_missed_data(
         "{} | sort by (_time) asc | offset {} | limit {}",
         query, offset, fetch_limit
     );
+    debug!(
+        start_time = %req.start,
+        end_time = %req.end,
+        page = page,
+        page_size = page_size,
+        "vlog.handlers.missed_page.request"
+    );
 
     let data = vlog_repository
         .instant_query(VlogInstantQuery {
@@ -89,7 +97,17 @@ pub async fn get_missed_data(
             end: req.end,
         })
         .await
-        .map_err(|e| ErrorInternalServerError(e.to_string()))?;
+        .map_err(|e| {
+            error!(
+                start_time = %req.start,
+                end_time = %req.end,
+                page = page,
+                page_size = page_size,
+                error = %e,
+                "vlog.handlers.missed_page.failed"
+            );
+            ErrorInternalServerError(e.to_string())
+        })?;
     let has_more = data.len() > page_size as usize;
     let items = data
         .into_iter()
@@ -116,6 +134,12 @@ pub async fn export_missed_data(
     let req = req.into_inner();
     let query = normalize_query(&req.query);
     let export_query = format!("{} | sort by (_time) asc | limit {}", query, MAX_FETCH_ROWS);
+    info!(
+        start_time = %req.start,
+        end_time = %req.end,
+        limit = MAX_FETCH_ROWS,
+        "vlog.handlers.missed_export.request"
+    );
     let data = vlog_repository
         .instant_query(VlogInstantQuery {
             query: export_query,
@@ -124,7 +148,15 @@ pub async fn export_missed_data(
             end: req.end,
         })
         .await
-        .map_err(|e| ErrorInternalServerError(e.to_string()))?;
+        .map_err(|e| {
+            error!(
+                start_time = %req.start,
+                end_time = %req.end,
+                error = %e,
+                "vlog.handlers.missed_export.failed"
+            );
+            ErrorInternalServerError(e.to_string())
+        })?;
 
     let mut content = String::new();
     for row in data {
@@ -138,6 +170,11 @@ pub async fn export_missed_data(
         "miss-{}-{}.dat",
         req.start.format("%Y%m%d%H%M%S"),
         req.end.format("%Y%m%d%H%M%S")
+    );
+    info!(
+        filename = %filename,
+        line_count = content.lines().count(),
+        "vlog.handlers.missed_export.success"
     );
     Ok(HttpResponse::Ok()
         .insert_header((header::CONTENT_TYPE, "text/plain; charset=utf-8"))

@@ -9,6 +9,7 @@ use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::{debug, warn};
 
 #[derive(Debug, Clone)]
 struct CachedSourceNode {
@@ -293,6 +294,11 @@ impl LayerService {
         &self,
         query: TimeRangeQuery,
     ) -> Result<LayerSnapshot, VmRepoError> {
+        debug!(
+            start_time = %query.start_time,
+            end_time = %query.end_time,
+            "layer_service.layers_snapshot.start"
+        );
         let raw_snapshot = self.vm_repo.fetch_snapshot_data(&query).await?;
         let snapshot_data = self.merge_snapshot_with_cache(raw_snapshot).await;
 
@@ -312,6 +318,14 @@ impl LayerService {
 
         // MISS 节点指标改为走 VM 实时查询（速率 + 时间窗口累计数量）。
         let miss_metrics = self.vm_repo.fetch_miss_metrics(&query).await?;
+        debug!(
+            source_count = snapshot_data.sources.len(),
+            parse_count = snapshot_data.parses.len(),
+            sink_group_count = snapshot_data.sinks.len(),
+            miss_rate_eps = miss_metrics.log_rate_eps,
+            miss_count = miss_metrics.log_count,
+            "layer_service.layers_snapshot.success"
+        );
 
         Ok(LayerSnapshot {
             meta,
@@ -376,7 +390,15 @@ impl LayerService {
 
         // 仅返回前端关注的节点。
         if let Some(ids) = node_ids {
+            let filter_size = ids.len();
             items.retain(|i| ids.iter().any(|id| id == &i.node_id));
+            debug!(
+                filter_size = filter_size,
+                result_size = items.len(),
+                "layer_service.layers_metrics.filtered"
+            );
+        } else {
+            debug!(result_size = items.len(), "layer_service.layers_metrics.full");
         }
 
         Ok(LayersMetricsResponse {
@@ -392,6 +414,7 @@ impl LayerService {
         node_id: &str,
         query: TimeRangeQuery,
     ) -> Result<NodeDetail, VmRepoError> {
+        debug!(node_id = %node_id, "layer_service.node_detail.start");
         let snapshot = self.get_layers_snapshot(query.clone()).await?;
 
         for s in snapshot.sources {
@@ -456,6 +479,7 @@ impl LayerService {
 
         if node_id == "miss" {
             let miss_metrics = self.vm_repo.fetch_miss_metrics(&query).await?;
+            debug!(node_id = %node_id, "layer_service.node_detail.miss");
             return Ok(NodeDetail {
                 id: "miss".to_string(),
                 name: "MISS".to_string(),
@@ -466,6 +490,7 @@ impl LayerService {
         }
 
         // 未命中任何已知节点时，返回 unknown（不抛错，保证接口稳定）。
+        warn!(node_id = %node_id, "layer_service.node_detail.unknown");
         Ok(NodeDetail {
             id: node_id.to_string(),
             name: node_id.to_string(),
@@ -489,12 +514,18 @@ impl LayerService {
         step: Option<String>,
     ) -> Result<NodeTimeSeries, VmRepoError> {
         if node_id == "miss" {
+            debug!(node_id = %node_id, "layer_service.node_timeseries.miss_empty");
             return Ok(NodeTimeSeries {
                 node_id: "miss".to_string(),
                 log_rate_eps: Vec::new(),
                 log_count: Vec::new(),
             });
         }
+        debug!(
+            node_id = %node_id,
+            step = step.as_deref().unwrap_or("default"),
+            "layer_service.node_timeseries.start"
+        );
         self.vm_repo
             .fetch_node_timeseries(node_id, &query, step)
             .await

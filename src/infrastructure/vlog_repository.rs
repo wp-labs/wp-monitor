@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 /// VM 仓储错误：
 /// - Request：网络请求/连接错误；
@@ -76,6 +77,12 @@ impl VlogHttpRepository {
             ("query", &query.query),
             ("limit", &query.limit.to_string()),
         ];
+        debug!(
+            start_time = %query.start,
+            end_time = %query.end,
+            limit = query.limit,
+            "vlog_repository.instant_query.start"
+        );
         let resp = self
             .client
             .get(url)
@@ -87,7 +94,12 @@ impl VlogHttpRepository {
             .text()
             .await
             .map_err(|e| VlogRepoError::Request(e.to_string()))?;
-        Self::parse_records(&body)
+        let records = Self::parse_records(&body)?;
+        debug!(
+            record_count = records.len(),
+            "vlog_repository.instant_query.success"
+        );
+        Ok(records)
     }
 
     /// 解析 VLOG 查询响应：

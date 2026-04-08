@@ -6,6 +6,7 @@ use actix_web::{
     error::{ErrorBadRequest, ErrorInternalServerError},
     get, web,
 };
+use tracing::{debug, error};
 
 /// HTTP 查询参数：通用时间窗口。
 
@@ -37,12 +38,27 @@ pub async fn get_layers_snapshot(
     svc: web::Data<LayerService>,
     req: web::Query<TimeRangeRequest>,
 ) -> Result<HttpResponse> {
-    let query = TimeRangeQuery::new(&req.start_time, &req.end_time)
-        .map_err(|e| ErrorBadRequest(e.to_string()))?;
+    debug!(
+        start_time = %req.start_time,
+        end_time = %req.end_time,
+        "vm.handlers.layers_snapshot.request"
+    );
+    let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
+        error!(
+            start_time = %req.start_time,
+            end_time = %req.end_time,
+            error = %e,
+            "vm.handlers.layers_snapshot.invalid_params"
+        );
+        ErrorBadRequest(e.to_string())
+    })?;
     let data = svc
         .get_layers_snapshot(query)
         .await
-        .map_err(|e| ErrorInternalServerError(e.to_string()))?;
+        .map_err(|e| {
+            error!(error = %e, "vm.handlers.layers_snapshot.failed");
+            ErrorInternalServerError(e.to_string())
+        })?;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }
 
@@ -52,8 +68,21 @@ pub async fn get_layers_metrics(
     svc: web::Data<LayerService>,
     req: web::Query<MetricsRequest>,
 ) -> Result<HttpResponse> {
-    let query = TimeRangeQuery::new(&req.start_time, &req.end_time)
-        .map_err(|e| ErrorBadRequest(e.to_string()))?;
+    debug!(
+        start_time = %req.start_time,
+        end_time = %req.end_time,
+        has_node_ids = req.node_ids.is_some(),
+        "vm.handlers.layers_metrics.request"
+    );
+    let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
+        error!(
+            start_time = %req.start_time,
+            end_time = %req.end_time,
+            error = %e,
+            "vm.handlers.layers_metrics.invalid_params"
+        );
+        ErrorBadRequest(e.to_string())
+    })?;
     let node_ids = req.node_ids.as_ref().map(|s| {
         s.split(',')
             .map(|x| x.trim().to_string())
@@ -63,7 +92,10 @@ pub async fn get_layers_metrics(
     let data = svc
         .get_layers_metrics(query, node_ids)
         .await
-        .map_err(|e| ErrorInternalServerError(e.to_string()))?;
+        .map_err(|e| {
+            error!(error = %e, "vm.handlers.layers_metrics.failed");
+            ErrorInternalServerError(e.to_string())
+        })?;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }
 
@@ -74,12 +106,30 @@ pub async fn get_node_detail(
     path: web::Path<String>,
     req: web::Query<TimeRangeRequest>,
 ) -> Result<HttpResponse> {
-    let query = TimeRangeQuery::new(&req.start_time, &req.end_time)
-        .map_err(|e| ErrorBadRequest(e.to_string()))?;
+    let node_id = path.as_str();
+    debug!(
+        node_id = %node_id,
+        start_time = %req.start_time,
+        end_time = %req.end_time,
+        "vm.handlers.node_detail.request"
+    );
+    let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
+        error!(
+            node_id = %node_id,
+            start_time = %req.start_time,
+            end_time = %req.end_time,
+            error = %e,
+            "vm.handlers.node_detail.invalid_params"
+        );
+        ErrorBadRequest(e.to_string())
+    })?;
     let data = svc
-        .get_node_detail(path.as_str(), query)
+        .get_node_detail(node_id, query)
         .await
-        .map_err(|e| ErrorInternalServerError(e.to_string()))?;
+        .map_err(|e| {
+            error!(node_id = %node_id, error = %e, "vm.handlers.node_detail.failed");
+            ErrorInternalServerError(e.to_string())
+        })?;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }
 
@@ -90,18 +140,42 @@ pub async fn get_node_timeseries(
     path: web::Path<String>,
     req: web::Query<TimeSeriesRequest>,
 ) -> Result<HttpResponse> {
-    let query = TimeRangeQuery::new(&req.start_time, &req.end_time)
-        .map_err(|e| ErrorBadRequest(e.to_string()))?;
+    let node_id = path.as_str();
+    debug!(
+        node_id = %node_id,
+        start_time = %req.start_time,
+        end_time = %req.end_time,
+        step = req.step.as_deref().unwrap_or("default"),
+        "vm.handlers.node_timeseries.request"
+    );
+    let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
+        error!(
+            node_id = %node_id,
+            start_time = %req.start_time,
+            end_time = %req.end_time,
+            error = %e,
+            "vm.handlers.node_timeseries.invalid_params"
+        );
+        ErrorBadRequest(e.to_string())
+    })?;
     let data = svc
-        .get_node_timeseries(path.as_str(), query, req.step.clone())
+        .get_node_timeseries(node_id, query, req.step.clone())
         .await
-        .map_err(|e| ErrorInternalServerError(e.to_string()))?;
+        .map_err(|e| {
+            error!(
+                node_id = %node_id,
+                error = %e,
+                "vm.handlers.node_timeseries.failed"
+            );
+            ErrorInternalServerError(e.to_string())
+        })?;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }
 
 /// 获取前端初始化配置。
 #[get("/meta/config")]
 pub async fn get_meta_config(svc: web::Data<LayerService>) -> Result<HttpResponse> {
+    debug!("vm.handlers.meta_config.request");
     let data = svc.get_meta_config().await;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }
@@ -109,6 +183,7 @@ pub async fn get_meta_config(svc: web::Data<LayerService>) -> Result<HttpRespons
 /// 就绪探针。
 #[get("/health/ready")]
 pub async fn get_health_ready() -> Result<HttpResponse> {
+    debug!("vm.handlers.health_ready.request");
     Ok(HttpResponse::Ok().json(ApiResponse::ok(ReadyResponse {
         status: "ready".to_string(),
     })))

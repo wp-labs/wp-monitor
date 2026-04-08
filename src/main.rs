@@ -9,7 +9,9 @@ use infrastructure::vm_repository::{VmHttpRepository, VmRepository};
 use interfaces::vm::routes::register_vm_routes;
 use interfaces::vm::static_assets::register_static_assets;
 use shared::config::AppConfig;
+use shared::logging::init_tracing;
 use std::sync::Arc;
+use tracing::info;
 
 use infrastructure::vlog_repository::VlogHttpRepository;
 
@@ -35,16 +37,14 @@ async fn main() -> std::io::Result<()> {
     let app_cfg = AppConfig::load_from_file(&cfg_path)
         .map_err(|e| std::io::Error::other(format!("load config failed: {}", e)))?;
 
-    // 日志级别从配置读取（如：info/debug/warn/error）。
-    let env_filter = tracing_subscriber::EnvFilter::try_new(app_cfg.log_level.clone())
-        .unwrap_or_else(|e| {
-            eprintln!(
-                "invalid log_level '{}': {}, fallback to 'info'",
-                app_cfg.log_level, e
-            );
-            tracing_subscriber::EnvFilter::new("info")
-        });
-    tracing_subscriber::fmt().with_env_filter(env_filter).init();
+    // 统一日志格式初始化。
+    init_tracing(&app_cfg.log_level);
+    info!(
+        service = "wp_monitor",
+        version = env!("CARGO_PKG_VERSION"),
+        log_level = %app_cfg.log_level,
+        "service.startup"
+    );
 
     let vm_base = app_cfg.vm_base_url.clone();
     let vm_repo: Arc<dyn VmRepository> = Arc::new(VmHttpRepository::new(vm_base));
