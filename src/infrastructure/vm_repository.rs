@@ -490,7 +490,11 @@ impl VmRepository for VmHttpRepository {
 
         let rate = rate_rows.first().map(|x| x.value).unwrap_or(0.0);
         let count = count_rows.first().map(|x| x.value).unwrap_or(0.0).round() as u64;
-        debug!(rate = rate, count = count, "vm_repository.miss_metrics.success");
+        debug!(
+            rate = rate,
+            count = count,
+            "vm_repository.miss_metrics.success"
+        );
         Ok(MetricsSnapshot {
             log_rate_eps: rate,
             log_count: count,
@@ -583,7 +587,10 @@ impl VmRepository for VmHttpRepository {
             _ => ("vector(0)".to_string(), "vector(0)".to_string()),
         };
         if rate_q == "vector(0)" {
-            warn!(node_id = node_id, "vm_repository.node_timeseries.unknown_node");
+            warn!(
+                node_id = node_id,
+                "vm_repository.node_timeseries.unknown_node"
+            );
         }
 
         let (rate_series, count_series) = tokio::try_join!(

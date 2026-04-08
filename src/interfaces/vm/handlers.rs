@@ -52,13 +52,10 @@ pub async fn get_layers_snapshot(
         );
         ErrorBadRequest(e.to_string())
     })?;
-    let data = svc
-        .get_layers_snapshot(query)
-        .await
-        .map_err(|e| {
-            error!(error = %e, "vm.handlers.layers_snapshot.failed");
-            ErrorInternalServerError(e.to_string())
-        })?;
+    let data = svc.get_layers_snapshot(query).await.map_err(|e| {
+        error!(error = %e, "vm.handlers.layers_snapshot.failed");
+        ErrorInternalServerError(e.to_string())
+    })?;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }
 
@@ -89,13 +86,10 @@ pub async fn get_layers_metrics(
             .collect::<Vec<_>>()
     });
 
-    let data = svc
-        .get_layers_metrics(query, node_ids)
-        .await
-        .map_err(|e| {
-            error!(error = %e, "vm.handlers.layers_metrics.failed");
-            ErrorInternalServerError(e.to_string())
-        })?;
+    let data = svc.get_layers_metrics(query, node_ids).await.map_err(|e| {
+        error!(error = %e, "vm.handlers.layers_metrics.failed");
+        ErrorInternalServerError(e.to_string())
+    })?;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }
 
@@ -123,13 +117,10 @@ pub async fn get_node_detail(
         );
         ErrorBadRequest(e.to_string())
     })?;
-    let data = svc
-        .get_node_detail(node_id, query)
-        .await
-        .map_err(|e| {
-            error!(node_id = %node_id, error = %e, "vm.handlers.node_detail.failed");
-            ErrorInternalServerError(e.to_string())
-        })?;
+    let data = svc.get_node_detail(node_id, query).await.map_err(|e| {
+        error!(node_id = %node_id, error = %e, "vm.handlers.node_detail.failed");
+        ErrorInternalServerError(e.to_string())
+    })?;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }
 

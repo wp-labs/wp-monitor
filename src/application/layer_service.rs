@@ -398,7 +398,10 @@ impl LayerService {
                 "layer_service.layers_metrics.filtered"
             );
         } else {
-            debug!(result_size = items.len(), "layer_service.layers_metrics.full");
+            debug!(
+                result_size = items.len(),
+                "layer_service.layers_metrics.full"
+            );
         }
 
         Ok(LayersMetricsResponse {
