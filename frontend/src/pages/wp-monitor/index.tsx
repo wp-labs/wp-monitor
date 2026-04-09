@@ -214,11 +214,22 @@ export default function WpMonitorPage() {
     if (!snapshot || selectedNode) return;
     try {
       const ids = collectAllNodeIds(snapshot);
-      const data = await fetchMetrics(startTime, new Date().toISOString(), ids);
+      // 自动刷新时保持窗口长度恒定，避免仅更新 end_time 导致时间范围持续漂移。
+      const nowMs = Date.now();
+      const startMs = new Date(startTime).getTime();
+      const endMs = new Date(endTime).getTime();
+      const durationMs =
+        Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs
+          ? endMs - startMs
+          : 5 * 60 * 1000;
+      const nextEnd = new Date(nowMs).toISOString();
+      const nextStart = new Date(nowMs - durationMs).toISOString();
+      const data = await fetchMetrics(nextStart, nextEnd, ids);
       setSnapshot((prev) =>
         prev ? applyMetricsToSnapshot(prev, data.items) : prev,
       );
-      setEndTime(new Date().toISOString());
+      setStartTime(nextStart);
+      setEndTime(nextEnd);
     } catch {
       await loadSnapshot();
     }
@@ -342,7 +353,7 @@ export default function WpMonitorPage() {
         const nextEnd = new Date(nextEndMs).toISOString();
         const [detailResp, seriesResp] = await Promise.all([
           fetchNodeDetail(selectedNode, nextStart, nextEnd),
-          fetchNodeTimeSeries(selectedNode, nextStart, nextEnd, "30s"),
+          fetchNodeTimeSeries(selectedNode, nextStart, nextEnd, "1s"),
         ]);
         if (cancelled) return;
         setDetail(detailResp.data);
@@ -881,7 +892,6 @@ export default function WpMonitorPage() {
           <span className="metric-pill badge">
             MEM: {snapshot?.sys_metrics.memory_used_mb ?? "0.00"} MB
           </span>
-          <span className="metric-pill badge">节点: {nodesCount}</span>
           <span className="metric-pill badge refresh-pill">
             自动刷新:
             <input
@@ -1236,6 +1246,8 @@ export default function WpMonitorPage() {
                     color="#2f6df6"
                     valueFormatter={formatRate2}
                     axisValueFormatter={formatRate2}
+                    minY={0}
+                    yTickAmount={6}
                     rangeStartLabel={formatLocalTime(detailStartTime)}
                     rangeEndLabel={formatLocalTime(detailEndTime)}
                     showRangeMeta={false}

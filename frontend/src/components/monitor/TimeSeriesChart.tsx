@@ -8,6 +8,8 @@ interface Props {
   color: string;
   valueFormatter?: (v: number) => string;
   axisValueFormatter?: (v: number) => string;
+  minY?: number;
+  yTickAmount?: number;
   rangeStartLabel?: string;
   rangeEndLabel?: string;
   showRangeMeta?: boolean;
@@ -25,6 +27,8 @@ export default function TimeSeriesChart({
   color,
   valueFormatter,
   axisValueFormatter,
+  minY,
+  yTickAmount = 6,
   rangeStartLabel,
   rangeEndLabel,
   showRangeMeta = true,
@@ -91,7 +95,8 @@ export default function TimeSeriesChart({
         axisTicks: { color: '#cfdcf1' },
       },
       yaxis: {
-        tickAmount: 3,
+        min: minY,
+        tickAmount: yTickAmount,
         forceNiceScale: true,
         labels: {
           show: true,
@@ -120,7 +125,7 @@ export default function TimeSeriesChart({
       },
       legend: { show: false },
     }),
-    [axisValueFormatter, color, valueFormatter],
+    [axisValueFormatter, color, minY, valueFormatter, yTickAmount],
   );
 
   useEffect(() => {

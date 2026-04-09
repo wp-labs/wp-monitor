@@ -79,7 +79,8 @@ impl VmHttpRepository {
 
     /// VM 返回 value 为字符串，这里统一兜底解析为 f64。
     fn parse_value(v: &str) -> f64 {
-        v.parse::<f64>().unwrap_or(0.0)
+        let x = v.parse::<f64>().unwrap_or(0.0);
+        (x * 100.0).round() / 100.0
     }
 
     /// 执行 instant query（单时刻查询）。
@@ -512,7 +513,6 @@ impl VmRepository for VmHttpRepository {
         query: &TimeRangeQuery,
         step: Option<String>,
     ) -> Result<NodeTimeSeries, VmRepoError> {
-        let window = Self::window_from_range(query);
         let step = step.unwrap_or_else(|| "30s".to_string());
         let start = query.start_time.timestamp();
         let end = query.end_time.timestamp();
@@ -521,7 +521,6 @@ impl VmRepository for VmHttpRepository {
             start_time = %query.start_time,
             end_time = %query.end_time,
             step = %step,
-            window = %window,
             "vm_repository.node_timeseries.start"
         );
 
@@ -534,12 +533,12 @@ impl VmRepository for VmHttpRepository {
                 let source_name = parts[1];
                 (
                     format!(
-                        "sum(rate(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}}[{}]))",
-                        source_type, source_name, window
+                        "sum(rate(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}}))",
+                        source_type, source_name
                     ),
                     format!(
-                        "sum(increase(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}}[{}]))",
-                        source_type, source_name, window
+                        "sum(increase(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}}))",
+                        source_type, source_name
                     ),
                 )
             }
@@ -548,12 +547,12 @@ impl VmRepository for VmHttpRepository {
                 let rule = parts[1];
                 (
                     format!(
-                        "sum(rate(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}}[{}]))",
-                        package, rule, window
+                        "sum(rate(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}}))",
+                        package, rule
                     ),
                     format!(
-                        "sum(increase(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}}[{}]))",
-                        package, rule, window
+                        "sum(increase(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}}))",
+                        package, rule
                     ),
                 )
             }
@@ -561,12 +560,12 @@ impl VmRepository for VmHttpRepository {
                 let g = parts[0];
                 (
                     format!(
-                        "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
-                        g, window
+                        "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}))",
+                        g
                     ),
                     format!(
-                        "sum(increase(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
-                        g, window
+                        "sum(increase(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}))",
+                        g
                     ),
                 )
             }
@@ -575,12 +574,12 @@ impl VmRepository for VmHttpRepository {
                 let s = parts[1];
                 (
                     format!(
-                        "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
-                        g, s, window
+                        "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}))",
+                        g, s
                     ),
                     format!(
-                        "sum(increase(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
-                        g, s, window
+                        "sum(increase(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}))",
+                        g, s
                     ),
                 )
             }
