@@ -359,8 +359,8 @@ body {
     font-family: var(--font-mono);
     font-size: 11px;
     color: #334155;
-    width: 122px !important;
-    min-width: 122px !important;
+    width: 152px !important;
+    min-width: 152px !important;
     padding: 0 !important;
 }
 
@@ -371,7 +371,7 @@ body {
 
 .wd-ant-range .ant-picker-input:first-child > input,
 .wd-ant-range .ant-picker-input:last-child > input {
-    min-width: 122px !important;
+    min-width: 152px !important;
 }
 
 .wd-ant-range .ant-picker-separator {
