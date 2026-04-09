@@ -30,6 +30,7 @@ import "antd/dist/reset.css";
 import "./index.css";
 
 const QUICK_RANGES = [
+  { key: "1m", label: "最近 1 分钟", minutes: 1 },
   { key: "5m", label: "最近 5 分钟", minutes: 5 },
   { key: "1h", label: "最近 1 小时", minutes: 60 },
   { key: "6h", label: "最近 6 小时", minutes: 360 },
@@ -546,7 +547,7 @@ export default function WpMonitorPage() {
         nodeId,
         currentStart,
         currentEnd,
-        "30s",
+        "1s",
       );
       if (isMissNode) {
         setMissLogsLoading(true);

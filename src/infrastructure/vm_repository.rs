@@ -505,21 +505,54 @@ impl VmRepository for VmHttpRepository {
 
     /// 查询单节点时间序列：
     /// 1. 根据 node_id 解析节点类型和标签；
-    /// 2. 生成 rate/increase 两条 PromQL；
-    /// 3. 走 range query 返回折线数据点。
+    /// 2. 查询原始 counter 序列（不直接用 increase/rate，避免外推导致“假数据”）；
+    /// 3. 对相邻点做差分得到每秒增量；
+    /// 4. 将末尾“无新增（增量=0）”区间裁掉，满足“无数据直接截止窗口”。
     async fn fetch_node_timeseries(
         &self,
         node_id: &str,
         query: &TimeRangeQuery,
         step: Option<String>,
     ) -> Result<NodeTimeSeries, VmRepoError> {
-        let step = step.unwrap_or_else(|| "30s".to_string());
+        let step = step.unwrap_or_else(|| "1s".to_string());
+
+        // 实时查询右边界会受到入库延迟/窗口边界影响：
+        // 为保证“最近窗口”也尽量返回真实值，统一回退一个安全延迟。
+        let step_secs = if let Some(x) = step.strip_suffix('s') {
+            x.parse::<i64>().unwrap_or(1).max(1)
+        } else if let Some(x) = step.strip_suffix('m') {
+            x.parse::<i64>().unwrap_or(1).max(1) * 60
+        } else if let Some(x) = step.strip_suffix('h') {
+            x.parse::<i64>().unwrap_or(1).max(1) * 3600
+        } else {
+            1
+        };
+        let safe_lag_secs = (step_secs * 2).max(2);
         let start = query.start_time.timestamp();
-        let end = query.end_time.timestamp();
+        let requested_end = query.end_time.timestamp();
+        let now_safe_end = Utc::now().timestamp() - safe_lag_secs;
+        let end = requested_end.min(now_safe_end);
+
+        if start >= end {
+            debug!(
+                node_id = node_id,
+                start_time = %query.start_time,
+                end_time = %query.end_time,
+                safe_lag_secs = safe_lag_secs,
+                "vm_repository.node_timeseries.empty_due_to_realtime_boundary"
+            );
+            return Ok(NodeTimeSeries {
+                node_id: node_id.to_string(),
+                log_rate_eps: Vec::new(),
+                log_count: Vec::new(),
+            });
+        }
         debug!(
             node_id = node_id,
             start_time = %query.start_time,
             end_time = %query.end_time,
+            effective_end_unix = end,
+            safe_lag_secs = safe_lag_secs,
             step = %step,
             "vm_repository.node_timeseries.start"
         );
@@ -527,117 +560,90 @@ impl VmRepository for VmHttpRepository {
         let (kind, parts) = Self::parse_node_id(node_id);
 
         // 未识别节点类型时返回 vector(0)，保证接口语义稳定且不报错。
-        let (rate_q, count_q) = match kind {
+        let raw_q = match kind {
             "source" if parts.len() >= 2 => {
                 let source_type = parts[0];
                 let source_name = parts[1];
-                (
-                    format!(
-                        "sum(rate(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}}))",
-                        source_type, source_name
-                    ),
-                    format!(
-                        "sum(increase(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}}))",
-                        source_type, source_name
-                    ),
+                format!(
+                    "sum(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}})",
+                    source_type, source_name
                 )
             }
             "log" if parts.len() >= 2 => {
                 let package = parts[0];
                 let rule = parts[1];
-                (
-                    format!(
-                        "sum(rate(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}}))",
-                        package, rule
-                    ),
-                    format!(
-                        "sum(increase(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}}))",
-                        package, rule
-                    ),
+                format!(
+                    "sum(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}})",
+                    package, rule
                 )
             }
             "group" if !parts.is_empty() => {
                 let g = parts[0];
-                (
-                    format!(
-                        "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}))",
-                        g
-                    ),
-                    format!(
-                        "sum(increase(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}))",
-                        g
-                    ),
+                format!(
+                    "sum(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}})",
+                    g
                 )
             }
             "sink" if parts.len() >= 2 => {
                 let g = parts[0];
                 let s = parts[1];
-                (
-                    format!(
-                        "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}))",
-                        g, s
-                    ),
-                    format!(
-                        "sum(increase(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}))",
-                        g, s
-                    ),
+                format!(
+                    "sum(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}})",
+                    g, s
                 )
             }
-            _ => ("vector(0)".to_string(), "vector(0)".to_string()),
+            _ => "vector(0)".to_string(),
         };
-        if rate_q == "vector(0)" {
+        if raw_q == "vector(0)" {
             warn!(
                 node_id = node_id,
                 "vm_repository.node_timeseries.unknown_node"
             );
         }
 
-        let (rate_series, count_series) = tokio::try_join!(
-            self.range_query(&rate_q, start, end, &step),
-            self.range_query(&count_q, start, end, &step)
-        )
-        .map_err(|e| VmRepoError::Request(e.to_string()))?;
+        let raw_series = self
+            .range_query(&raw_q, start, end, &step)
+            .await
+            .map_err(|e| VmRepoError::Request(e.to_string()))?;
 
-        let rate_points = rate_series
+        let raw_values = raw_series
             .first()
-            .map(|s| {
-                s.values
-                    .iter()
-                    .map(|p| TimePoint {
-                        ts: chrono::DateTime::from_timestamp(p.ts as i64, 0)
-                            .map(|d| d.to_rfc3339())
-                            .unwrap_or_else(|| Utc::now().to_rfc3339()),
-                        value: p.value,
-                    })
-                    .collect::<Vec<_>>()
-            })
+            .map(|s| s.values.clone())
             .unwrap_or_default();
 
-        let count_points = count_series
-            .first()
-            .map(|s| {
-                s.values
-                    .iter()
-                    .map(|p| TimePoint {
-                        ts: chrono::DateTime::from_timestamp(p.ts as i64, 0)
-                            .map(|d| d.to_rfc3339())
-                            .unwrap_or_else(|| Utc::now().to_rfc3339()),
-                        value: p.value,
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        // 用“相邻点差分”构造真实每秒增量，避免 increase/rate 在实时边界的外推。
+        let mut rate_points: Vec<TimePoint> = Vec::new();
+        let mut last_positive_idx: Option<usize> = None;
+        for w in raw_values.windows(2) {
+            let prev = &w[0];
+            let curr = &w[1];
+            let delta = (curr.value - prev.value).max(0.0);
+            let ts = chrono::DateTime::from_timestamp(curr.ts as i64, 0)
+                .map(|d| d.to_rfc3339())
+                .unwrap_or_else(|| Utc::now().to_rfc3339());
+            rate_points.push(TimePoint { ts, value: delta });
+            if delta > 0.0 {
+                last_positive_idx = Some(rate_points.len() - 1);
+            }
+        }
+
+        // 末尾没有新增时直接截断窗口。
+        match last_positive_idx {
+            Some(i) => rate_points.truncate(i + 1),
+            None => rate_points.clear(),
+        }
+
         debug!(
             node_id = node_id,
+            raw_points = raw_values.len(),
             rate_points = rate_points.len(),
-            count_points = count_points.len(),
             "vm_repository.node_timeseries.success"
         );
 
         Ok(NodeTimeSeries {
             node_id: node_id.to_string(),
             log_rate_eps: rate_points,
-            log_count: count_points,
+            log_count: Vec::new(),
         })
     }
 }
