@@ -55,9 +55,8 @@ export async function fetchNodeTimeSeries(
   nodeId: string,
   startTime: string,
   endTime: string,
-  step = "1s",
 ) {
-  const url = `/api/v1/wp-monitor/nodes/${encodeURIComponent(nodeId)}/timeseries?start_time=${encodeURIComponent(startTime)}&end_time=${encodeURIComponent(endTime)}&step=${encodeURIComponent(step)}`;
+  const url = `/api/v1/wp-monitor/nodes/${encodeURIComponent(nodeId)}/timeseries?start_time=${encodeURIComponent(startTime)}&end_time=${encodeURIComponent(endTime)}`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error("timeseries request failed");
   return (await resp.json()) as ApiResp<NodeTimeSeries>;

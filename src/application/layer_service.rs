@@ -514,7 +514,6 @@ impl LayerService {
         &self,
         node_id: &str,
         query: TimeRangeQuery,
-        step: Option<String>,
     ) -> Result<NodeTimeSeries, VmRepoError> {
         if node_id == "miss" {
             debug!(node_id = %node_id, "layer_service.node_timeseries.miss_empty");
@@ -526,12 +525,9 @@ impl LayerService {
         }
         debug!(
             node_id = %node_id,
-            step = step.as_deref().unwrap_or("default"),
             "layer_service.node_timeseries.start"
         );
-        self.vm_repo
-            .fetch_node_timeseries(node_id, &query, step)
-            .await
+        self.vm_repo.fetch_node_timeseries(node_id, &query).await
     }
 
     /// 返回前端初始化配置（从配置文件读取结果回传）。

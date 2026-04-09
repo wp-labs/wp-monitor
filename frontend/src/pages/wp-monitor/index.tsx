@@ -354,7 +354,7 @@ export default function WpMonitorPage() {
         const nextEnd = new Date(nextEndMs).toISOString();
         const [detailResp, seriesResp] = await Promise.all([
           fetchNodeDetail(selectedNode, nextStart, nextEnd),
-          fetchNodeTimeSeries(selectedNode, nextStart, nextEnd, "1s"),
+          fetchNodeTimeSeries(selectedNode, nextStart, nextEnd),
         ]);
         if (cancelled) return;
         setDetail(detailResp.data);
@@ -547,7 +547,6 @@ export default function WpMonitorPage() {
         nodeId,
         currentStart,
         currentEnd,
-        "1s",
       );
       if (isMissNode) {
         setMissLogsLoading(true);

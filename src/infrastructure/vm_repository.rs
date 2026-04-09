@@ -46,7 +46,6 @@ pub trait VmRepository: Send + Sync {
         &self,
         node_id: &str,
         query: &TimeRangeQuery,
-        step: Option<String>,
     ) -> Result<NodeTimeSeries, VmRepoError>;
 }
 
@@ -81,6 +80,14 @@ impl VmHttpRepository {
     fn parse_value(v: &str) -> f64 {
         let x = v.parse::<f64>().unwrap_or(0.0);
         (x * 100.0).round() / 100.0
+    }
+
+    /// 按时间范围自动计算 query_range 的步长，目标约 60 个点。
+    /// 返回值：("Ns", N)
+    fn auto_step_for_timeseries(query: &TimeRangeQuery) -> (String, i64) {
+        let total_secs = (query.end_time.timestamp() - query.start_time.timestamp()).max(1);
+        let step_secs = ((total_secs + 59) / 60).max(1);
+        (format!("{}s", step_secs), step_secs)
     }
 
     /// 执行 instant query（单时刻查询）。
@@ -512,21 +519,11 @@ impl VmRepository for VmHttpRepository {
         &self,
         node_id: &str,
         query: &TimeRangeQuery,
-        step: Option<String>,
     ) -> Result<NodeTimeSeries, VmRepoError> {
-        let step = step.unwrap_or_else(|| "1s".to_string());
+        let (step, step_secs) = Self::auto_step_for_timeseries(query);
 
         // 实时查询右边界会受到入库延迟/窗口边界影响：
         // 为保证“最近窗口”也尽量返回真实值，统一回退一个安全延迟。
-        let step_secs = if let Some(x) = step.strip_suffix('s') {
-            x.parse::<i64>().unwrap_or(1).max(1)
-        } else if let Some(x) = step.strip_suffix('m') {
-            x.parse::<i64>().unwrap_or(1).max(1) * 60
-        } else if let Some(x) = step.strip_suffix('h') {
-            x.parse::<i64>().unwrap_or(1).max(1) * 3600
-        } else {
-            1
-        };
         let safe_lag_secs = (step_secs * 2).max(2);
         let start = query.start_time.timestamp();
         let requested_end = query.end_time.timestamp();
@@ -611,18 +608,20 @@ impl VmRepository for VmHttpRepository {
             .map(|s| s.values.clone())
             .unwrap_or_default();
 
-        // 用“相邻点差分”构造真实每秒增量，避免 increase/rate 在实时边界的外推。
+        // 用“相邻点差分/时间差”构造真实每秒速率，避免 increase/rate 在实时边界的外推。
         let mut rate_points: Vec<TimePoint> = Vec::new();
         let mut last_positive_idx: Option<usize> = None;
         for w in raw_values.windows(2) {
             let prev = &w[0];
             let curr = &w[1];
+            let elapsed = (curr.ts - prev.ts).max(1.0);
             let delta = (curr.value - prev.value).max(0.0);
+            let eps = delta / elapsed;
             let ts = chrono::DateTime::from_timestamp(curr.ts as i64, 0)
                 .map(|d| d.to_rfc3339())
                 .unwrap_or_else(|| Utc::now().to_rfc3339());
-            rate_points.push(TimePoint { ts, value: delta });
-            if delta > 0.0 {
+            rate_points.push(TimePoint { ts, value: eps });
+            if eps > 0.0 {
                 last_positive_idx = Some(rate_points.len() - 1);
             }
         }

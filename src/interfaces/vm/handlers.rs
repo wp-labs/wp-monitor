@@ -24,11 +24,13 @@ pub struct MetricsRequest {
     pub node_ids: Option<String>,
 }
 
-/// HTTP 查询参数：节点时序请求（支持 step 可选覆盖）。
+/// HTTP 查询参数：节点时序请求。
+/// 说明：`step` 字段仅为兼容旧前端，当前版本由后端自动计算步长。
 #[derive(Debug, serde::Deserialize)]
 pub struct TimeSeriesRequest {
     pub start_time: String,
     pub end_time: String,
+    #[allow(dead_code)]
     pub step: Option<String>,
 }
 
@@ -136,7 +138,6 @@ pub async fn get_node_timeseries(
         node_id = %node_id,
         start_time = %req.start_time,
         end_time = %req.end_time,
-        step = req.step.as_deref().unwrap_or("default"),
         "vm.handlers.node_timeseries.request"
     );
     let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
@@ -150,7 +151,7 @@ pub async fn get_node_timeseries(
         ErrorBadRequest(e.to_string())
     })?;
     let data = svc
-        .get_node_timeseries(node_id, query, req.step.clone())
+        .get_node_timeseries(node_id, query)
         .await
         .map_err(|e| {
             error!(
