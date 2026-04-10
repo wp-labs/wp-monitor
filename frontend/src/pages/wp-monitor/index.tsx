@@ -40,6 +40,7 @@ const QUICK_RANGES = [
   { key: "week", label: "本周" },
 ] as const;
 const MISS_PAGE_SIZE = 10;
+const REALTIME_END_LAG_MS = 5000;
 const { RangePicker } = DatePicker;
 dayjs.locale("zh-cn");
 
@@ -70,7 +71,15 @@ type ParseSearchItem =
     };
 
 function toIsoByMinutesAgo(minutes: number) {
-  return new Date(Date.now() - minutes * 60 * 1000).toISOString();
+  return new Date(Date.now() - REALTIME_END_LAG_MS - minutes * 60 * 1000).toISOString();
+}
+
+function nowWithLagMs() {
+  return Date.now() - REALTIME_END_LAG_MS;
+}
+
+function nowWithLagIso() {
+  return new Date(nowWithLagMs()).toISOString();
 }
 
 function toDateFromIso(v: string) {
@@ -104,7 +113,7 @@ function formatLocalTime(iso: string) {
 }
 
 function buildQuickRange(key: string) {
-  const now = new Date();
+  const now = new Date(nowWithLagMs());
   if (key === "today") {
     const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     return { start: start.toISOString(), end: now.toISOString() };
@@ -140,7 +149,7 @@ export default function WpMonitorPage() {
 
   const [snapshot, setSnapshot] = useState<LayerSnapshot | null>(null);
   const [startTime, setStartTime] = useState(() => toIsoByMinutesAgo(5));
-  const [endTime, setEndTime] = useState(() => new Date().toISOString());
+  const [endTime, setEndTime] = useState(() => nowWithLagIso());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [toastVisible, setToastVisible] = useState(false);
@@ -171,7 +180,7 @@ export default function WpMonitorPage() {
     toDateFromIso(toIsoByMinutesAgo(5)),
   );
   const [draftEnd, setDraftEnd] = useState<Date | null>(() =>
-    toDateFromIso(new Date().toISOString()),
+    toDateFromIso(nowWithLagIso()),
   );
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [refreshIntervalSec, setRefreshIntervalSec] = useState(5);
@@ -216,7 +225,7 @@ export default function WpMonitorPage() {
     try {
       const ids = collectAllNodeIds(snapshot);
       // 自动刷新时保持窗口长度恒定，避免仅更新 end_time 导致时间范围持续漂移。
-      const nowMs = Date.now();
+      const nowMs = nowWithLagMs();
       const startMs = new Date(startTime).getTime();
       const endMs = new Date(endTime).getTime();
       const durationMs =
@@ -348,7 +357,7 @@ export default function WpMonitorPage() {
 
     const refreshSelectedNodeDetail = async () => {
       try {
-        const nextEndMs = Date.now();
+        const nextEndMs = nowWithLagMs();
         const nextStart = new Date(nextEndMs - durationMs).toISOString();
         const nextEnd = new Date(nextEndMs).toISOString();
         const [detailResp, seriesResp] = await Promise.all([
@@ -510,7 +519,7 @@ export default function WpMonitorPage() {
     const missNodeId = snapshot?.miss.id ?? "";
     const isMissNode = nodeId === missNodeId;
     let currentStart = startTime;
-    let currentEnd = endTime || new Date().toISOString();
+    let currentEnd = endTime || nowWithLagIso();
     const startMs = new Date(currentStart).getTime();
     const endMs = new Date(currentEnd).getTime();
     if (
@@ -518,7 +527,7 @@ export default function WpMonitorPage() {
       !Number.isFinite(endMs) ||
       startMs >= endMs
     ) {
-      currentEnd = new Date(Date.now()).toISOString();
+      currentEnd = nowWithLagIso();
       const fallbackStart = new Date(
         new Date(currentEnd).getTime() - 5 * 60 * 1000,
       ).toISOString();
