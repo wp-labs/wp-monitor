@@ -7,10 +7,11 @@ services:
     ports:
       - "8428:8428"
     command:
+      - "-httpListenAddr=:8428"
       - "-storageDataPath=/storage"
       - "-retentionPeriod=6"   # 数据保留 6 个月
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8428/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8428/health"]
       interval: 30s
       timeout: 5s
       retries: 3
