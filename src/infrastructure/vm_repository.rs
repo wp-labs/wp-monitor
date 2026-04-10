@@ -87,7 +87,11 @@ impl VmHttpRepository {
         // 将 ±5%(step*4) 降低到 ±2.5%(step*8)，
         // 代价是速率变化的响应时间延迟约一个 rate_window。
         let rate_window_secs = (step_secs * 8).max(20);
-        (format!("{}s", step_secs), format!("{}s", rate_window_secs), step_secs)
+        (
+            format!("{}s", step_secs),
+            format!("{}s", rate_window_secs),
+            step_secs,
+        )
     }
 
     /// 执行 instant query（单时刻查询）。
