@@ -6,6 +6,7 @@ interface Props {
   title: string;
   points: TimePoint[];
   color: string;
+  showTitleValue?: boolean;
   valueFormatter?: (v: number) => string;
   axisValueFormatter?: (v: number) => string;
   minY?: number;
@@ -25,6 +26,7 @@ export default function TimeSeriesChart({
   title,
   points,
   color,
+  showTitleValue = true,
   valueFormatter,
   axisValueFormatter,
   minY,
@@ -147,7 +149,11 @@ export default function TimeSeriesChart({
 
   return (
     <div className="spark">
-      <div className="spark-title">{title} · {valueFormatter ? valueFormatter(latest) : latest.toFixed(2)}</div>
+      <div className="spark-title">
+        {showTitleValue
+          ? `${title} · ${valueFormatter ? valueFormatter(latest) : latest.toFixed(2)}`
+          : title}
+      </div>
       <div ref={chartRef} className="spark-chart" />
       {showRangeMeta && (
         <div className="spark-meta">

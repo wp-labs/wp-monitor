@@ -533,10 +533,6 @@ impl LayerService {
     /// 返回前端初始化配置（从配置文件读取结果回传）。
     pub async fn get_meta_config(&self) -> serde_json::Value {
         serde_json::json!({
-          "refresh_interval_sec": self.config.refresh_interval_sec,
-          "default_window_min": self.config.default_window_min,
-          "time_presets": self.config.time_presets,
-          "api_version": self.config.api_version,
           "vm_base_url": self.config.vm_base_url
         })
     }

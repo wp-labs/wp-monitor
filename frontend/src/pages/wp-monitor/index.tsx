@@ -1259,6 +1259,7 @@ export default function WpMonitorPage() {
                     title="速率趋势"
                     points={rateChartPoints}
                     color="#2f6df6"
+                    showTitleValue={false}
                     valueFormatter={formatRate2}
                     axisValueFormatter={formatRate2}
                     minY={0}
