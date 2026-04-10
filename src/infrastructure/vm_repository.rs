@@ -71,11 +71,23 @@ impl VmHttpRepository {
     }
 
     /// 按时间范围自动计算 query_range 的步长，目标约 60 个点。
-    /// 返回值：("Ns", N)
-    fn auto_step_for_timeseries(query: &TimeRangeQuery) -> (String, i64) {
+    /// 返回值：(step_str, rate_window_str, step_secs)
+    ///
+    /// step 与 rate_window 必须分开：
+    /// - step 决定返回的数据点密度（60 个点）
+    /// - rate_window 是 PromQL rate([Ns]) 的回看窗口，必须 ≥ 4× push 间隔
+    ///   才能保证每个评估点内始终有多个样本，避免因单秒 push 缺失/重复
+    ///   导致 rate() 输出 0.0 / 0.5 / 2.0 的抖动。
+    ///   push 间隔为 1s，故 rate_window 最小 10s（≥ 4×1s，留有余量）。
+    fn auto_step_for_timeseries(query: &TimeRangeQuery) -> (String, String, i64) {
         let total_secs = (query.end_time.timestamp() - query.start_time.timestamp()).max(1);
         let step_secs = ((total_secs + 59) / 60).max(1);
-        (format!("{}s", step_secs), step_secs)
+        // rate_window 至少为 step 的 8 倍，且不低于 20s，确保窗口内有足够多样本。
+        // 更大的窗口能平滑 OS sleep 调度抖动引起的 ±1 事件滑移，
+        // 将 ±5%(step*4) 降低到 ±2.5%(step*8)，
+        // 代价是速率变化的响应时间延迟约一个 rate_window。
+        let rate_window_secs = (step_secs * 8).max(20);
+        (format!("{}s", step_secs), format!("{}s", rate_window_secs), step_secs)
     }
 
     /// 执行 instant query（单时刻查询）。
@@ -532,10 +544,10 @@ impl VmRepository for VmHttpRepository {
         node_id: &str,
         query: &TimeRangeQuery,
     ) -> Result<NodeTimeSeries, VmRepoError> {
-        let (rate_window, step_secs) = Self::auto_step_for_timeseries(query);
+        let (step, rate_window, step_secs) = Self::auto_step_for_timeseries(query);
 
         // 实时查询右边界会受到入库延迟/窗口边界影响：
-        // 为保证“最近窗口”也尽量返回真实值，统一回退一个安全延迟。
+        // 为保证”最近窗口”也尽量返回真实值，统一回退一个安全延迟。
         let safe_lag_secs = step_secs.max(2);
         let start = query.start_time.timestamp();
         let requested_end = query.end_time.timestamp();
@@ -562,7 +574,7 @@ impl VmRepository for VmHttpRepository {
             end_time = %query.end_time,
             effective_end_unix = end,
             safe_lag_secs = safe_lag_secs,
-            step = %rate_window,
+            step = %step,
             "vm_repository.node_timeseries.start"
         );
 
@@ -611,7 +623,7 @@ impl VmRepository for VmHttpRepository {
         }
 
         let rate_series = self
-            .range_query(&rate_q, start, end, &rate_window)
+            .range_query(&rate_q, start, end, &step)
             .await
             .map_err(|e| VmRepoError::Request(e.to_string()))?;
 
