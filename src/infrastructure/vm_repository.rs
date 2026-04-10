@@ -436,20 +436,14 @@ impl VmRepository for VmHttpRepository {
         )
         .map_err(|e| VmRepoError::Request(e.to_string()))?;
 
-        let source_count = Self::diff_rows_by_labels(
-            source_end,
-            source_start,
-            &["source_type", "source_name"],
-        );
+        let source_count =
+            Self::diff_rows_by_labels(source_end, source_start, &["source_type", "source_name"]);
         let parse_count =
             Self::diff_rows_by_labels(parse_end, parse_start, &["package_name", "rule_name"]);
         let sink_group_count =
             Self::diff_rows_by_labels(sink_group_end, sink_group_start, &["sink_group"]);
-        let sink_count = Self::diff_rows_by_labels(
-            sink_end,
-            sink_start,
-            &["sink_group", "sink_name"],
-        );
+        let sink_count =
+            Self::diff_rows_by_labels(sink_end, sink_start, &["sink_group", "sink_name"]);
 
         let source_rate = Self::rate_from_count_rows(&source_count, window_secs);
         let parse_rate = Self::rate_from_count_rows(&parse_count, window_secs);

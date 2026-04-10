@@ -8,7 +8,8 @@ services:
       - "8428:8428"
     command:
       - "-storageDataPath=/storage"
-      - "-retentionPeriod=6"   # 数据保留 6 个月
+      - "-retentionPeriod=6"
+      - "-search.latencyOffset=0s"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8428/health"]
       interval: 30s
