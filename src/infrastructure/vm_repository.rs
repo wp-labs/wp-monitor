@@ -46,7 +46,6 @@ pub trait VmRepository: Send + Sync {
         &self,
         node_id: &str,
         query: &TimeRangeQuery,
-        step: Option<String>,
     ) -> Result<NodeTimeSeries, VmRepoError>;
 }
 
@@ -65,22 +64,18 @@ impl VmHttpRepository {
         }
     }
 
-    /// 把时间范围转换成 PromQL 窗口表达式（如 15m / 1h）。
-    fn window_from_range(query: &TimeRangeQuery) -> String {
-        let secs = (query.end_time.timestamp() - query.start_time.timestamp()).max(1);
-        if secs % 3600 == 0 {
-            format!("{}h", secs / 3600)
-        } else if secs % 60 == 0 {
-            format!("{}m", secs / 60)
-        } else {
-            format!("{}s", secs)
-        }
-    }
-
     /// VM 返回 value 为字符串，这里统一兜底解析为 f64。
     fn parse_value(v: &str) -> f64 {
         let x = v.parse::<f64>().unwrap_or(0.0);
         (x * 100.0).round() / 100.0
+    }
+
+    /// 按时间范围自动计算 query_range 的步长，目标约 60 个点。
+    /// 返回值：("Ns", N)
+    fn auto_step_for_timeseries(query: &TimeRangeQuery) -> (String, i64) {
+        let total_secs = (query.end_time.timestamp() - query.start_time.timestamp()).max(1);
+        let step_secs = ((total_secs + 59) / 60).max(1);
+        (format!("{}s", step_secs), step_secs)
     }
 
     /// 执行 instant query（单时刻查询）。
@@ -356,6 +351,48 @@ impl VmHttpRepository {
         }
         (parts[0], parts[1..].to_vec())
     }
+
+    fn metric_key(metric: &HashMap<String, String>, labels: &[&str]) -> String {
+        labels
+            .iter()
+            .map(|k| format!("{}={}", k, metric.get(*k).cloned().unwrap_or_default()))
+            .collect::<Vec<_>>()
+            .join("|")
+    }
+
+    fn diff_rows_by_labels(
+        end_rows: Vec<VmSeriesValue>,
+        start_rows: Vec<VmSeriesValue>,
+        labels: &[&str],
+    ) -> Vec<VmSeriesValue> {
+        let mut start_map: HashMap<String, f64> = HashMap::new();
+        for r in start_rows {
+            let key = Self::metric_key(&r.metric, labels);
+            start_map.insert(key, r.value);
+        }
+
+        end_rows
+            .into_iter()
+            .map(|mut r| {
+                let key = Self::metric_key(&r.metric, labels);
+                let base = start_map.get(&key).copied().unwrap_or(0.0);
+                r.value = (r.value - base).max(0.0);
+                r
+            })
+            .collect()
+    }
+
+    fn rate_from_count_rows(count_rows: &[VmSeriesValue], window_secs: f64) -> Vec<VmSeriesValue> {
+        let denom = window_secs.max(1.0);
+        count_rows
+            .iter()
+            .cloned()
+            .map(|mut r| {
+                r.value /= denom;
+                r
+            })
+            .collect()
+    }
 }
 
 #[async_trait]
@@ -368,75 +405,55 @@ impl VmRepository for VmHttpRepository {
         &self,
         query: &TimeRangeQuery,
     ) -> Result<VmSnapshotData, VmRepoError> {
-        let window = Self::window_from_range(query);
-        let at = query.end_time.timestamp();
+        let at_start = query.start_time.timestamp();
+        let at_end = query.end_time.timestamp();
+        let window_secs = (at_end - at_start).max(1) as f64;
         debug!(
             start_time = %query.start_time,
             end_time = %query.end_time,
-            window = %window,
+            window_secs = window_secs,
             "vm_repository.snapshot.start"
         );
 
-        let source_rate_q = format!(
-            "sum by (source_type, source_name) (rate(wparse_receive_data[{}]))",
-            window
-        );
-        let source_count_q = format!(
-            "sum by (source_type, source_name) (increase(wparse_receive_data[{}]))",
-            window
-        );
+        let source_total_q = "sum by (source_type, source_name) (wparse_receive_data)";
+        let parse_total_q = "sum by (package_name, rule_name) (wparse_parse_all)";
+        let sink_group_total_q = "sum by (sink_group) (wparse_send_to_sink{sink_group!~\"monitor|default|miss|residue|error\"})";
+        let sink_total_q = "sum by (sink_group, sink_name) (wparse_send_to_sink{sink_group!~\"monitor|default|miss|residue|error\"})";
 
-        let parse_rate_q = format!(
-            "sum by (package_name, rule_name) (rate(wparse_parse_all[{}]))",
-            window
-        );
-        let parse_count_q = format!(
-            "sum by (package_name, rule_name) (increase(wparse_parse_all[{}]))",
-            window
-        );
-
-        let sink_group_rate_q = format!(
-            "sum by (sink_group) (rate(wparse_send_to_sink{{sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
-            window
-        );
-        let sink_group_count_q = format!(
-            "sum by (sink_group) (increase(wparse_send_to_sink{{sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
-            window
-        );
-        let sink_rate_q = format!(
-            "sum by (sink_group, sink_name) (rate(wparse_send_to_sink{{sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
-            window
-        );
-        let sink_count_q = format!(
-            "sum by (sink_group, sink_name) (increase(wparse_send_to_sink{{sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
-            window
-        );
-
-        let (
-            source_rate,
-            source_count,
-            parse_rate,
-            parse_count,
-            sink_group_rate,
-            sink_group_count,
-            sink_rate,
-            sink_count,
-        ) = tokio::try_join!(
-            self.instant_query(&source_rate_q, at),
-            self.instant_query(&source_count_q, at),
-            self.instant_query(&parse_rate_q, at),
-            self.instant_query(&parse_count_q, at),
-            self.instant_query(&sink_group_rate_q, at),
-            self.instant_query(&sink_group_count_q, at),
-            self.instant_query(&sink_rate_q, at),
-            self.instant_query(&sink_count_q, at),
+        let (source_end, parse_end, sink_group_end, sink_end) = tokio::try_join!(
+            self.instant_query(source_total_q, at_end),
+            self.instant_query(parse_total_q, at_end),
+            self.instant_query(sink_group_total_q, at_end),
+            self.instant_query(sink_total_q, at_end),
         )
         .map_err(|e| VmRepoError::Request(e.to_string()))?;
 
+        let (source_start, parse_start, sink_group_start, sink_start) = tokio::try_join!(
+            self.instant_query(source_total_q, at_start),
+            self.instant_query(parse_total_q, at_start),
+            self.instant_query(sink_group_total_q, at_start),
+            self.instant_query(sink_total_q, at_start),
+        )
+        .map_err(|e| VmRepoError::Request(e.to_string()))?;
+
+        let source_count =
+            Self::diff_rows_by_labels(source_end, source_start, &["source_type", "source_name"]);
+        let parse_count =
+            Self::diff_rows_by_labels(parse_end, parse_start, &["package_name", "rule_name"]);
+        let sink_group_count =
+            Self::diff_rows_by_labels(sink_group_end, sink_group_start, &["sink_group"]);
+        let sink_count =
+            Self::diff_rows_by_labels(sink_end, sink_start, &["sink_group", "sink_name"]);
+
+        let source_rate = Self::rate_from_count_rows(&source_count, window_secs);
+        let parse_rate = Self::rate_from_count_rows(&parse_count, window_secs);
+        let sink_group_rate = Self::rate_from_count_rows(&sink_group_count, window_secs);
+        let sink_rate = Self::rate_from_count_rows(&sink_count, window_secs);
+
         // 系统指标只取全局最大值，避免多序列场景出现重复。
         let (cpu_rows, mem_rows) = tokio::try_join!(
-            self.instant_query("max(wparse_cpu_usage)", at),
-            self.instant_query("max(wparse_memory_usage)", at),
+            self.instant_query("max(wparse_cpu_usage)", at_end),
+            self.instant_query("max(wparse_memory_usage)", at_end),
         )
         .map_err(|e| VmRepoError::Request(e.to_string()))?;
 
@@ -471,26 +488,29 @@ impl VmRepository for VmHttpRepository {
         &self,
         query: &TimeRangeQuery,
     ) -> Result<MetricsSnapshot, VmRepoError> {
-        let window = Self::window_from_range(query);
-        let at = query.end_time.timestamp();
+        let at_start = query.start_time.timestamp();
+        let at_end = query.end_time.timestamp();
+        let window_secs = (at_end - at_start).max(1) as f64;
         debug!(
             start_time = %query.start_time,
             end_time = %query.end_time,
-            window = %window,
+            window_secs = window_secs,
             "vm_repository.miss_metrics.start"
         );
         let miss_selector =
             r#"wparse_send_to_sink{sink_group="miss",sink_name="victorialogs_output"}"#;
-        let rate_q = format!("sum(rate({}[{}]))", miss_selector, window);
-        let count_q = format!("sum(increase({}[{}]))", miss_selector, window);
-        let (rate_rows, count_rows) = tokio::try_join!(
-            self.instant_query(&rate_q, at),
-            self.instant_query(&count_q, at),
+        let total_q = format!("sum({})", miss_selector);
+        let (end_rows, start_rows) = tokio::try_join!(
+            self.instant_query(&total_q, at_end),
+            self.instant_query(&total_q, at_start),
         )
         .map_err(|e| VmRepoError::Request(e.to_string()))?;
 
-        let rate = rate_rows.first().map(|x| x.value).unwrap_or(0.0);
-        let count = count_rows.first().map(|x| x.value).unwrap_or(0.0).round() as u64;
+        let end_v = end_rows.first().map(|x| x.value).unwrap_or(0.0);
+        let start_v = start_rows.first().map(|x| x.value).unwrap_or(0.0);
+        let count_f = (end_v - start_v).max(0.0);
+        let count = count_f.round() as u64;
+        let rate = count_f / window_secs;
         debug!(
             rate = rate,
             count = count,
@@ -505,85 +525,83 @@ impl VmRepository for VmHttpRepository {
 
     /// 查询单节点时间序列：
     /// 1. 根据 node_id 解析节点类型和标签；
-    /// 2. 生成 rate/increase 两条 PromQL；
-    /// 3. 走 range query 返回折线数据点。
+    /// 2. 直接使用 rate() 进行区间查询，返回每秒速率；
+    /// 3. 统一做非负兜底，避免极端边界出现负值噪声。
     async fn fetch_node_timeseries(
         &self,
         node_id: &str,
         query: &TimeRangeQuery,
-        step: Option<String>,
     ) -> Result<NodeTimeSeries, VmRepoError> {
-        let step = step.unwrap_or_else(|| "30s".to_string());
+        let (rate_window, step_secs) = Self::auto_step_for_timeseries(query);
+
+        // 实时查询右边界会受到入库延迟/窗口边界影响：
+        // 为保证“最近窗口”也尽量返回真实值，统一回退一个安全延迟。
+        let safe_lag_secs = step_secs.max(2);
         let start = query.start_time.timestamp();
-        let end = query.end_time.timestamp();
+        let requested_end = query.end_time.timestamp();
+        let now_safe_end = Utc::now().timestamp() - safe_lag_secs;
+        let end = requested_end.min(now_safe_end);
+
+        if start >= end {
+            debug!(
+                node_id = node_id,
+                start_time = %query.start_time,
+                end_time = %query.end_time,
+                safe_lag_secs = safe_lag_secs,
+                "vm_repository.node_timeseries.empty_due_to_realtime_boundary"
+            );
+            return Ok(NodeTimeSeries {
+                node_id: node_id.to_string(),
+                log_rate_eps: Vec::new(),
+                log_count: Vec::new(),
+            });
+        }
         debug!(
             node_id = node_id,
             start_time = %query.start_time,
             end_time = %query.end_time,
-            step = %step,
+            effective_end_unix = end,
+            safe_lag_secs = safe_lag_secs,
+            step = %rate_window,
             "vm_repository.node_timeseries.start"
         );
 
         let (kind, parts) = Self::parse_node_id(node_id);
 
         // 未识别节点类型时返回 vector(0)，保证接口语义稳定且不报错。
-        let (rate_q, count_q) = match kind {
+        let rate_q = match kind {
             "source" if parts.len() >= 2 => {
                 let source_type = parts[0];
                 let source_name = parts[1];
-                (
-                    format!(
-                        "sum(rate(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}}))",
-                        source_type, source_name
-                    ),
-                    format!(
-                        "sum(increase(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}}))",
-                        source_type, source_name
-                    ),
+                format!(
+                    "sum(rate(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}}[{}]))",
+                    source_type, source_name, rate_window
                 )
             }
             "log" if parts.len() >= 2 => {
                 let package = parts[0];
                 let rule = parts[1];
-                (
-                    format!(
-                        "sum(rate(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}}))",
-                        package, rule
-                    ),
-                    format!(
-                        "sum(increase(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}}))",
-                        package, rule
-                    ),
+                format!(
+                    "sum(rate(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}}[{}]))",
+                    package, rule, rate_window
                 )
             }
             "group" if !parts.is_empty() => {
                 let g = parts[0];
-                (
-                    format!(
-                        "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}))",
-                        g
-                    ),
-                    format!(
-                        "sum(increase(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}))",
-                        g
-                    ),
+                format!(
+                    "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
+                    g, rate_window
                 )
             }
             "sink" if parts.len() >= 2 => {
                 let g = parts[0];
                 let s = parts[1];
-                (
-                    format!(
-                        "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}))",
-                        g, s
-                    ),
-                    format!(
-                        "sum(increase(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}))",
-                        g, s
-                    ),
+                format!(
+                    "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
+                    g, s, rate_window
                 )
             }
-            _ => ("vector(0)".to_string(), "vector(0)".to_string()),
+            _ => "vector(0)".to_string(),
         };
         if rate_q == "vector(0)" {
             warn!(
@@ -592,11 +610,10 @@ impl VmRepository for VmHttpRepository {
             );
         }
 
-        let (rate_series, count_series) = tokio::try_join!(
-            self.range_query(&rate_q, start, end, &step),
-            self.range_query(&count_q, start, end, &step)
-        )
-        .map_err(|e| VmRepoError::Request(e.to_string()))?;
+        let rate_series = self
+            .range_query(&rate_q, start, end, &rate_window)
+            .await
+            .map_err(|e| VmRepoError::Request(e.to_string()))?;
 
         let rate_points = rate_series
             .first()
@@ -607,37 +624,22 @@ impl VmRepository for VmHttpRepository {
                         ts: chrono::DateTime::from_timestamp(p.ts as i64, 0)
                             .map(|d| d.to_rfc3339())
                             .unwrap_or_else(|| Utc::now().to_rfc3339()),
-                        value: p.value,
+                        value: p.value.max(0.0),
                     })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
 
-        let count_points = count_series
-            .first()
-            .map(|s| {
-                s.values
-                    .iter()
-                    .map(|p| TimePoint {
-                        ts: chrono::DateTime::from_timestamp(p.ts as i64, 0)
-                            .map(|d| d.to_rfc3339())
-                            .unwrap_or_else(|| Utc::now().to_rfc3339()),
-                        value: p.value,
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
         debug!(
             node_id = node_id,
             rate_points = rate_points.len(),
-            count_points = count_points.len(),
             "vm_repository.node_timeseries.success"
         );
 
         Ok(NodeTimeSeries {
             node_id: node_id.to_string(),
             log_rate_eps: rate_points,
-            log_count: count_points,
+            log_count: Vec::new(),
         })
     }
 }

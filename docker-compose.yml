@@ -9,7 +9,8 @@ services:
     command:
       - "-httpListenAddr=:8428"
       - "-storageDataPath=/storage"
-      - "-retentionPeriod=6"   # 数据保留 6 个月
+      - "-retentionPeriod=6"
+      - "-search.latencyOffset=0s"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8428/health"]
       interval: 30s
