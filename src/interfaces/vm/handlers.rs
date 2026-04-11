@@ -156,13 +156,13 @@ pub async fn get_node_timeseries(
         .get_node_timeseries(node_id, query, req.max_data_points)
         .await
         .map_err(|e| {
-        error!(
-            node_id = %node_id,
-            error = %e,
-            "vm.handlers.node_timeseries.failed"
-        );
-        ErrorInternalServerError(e.to_string())
-    })?;
+            error!(
+                node_id = %node_id,
+                error = %e,
+                "vm.handlers.node_timeseries.failed"
+            );
+            ErrorInternalServerError(e.to_string())
+        })?;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }
 

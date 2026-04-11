@@ -418,8 +418,16 @@ impl VmHttpRepository {
     fn series_to_points(series: &[VmRangeSeries]) -> Vec<TimePoint> {
         // 选择“最大值最高”的序列，避免多序列场景错误取到全 0 序列。
         let chosen = series.iter().max_by(|a, b| {
-            let a_max = a.values.iter().map(|p| p.value).fold(f64::NEG_INFINITY, f64::max);
-            let b_max = b.values.iter().map(|p| p.value).fold(f64::NEG_INFINITY, f64::max);
+            let a_max = a
+                .values
+                .iter()
+                .map(|p| p.value)
+                .fold(f64::NEG_INFINITY, f64::max);
+            let b_max = b
+                .values
+                .iter()
+                .map(|p| p.value)
+                .fold(f64::NEG_INFINITY, f64::max);
             a_max
                 .partial_cmp(&b_max)
                 .unwrap_or(std::cmp::Ordering::Equal)
@@ -593,8 +601,7 @@ impl VmRepository for VmHttpRepository {
         query: &TimeRangeQuery,
         max_data_points: Option<usize>,
     ) -> Result<NodeTimeSeries, VmRepoError> {
-        let (step, rate_window, step_secs) =
-            Self::auto_step_for_timeseries(query, max_data_points);
+        let (step, rate_window, step_secs) = Self::auto_step_for_timeseries(query, max_data_points);
 
         // 实时查询右边界会受到入库延迟/窗口边界影响：
         // 为保证”最近窗口”也尽量返回真实值，统一回退一个安全延迟。
