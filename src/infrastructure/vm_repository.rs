@@ -46,6 +46,7 @@ pub trait VmRepository: Send + Sync {
         &self,
         node_id: &str,
         query: &TimeRangeQuery,
+        max_data_points: Option<usize>,
     ) -> Result<NodeTimeSeries, VmRepoError>;
 }
 
@@ -70,7 +71,12 @@ impl VmHttpRepository {
         (x * 100.0).round() / 100.0
     }
 
-    /// 按时间范围自动计算 query_range 的步长，目标约 60 个点。
+    /// 转义 PromQL 双引号字符串字面量。
+    fn escape_promql_string(v: &str) -> String {
+        v.replace('\\', r"\\").replace('"', r#"\""#)
+    }
+
+    /// 按时间范围与目标点数自动计算 query_range 的步长（Grafana 风格）。
     /// 返回值：(step_str, rate_window_str, step_secs)
     ///
     /// step 与 rate_window 必须分开：
@@ -79,19 +85,48 @@ impl VmHttpRepository {
     ///   才能保证每个评估点内始终有多个样本，避免因单秒 push 缺失/重复
     ///   导致 rate() 输出 0.0 / 0.5 / 2.0 的抖动。
     ///   push 间隔为 1s，故 rate_window 最小 10s（≥ 4×1s，留有余量）。
-    fn auto_step_for_timeseries(query: &TimeRangeQuery) -> (String, String, i64) {
+    fn auto_step_for_timeseries(
+        query: &TimeRangeQuery,
+        max_data_points: Option<usize>,
+    ) -> (String, String, i64) {
         let total_secs = (query.end_time.timestamp() - query.start_time.timestamp()).max(1);
-        let step_secs = ((total_secs + 59) / 60).max(1);
-        // rate_window 至少为 step 的 8 倍，且不低于 20s，确保窗口内有足够多样本。
-        // 更大的窗口能平滑 OS sleep 调度抖动引起的 ±1 事件滑移，
-        // 将 ±5%(step*4) 降低到 ±2.5%(step*8)，
-        // 代价是速率变化的响应时间延迟约一个 rate_window。
-        let rate_window_secs = (step_secs * 8).max(20);
+        let target_points = max_data_points.unwrap_or(480).clamp(60, 2000) as i64;
+        let raw_step_secs = ((total_secs + target_points - 1) / target_points).max(1);
+        let step_secs = Self::nice_step_secs(raw_step_secs);
+        // rate_window 不再无限随 step 放大：
+        // - 下限 20s，保障样本数；
+        // - 同时满足 Grafana 的 __rate_interval 思路：至少与 step 同级；
+        // - 上限 1800s，避免窗口无限放大。
+        let rate_window_secs = (step_secs * 4).max(step_secs).clamp(20, 1800);
         (
             format!("{}s", step_secs),
             format!("{}s", rate_window_secs),
             step_secs,
         )
+    }
+
+    /// 将原始步长归一化到 1/2/5×10^n，符合 Grafana 常见时间分辨率。
+    fn nice_step_secs(raw: i64) -> i64 {
+        let raw = raw.max(1) as f64;
+        let pow10 = 10f64.powf(raw.log10().floor());
+        let norm = raw / pow10;
+        let factor = if norm <= 1.0 {
+            1.0
+        } else if norm <= 2.0 {
+            2.0
+        } else if norm <= 5.0 {
+            5.0
+        } else {
+            10.0
+        };
+        (factor * pow10).round() as i64
+    }
+
+    /// 峰值子查询分辨率（秒）：
+    /// - 显式指定 resolution，避免 `[step:]` 被存储侧粗采样导致峰值偏低；
+    /// - 目标每个时间桶约 24 个采样点，限制在 5s~30s 之间控制查询成本。
+    fn peak_subquery_resolution_secs(step_secs: i64) -> i64 {
+        (step_secs / 24).clamp(5, 30)
     }
 
     /// 执行 instant query（单时刻查询）。
@@ -368,36 +403,6 @@ impl VmHttpRepository {
         (parts[0], parts[1..].to_vec())
     }
 
-    fn metric_key(metric: &HashMap<String, String>, labels: &[&str]) -> String {
-        labels
-            .iter()
-            .map(|k| format!("{}={}", k, metric.get(*k).cloned().unwrap_or_default()))
-            .collect::<Vec<_>>()
-            .join("|")
-    }
-
-    fn diff_rows_by_labels(
-        end_rows: Vec<VmSeriesValue>,
-        start_rows: Vec<VmSeriesValue>,
-        labels: &[&str],
-    ) -> Vec<VmSeriesValue> {
-        let mut start_map: HashMap<String, f64> = HashMap::new();
-        for r in start_rows {
-            let key = Self::metric_key(&r.metric, labels);
-            start_map.insert(key, r.value);
-        }
-
-        end_rows
-            .into_iter()
-            .map(|mut r| {
-                let key = Self::metric_key(&r.metric, labels);
-                let base = start_map.get(&key).copied().unwrap_or(0.0);
-                r.value = (r.value - base).max(0.0);
-                r
-            })
-            .collect()
-    }
-
     fn rate_from_count_rows(count_rows: &[VmSeriesValue], window_secs: f64) -> Vec<VmSeriesValue> {
         let denom = window_secs.max(1.0);
         count_rows
@@ -408,6 +413,50 @@ impl VmHttpRepository {
                 r
             })
             .collect()
+    }
+
+    fn series_to_points(series: &[VmRangeSeries]) -> Vec<TimePoint> {
+        // 选择“最大值最高”的序列，避免多序列场景错误取到全 0 序列。
+        let chosen = series.iter().max_by(|a, b| {
+            let a_max = a.values.iter().map(|p| p.value).fold(f64::NEG_INFINITY, f64::max);
+            let b_max = b.values.iter().map(|p| p.value).fold(f64::NEG_INFINITY, f64::max);
+            a_max
+                .partial_cmp(&b_max)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.values.len().cmp(&b.values.len()))
+        });
+        chosen
+            .map(|s| {
+                s.values
+                    .iter()
+                    .map(|p| TimePoint {
+                        ts: chrono::DateTime::from_timestamp(p.ts as i64, 0)
+                            .map(|d| d.to_rfc3339())
+                            .unwrap_or_else(|| Utc::now().to_rfc3339()),
+                        value: p.value.max(0.0),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    fn build_zero_points(start: i64, end: i64, step_secs: i64) -> Vec<TimePoint> {
+        if start > end || step_secs <= 0 {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let mut ts = start;
+        while ts <= end {
+            let ts_text = chrono::DateTime::from_timestamp(ts, 0)
+                .map(|d| d.to_rfc3339())
+                .unwrap_or_else(|| Utc::now().to_rfc3339());
+            out.push(TimePoint {
+                ts: ts_text,
+                value: 0.0,
+            });
+            ts += step_secs;
+        }
+        out
     }
 }
 
@@ -430,36 +479,32 @@ impl VmRepository for VmHttpRepository {
             window_secs = window_secs,
             "vm_repository.snapshot.start"
         );
+        let window = format!("{}s", (at_end - at_start).max(1));
 
-        let source_total_q = "sum by (source_type, source_name) (wparse_receive_data)";
-        let parse_total_q = "sum by (package_name, rule_name) (wparse_parse_all)";
-        let sink_group_total_q = "sum by (sink_group) (wparse_send_to_sink{sink_group!~\"monitor|default|miss|residue|error\"})";
-        let sink_total_q = "sum by (sink_group, sink_name) (wparse_send_to_sink{sink_group!~\"monitor|default|miss|residue|error\"})";
+        let source_count_q = format!(
+            r#"sum by (source_type, source_name) (increase(wparse_receive_data[{}]))"#,
+            window
+        );
+        let parse_count_q = format!(
+            r#"sum by (package_name, rule_name) (increase(wparse_parse_all[{}]))"#,
+            window
+        );
+        let sink_group_count_q = format!(
+            r#"sum by (sink_group) (increase(wparse_send_to_sink{{sink_group!~"monitor|default|miss|residue|error"}}[{}]))"#,
+            window
+        );
+        let sink_count_q = format!(
+            r#"sum by (sink_group, sink_name) (increase(wparse_send_to_sink{{sink_group!~"monitor|default|miss|residue|error"}}[{}]))"#,
+            window
+        );
 
-        let (source_end, parse_end, sink_group_end, sink_end) = tokio::try_join!(
-            self.instant_query(source_total_q, at_end),
-            self.instant_query(parse_total_q, at_end),
-            self.instant_query(sink_group_total_q, at_end),
-            self.instant_query(sink_total_q, at_end),
+        let (source_count, parse_count, sink_group_count, sink_count) = tokio::try_join!(
+            self.instant_query(&source_count_q, at_end),
+            self.instant_query(&parse_count_q, at_end),
+            self.instant_query(&sink_group_count_q, at_end),
+            self.instant_query(&sink_count_q, at_end),
         )
         .map_err(|e| VmRepoError::Request(e.to_string()))?;
-
-        let (source_start, parse_start, sink_group_start, sink_start) = tokio::try_join!(
-            self.instant_query(source_total_q, at_start),
-            self.instant_query(parse_total_q, at_start),
-            self.instant_query(sink_group_total_q, at_start),
-            self.instant_query(sink_total_q, at_start),
-        )
-        .map_err(|e| VmRepoError::Request(e.to_string()))?;
-
-        let source_count =
-            Self::diff_rows_by_labels(source_end, source_start, &["source_type", "source_name"]);
-        let parse_count =
-            Self::diff_rows_by_labels(parse_end, parse_start, &["package_name", "rule_name"]);
-        let sink_group_count =
-            Self::diff_rows_by_labels(sink_group_end, sink_group_start, &["sink_group"]);
-        let sink_count =
-            Self::diff_rows_by_labels(sink_end, sink_start, &["sink_group", "sink_name"]);
 
         let source_rate = Self::rate_from_count_rows(&source_count, window_secs);
         let parse_rate = Self::rate_from_count_rows(&parse_count, window_secs);
@@ -467,9 +512,11 @@ impl VmRepository for VmHttpRepository {
         let sink_rate = Self::rate_from_count_rows(&sink_count, window_secs);
 
         // 系统指标只取全局最大值，避免多序列场景出现重复。
+        let cpu_query = "max(wparse_cpu_usage)".to_string();
+        let mem_query = "max(wparse_memory_usage)".to_string();
         let (cpu_rows, mem_rows) = tokio::try_join!(
-            self.instant_query("max(wparse_cpu_usage)", at_end),
-            self.instant_query("max(wparse_memory_usage)", at_end),
+            self.instant_query(&cpu_query, at_end),
+            self.instant_query(&mem_query, at_end),
         )
         .map_err(|e| VmRepoError::Request(e.to_string()))?;
 
@@ -513,18 +560,15 @@ impl VmRepository for VmHttpRepository {
             window_secs = window_secs,
             "vm_repository.miss_metrics.start"
         );
-        let miss_selector =
-            r#"wparse_send_to_sink{sink_group="miss",sink_name="victorialogs_output"}"#;
-        let total_q = format!("sum({})", miss_selector);
-        let (end_rows, start_rows) = tokio::try_join!(
-            self.instant_query(&total_q, at_end),
-            self.instant_query(&total_q, at_start),
-        )
-        .map_err(|e| VmRepoError::Request(e.to_string()))?;
-
-        let end_v = end_rows.first().map(|x| x.value).unwrap_or(0.0);
-        let start_v = start_rows.first().map(|x| x.value).unwrap_or(0.0);
-        let count_f = (end_v - start_v).max(0.0);
+        let total_q = format!(
+            r#"sum(increase(wparse_send_to_sink{{sink_group="miss",sink_name="victorialogs_output"}}[{}s]))"#,
+            (at_end - at_start).max(1)
+        );
+        let end_rows = self
+            .instant_query(&total_q, at_end)
+            .await
+            .map_err(|e| VmRepoError::Request(e.to_string()))?;
+        let count_f = end_rows.first().map(|x| x.value).unwrap_or(0.0).max(0.0);
         let count = count_f.round() as u64;
         let rate = count_f / window_secs;
         debug!(
@@ -547,12 +591,15 @@ impl VmRepository for VmHttpRepository {
         &self,
         node_id: &str,
         query: &TimeRangeQuery,
+        max_data_points: Option<usize>,
     ) -> Result<NodeTimeSeries, VmRepoError> {
-        let (step, rate_window, step_secs) = Self::auto_step_for_timeseries(query);
+        let (step, rate_window, step_secs) =
+            Self::auto_step_for_timeseries(query, max_data_points);
 
         // 实时查询右边界会受到入库延迟/窗口边界影响：
         // 为保证”最近窗口”也尽量返回真实值，统一回退一个安全延迟。
-        let safe_lag_secs = step_secs.max(2);
+        // 右边界保护使用固定小延迟，不能随 step 放大，否则长时间范围会丢失最近数据。
+        let safe_lag_secs = 10;
         let start = query.start_time.timestamp();
         let requested_end = query.end_time.timestamp();
         let now_safe_end = Utc::now().timestamp() - safe_lag_secs;
@@ -569,6 +616,12 @@ impl VmRepository for VmHttpRepository {
             return Ok(NodeTimeSeries {
                 node_id: node_id.to_string(),
                 log_rate_eps: Vec::new(),
+                log_rate_peak_eps: Vec::new(),
+                step_secs,
+                rate_window_secs: rate_window
+                    .trim_end_matches('s')
+                    .parse::<i64>()
+                    .unwrap_or(0),
                 log_count: Vec::new(),
             });
         }
@@ -579,82 +632,109 @@ impl VmRepository for VmHttpRepository {
             effective_end_unix = end,
             safe_lag_secs = safe_lag_secs,
             step = %step,
+            max_data_points = max_data_points.unwrap_or(0),
             "vm_repository.node_timeseries.start"
         );
-
         let (kind, parts) = Self::parse_node_id(node_id);
 
+        let peak_subquery_resolution_secs = Self::peak_subquery_resolution_secs(step_secs);
+        let range_secs = (end - start).max(1);
+        let use_bucket_aggregation = range_secs >= 48 * 3600;
         // 未识别节点类型时返回 vector(0)，保证接口语义稳定且不报错。
-        let rate_q = match kind {
+        // 同时查询两条序列：
+        // 1) 平均线：按动态窗口 rate；
+        // 2) 峰值线：在同一口径速率基线上做桶内 max_over_time。
+        let avg_rate_base_q = match kind {
             "source" if parts.len() >= 2 => {
                 let source_type = parts[0];
                 let source_name = parts[1];
+                let source_type = Self::escape_promql_string(source_type);
+                let source_name = Self::escape_promql_string(source_name);
                 format!(
-                    "sum(rate(wparse_receive_data{{source_type=\"{}\",source_name=\"{}\"}}[{}]))",
+                    r#"sum(rate(wparse_receive_data{{source_type="{}",source_name="{}"}}[{}]))"#,
                     source_type, source_name, rate_window
                 )
             }
             "log" if parts.len() >= 2 => {
                 let package = parts[0];
                 let rule = parts[1];
+                let package = Self::escape_promql_string(package);
+                let rule = Self::escape_promql_string(rule);
                 format!(
-                    "sum(rate(wparse_parse_all{{package_name=\"{}\",rule_name=\"{}\"}}[{}]))",
+                    r#"sum(rate(wparse_parse_all{{package_name="{}",rule_name="{}"}}[{}]))"#,
                     package, rule, rate_window
                 )
             }
             "group" if !parts.is_empty() => {
                 let g = parts[0];
+                let g = Self::escape_promql_string(g);
                 format!(
-                    "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
+                    r#"sum(rate(wparse_send_to_sink{{sink_group="{}",sink_group!~"monitor|default|miss|residue|error"}}[{}]))"#,
                     g, rate_window
                 )
             }
             "sink" if parts.len() >= 2 => {
                 let g = parts[0];
                 let s = parts[1];
+                let g = Self::escape_promql_string(g);
+                let s = Self::escape_promql_string(s);
                 format!(
-                    "sum(rate(wparse_send_to_sink{{sink_group=\"{}\",sink_name=\"{}\",sink_group!~\"monitor|default|miss|residue|error\"}}[{}]))",
+                    r#"sum(rate(wparse_send_to_sink{{sink_group="{}",sink_name="{}",sink_group!~"monitor|default|miss|residue|error"}}[{}]))"#,
                     g, s, rate_window
                 )
             }
             _ => "vector(0)".to_string(),
         };
-        if rate_q == "vector(0)" {
+        if avg_rate_base_q == "vector(0)" {
             warn!(
                 node_id = node_id,
                 "vm_repository.node_timeseries.unknown_node"
             );
         }
+        let rate_q = if use_bucket_aggregation {
+            format!(
+                "avg_over_time(({})[{}:{}s])",
+                avg_rate_base_q, step, peak_subquery_resolution_secs
+            )
+        } else {
+            avg_rate_base_q.clone()
+        };
+        let peak_q = format!(
+            "max_over_time(({})[{}:{}s])",
+            avg_rate_base_q, step, peak_subquery_resolution_secs
+        );
 
-        let rate_series = self
-            .range_query(&rate_q, start, end, &step)
-            .await
-            .map_err(|e| VmRepoError::Request(e.to_string()))?;
+        let (rate_series, peak_series) = tokio::try_join!(
+            self.range_query(&rate_q, start, end, &step),
+            self.range_query(&peak_q, start, end, &step),
+        )
+        .map_err(|e| VmRepoError::Request(e.to_string()))?;
 
-        let rate_points = rate_series
-            .first()
-            .map(|s| {
-                s.values
-                    .iter()
-                    .map(|p| TimePoint {
-                        ts: chrono::DateTime::from_timestamp(p.ts as i64, 0)
-                            .map(|d| d.to_rfc3339())
-                            .unwrap_or_else(|| Utc::now().to_rfc3339()),
-                        value: p.value.max(0.0),
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let mut rate_points = Self::series_to_points(&rate_series);
+        let mut peak_points = Self::series_to_points(&peak_series);
+        if rate_points.is_empty() {
+            rate_points = Self::build_zero_points(start, end, step_secs);
+        }
+        if peak_points.is_empty() {
+            peak_points = Self::build_zero_points(start, end, step_secs);
+        }
 
         debug!(
             node_id = node_id,
             rate_points = rate_points.len(),
+            peak_points = peak_points.len(),
             "vm_repository.node_timeseries.success"
         );
 
         Ok(NodeTimeSeries {
             node_id: node_id.to_string(),
             log_rate_eps: rate_points,
+            log_rate_peak_eps: peak_points,
+            step_secs,
+            rate_window_secs: rate_window
+                .trim_end_matches('s')
+                .parse::<i64>()
+                .unwrap_or(0),
             log_count: Vec::new(),
         })
     }

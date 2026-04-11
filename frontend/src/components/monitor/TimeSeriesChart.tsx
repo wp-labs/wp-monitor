@@ -6,6 +6,9 @@ interface Props {
   title: string;
   points: TimePoint[];
   color: string;
+  secondaryPoints?: TimePoint[];
+  secondaryColor?: string;
+  secondaryName?: string;
   showTitleValue?: boolean;
   valueFormatter?: (v: number) => string;
   axisValueFormatter?: (v: number) => string;
@@ -26,6 +29,9 @@ export default function TimeSeriesChart({
   title,
   points,
   color,
+  secondaryPoints = [],
+  secondaryColor = '#f59f00',
+  secondaryName = '峰值',
   showTitleValue = true,
   valueFormatter,
   axisValueFormatter,
@@ -40,13 +46,22 @@ export default function TimeSeriesChart({
   const instanceRef = useRef<ApexCharts | null>(null);
 
   const series = useMemo(
-    () => [
-      {
-        name: title,
-        data: points.map((p) => ({ x: new Date(p.ts).getTime(), y: p.value })),
-      },
-    ],
-    [points, title],
+    () => {
+      const base = [
+        {
+          name: title,
+          data: points.map((p) => ({ x: new Date(p.ts).getTime(), y: p.value })),
+        },
+      ];
+      if (secondaryPoints.length > 0) {
+        base.push({
+          name: secondaryName,
+          data: secondaryPoints.map((p) => ({ x: new Date(p.ts).getTime(), y: p.value })),
+        });
+      }
+      return base;
+    },
+    [points, secondaryPoints, secondaryName, title],
   );
 
   const options = useMemo<ApexOptions>(
@@ -59,7 +74,7 @@ export default function TimeSeriesChart({
         animations: { enabled: true, speed: 320 },
         fontFamily: '"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif',
       },
-      colors: [color],
+      colors: [color, secondaryColor],
       stroke: {
         curve: 'monotoneCubic',
         width: 2,
@@ -112,7 +127,7 @@ export default function TimeSeriesChart({
         },
       },
       tooltip: {
-        shared: false,
+        shared: true,
         intersect: false,
         followCursor: true,
         x: {
@@ -125,19 +140,14 @@ export default function TimeSeriesChart({
           formatter: (v) => (valueFormatter ? valueFormatter(Number(v)) : Number(v).toFixed(2)),
         },
       },
-      legend: { show: false },
+      legend: { show: secondaryPoints.length > 0 },
     }),
-    [axisValueFormatter, color, minY, valueFormatter, yTickAmount],
+    [axisValueFormatter, color, minY, secondaryColor, secondaryPoints.length, valueFormatter, yTickAmount],
   );
 
   useEffect(() => {
     if (!chartRef.current) return;
-
-    instanceRef.current?.destroy();
-    const chart = new ApexCharts(chartRef.current, {
-      ...options,
-      series,
-    });
+    const chart = new ApexCharts(chartRef.current, { ...options, series });
     instanceRef.current = chart;
     void chart.render();
 
@@ -145,7 +155,17 @@ export default function TimeSeriesChart({
       instanceRef.current?.destroy();
       instanceRef.current = null;
     };
-  }, [options, series]);
+  }, []);
+
+  useEffect(() => {
+    if (!instanceRef.current) return;
+    void instanceRef.current.updateOptions(options, false, true, false);
+  }, [options]);
+
+  useEffect(() => {
+    if (!instanceRef.current) return;
+    void instanceRef.current.updateSeries(series, true);
+  }, [series]);
 
   return (
     <div className="spark">

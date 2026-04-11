@@ -32,6 +32,7 @@ pub struct TimeSeriesRequest {
     pub end_time: String,
     #[allow(dead_code)]
     pub step: Option<String>,
+    pub max_data_points: Option<usize>,
 }
 
 /// 获取全量分层快照。
@@ -138,6 +139,7 @@ pub async fn get_node_timeseries(
         node_id = %node_id,
         start_time = %req.start_time,
         end_time = %req.end_time,
+        max_data_points = req.max_data_points.unwrap_or(0),
         "vm.handlers.node_timeseries.request"
     );
     let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
@@ -150,7 +152,10 @@ pub async fn get_node_timeseries(
         );
         ErrorBadRequest(e.to_string())
     })?;
-    let data = svc.get_node_timeseries(node_id, query).await.map_err(|e| {
+    let data = svc
+        .get_node_timeseries(node_id, query, req.max_data_points)
+        .await
+        .map_err(|e| {
         error!(
             node_id = %node_id,
             error = %e,

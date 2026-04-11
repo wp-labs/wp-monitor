@@ -514,12 +514,16 @@ impl LayerService {
         &self,
         node_id: &str,
         query: TimeRangeQuery,
+        max_data_points: Option<usize>,
     ) -> Result<NodeTimeSeries, VmRepoError> {
         if node_id == "miss" {
             debug!(node_id = %node_id, "layer_service.node_timeseries.miss_empty");
             return Ok(NodeTimeSeries {
                 node_id: "miss".to_string(),
                 log_rate_eps: Vec::new(),
+                log_rate_peak_eps: Vec::new(),
+                step_secs: 0,
+                rate_window_secs: 0,
                 log_count: Vec::new(),
             });
         }
@@ -527,7 +531,9 @@ impl LayerService {
             node_id = %node_id,
             "layer_service.node_timeseries.start"
         );
-        self.vm_repo.fetch_node_timeseries(node_id, &query).await
+        self.vm_repo
+            .fetch_node_timeseries(node_id, &query, max_data_points)
+            .await
     }
 
     /// 返回前端初始化配置（从配置文件读取结果回传）。

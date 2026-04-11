@@ -8,7 +8,6 @@ import {
   applyMetricsToSnapshot,
   collectAllNodeIds,
   fmtCount,
-  fmtPercentWithMin,
   fmtRate,
 } from "../../components/monitor/flowHelpers";
 import TimeSeriesChart from "../../components/monitor/TimeSeriesChart";
@@ -80,6 +79,12 @@ function nowWithLagMs() {
 
 function nowWithLagIso() {
   return new Date(nowWithLagMs()).toISOString();
+}
+
+function estimateMaxDataPoints() {
+  if (typeof window === "undefined") return 720;
+  const panelWidth = Math.max(360, Math.floor(window.innerWidth * 0.58));
+  return Math.max(120, Math.min(1600, panelWidth));
 }
 
 function toDateFromIso(v: string) {
@@ -362,7 +367,12 @@ export default function WpMonitorPage() {
         const nextEnd = new Date(nextEndMs).toISOString();
         const [detailResp, seriesResp] = await Promise.all([
           fetchNodeDetail(selectedNode, nextStart, nextEnd),
-          fetchNodeTimeSeries(selectedNode, nextStart, nextEnd),
+          fetchNodeTimeSeries(
+            selectedNode,
+            nextStart,
+            nextEnd,
+            estimateMaxDataPoints(),
+          ),
         ]);
         if (cancelled) return;
         setDetail(detailResp.data);
@@ -536,9 +546,10 @@ export default function WpMonitorPage() {
         currentStart = fallbackStart;
       }
     }
+    const detailRange = { start: currentStart, end: currentEnd };
     setSelectedNode(nodeId);
-    setDetailStartTime(currentStart);
-    setDetailEndTime(currentEnd);
+    setDetailStartTime(detailRange.start);
+    setDetailEndTime(detailRange.end);
     setDrawerLoading(true);
     setDrawerError("");
     setDetail(null);
@@ -550,11 +561,16 @@ export default function WpMonitorPage() {
     setMissWindowStart("");
     setMissWindowEnd("");
     try {
-      const detailPromise = fetchNodeDetail(nodeId, currentStart, currentEnd);
+      const detailPromise = fetchNodeDetail(
+        nodeId,
+        detailRange.start,
+        detailRange.end,
+      );
       const seriesPromise = fetchNodeTimeSeries(
         nodeId,
-        currentStart,
-        currentEnd,
+        detailRange.start,
+        detailRange.end,
+        estimateMaxDataPoints(),
       );
       if (isMissNode) {
         setMissLogsLoading(true);
@@ -853,6 +869,20 @@ export default function WpMonitorPage() {
           >
             查询
           </button>
+          <span className="wd-chip wd-refresh-chip">
+            <span className="wd-time-field-label">自动刷新</span>
+            <input
+              className="refresh-interval-input wd-refresh-input"
+              type="number"
+              min={1}
+              step={1}
+              value={refreshIntervalInput}
+              onChange={(e) => onRefreshIntervalChange(e.target.value)}
+              onBlur={commitRefreshIntervalInput}
+              onKeyDown={onRefreshIntervalKeyDown}
+            />
+            <span className="wd-refresh-unit">s</span>
+          </span>
         </div>
       </div>
       {toastVisible && error && (
@@ -871,58 +901,6 @@ export default function WpMonitorPage() {
           </button>
         </div>
       )}
-
-      <div className="legend">
-        <div className="legend-left">
-          <span className="legend-item">
-            <span className="symbol">●</span>
-            <span>来源节点</span>
-          </span>
-          <span className="legend-item">
-            <span className="symbol">◆</span>
-            <span>WPL Package(容器)</span>
-          </span>
-          <span className="legend-item">
-            <span className="symbol">▣</span>
-            <span>日志类型</span>
-          </span>
-          <span className="legend-item">
-            <span className="symbol">⬡</span>
-            <span>输出分组(容器)</span>
-          </span>
-          <span className="legend-item">
-            <span className="symbol">▢</span>
-            <span>输出目标</span>
-          </span>
-          <span className="legend-item static">
-            <span className="symbol">⚠</span>
-            <span>MISS</span>
-          </span>
-        </div>
-        <div className="legend-metrics">
-          <span className="metric-pill badge">
-            CPU:{" "}
-            {fmtPercentWithMin(snapshot?.sys_metrics.cpu_usage_pct ?? 0, 2)}%
-          </span>
-          <span className="metric-pill badge">
-            MEM: {snapshot?.sys_metrics.memory_used_mb ?? "0.00"} MB
-          </span>
-          <span className="metric-pill badge refresh-pill">
-            自动刷新:
-            <input
-              className="refresh-interval-input"
-              type="number"
-              min={1}
-              step={1}
-              value={refreshIntervalInput}
-              onChange={(e) => onRefreshIntervalChange(e.target.value)}
-              onBlur={commitRefreshIntervalInput}
-              onKeyDown={onRefreshIntervalKeyDown}
-            />
-            s
-          </span>
-        </div>
-      </div>
 
       {loading && <p>加载中...</p>}
 
@@ -1240,7 +1218,23 @@ export default function WpMonitorPage() {
               {!isMissSelected && (
                 <section className="panel card detail-col">
                   <div className="panel-head">
-                    <div className="panel-title">速率趋势</div>
+                    <div className="panel-head-main">
+                      <div className="panel-title">速率趋势</div>
+                      <span className="detail-kv-value detail-time-value detail-param-list">
+                        <span className="detail-param-item">
+                          <span className="detail-param-name">采样间隔</span>
+                          <span className="detail-param-data">
+                            {series?.step_secs ?? 0}s
+                          </span>
+                        </span>
+                        <span className="detail-param-item">
+                          <span className="detail-param-name">统计窗口</span>
+                          <span className="detail-param-data">
+                            {series?.rate_window_secs ?? 0}s
+                          </span>
+                        </span>
+                      </span>
+                    </div>
                     <button
                       className={`toggle-switch ${detailTrendAutoRefresh ? "on" : ""}`}
                       type="button"
