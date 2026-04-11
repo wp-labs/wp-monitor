@@ -6,9 +6,6 @@ interface Props {
   title: string;
   points: TimePoint[];
   color: string;
-  secondaryPoints?: TimePoint[];
-  secondaryColor?: string;
-  secondaryName?: string;
   showTitleValue?: boolean;
   valueFormatter?: (v: number) => string;
   axisValueFormatter?: (v: number) => string;
@@ -29,9 +26,6 @@ export default function TimeSeriesChart({
   title,
   points,
   color,
-  secondaryPoints = [],
-  secondaryColor = '#f59f00',
-  secondaryName = '峰值',
   showTitleValue = true,
   valueFormatter,
   axisValueFormatter,
@@ -46,22 +40,13 @@ export default function TimeSeriesChart({
   const instanceRef = useRef<ApexCharts | null>(null);
 
   const series = useMemo(
-    () => {
-      const base = [
-        {
-          name: title,
-          data: points.map((p) => ({ x: new Date(p.ts).getTime(), y: p.value })),
-        },
-      ];
-      if (secondaryPoints.length > 0) {
-        base.push({
-          name: secondaryName,
-          data: secondaryPoints.map((p) => ({ x: new Date(p.ts).getTime(), y: p.value })),
-        });
-      }
-      return base;
-    },
-    [points, secondaryPoints, secondaryName, title],
+    () => [
+      {
+        name: title,
+        data: points.map((p) => ({ x: new Date(p.ts).getTime(), y: p.value })),
+      },
+    ],
+    [points, title],
   );
 
   const options = useMemo<ApexOptions>(
@@ -74,7 +59,7 @@ export default function TimeSeriesChart({
         animations: { enabled: true, speed: 320 },
         fontFamily: '"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif',
       },
-      colors: [color, secondaryColor],
+      colors: [color],
       stroke: {
         curve: 'monotoneCubic',
         width: 2,
@@ -127,7 +112,7 @@ export default function TimeSeriesChart({
         },
       },
       tooltip: {
-        shared: true,
+        shared: false,
         intersect: false,
         followCursor: true,
         x: {
@@ -140,9 +125,9 @@ export default function TimeSeriesChart({
           formatter: (v) => (valueFormatter ? valueFormatter(Number(v)) : Number(v).toFixed(2)),
         },
       },
-      legend: { show: secondaryPoints.length > 0 },
+      legend: { show: false },
     }),
-    [axisValueFormatter, color, minY, secondaryColor, secondaryPoints.length, valueFormatter, yTickAmount],
+    [axisValueFormatter, color, minY, valueFormatter, yTickAmount],
   );
 
   useEffect(() => {

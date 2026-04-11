@@ -135,7 +135,6 @@ pub struct TimePoint {
 pub struct NodeTimeSeries {
     pub node_id: String,
     pub log_rate_eps: Vec<TimePoint>,
-    pub log_rate_peak_eps: Vec<TimePoint>,
     pub step_secs: i64,
     pub rate_window_secs: i64,
     pub log_count: Vec<TimePoint>,

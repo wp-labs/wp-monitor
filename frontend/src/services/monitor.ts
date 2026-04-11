@@ -152,14 +152,6 @@ export async function fetchNodeTimeSeries(
       log_rate_eps: mergeTimePoints(chunks.map((c) => c.log_rate_eps ?? [])),
       log_count: mergeTimePoints(chunks.map((c) => c.log_count ?? [])),
     };
-    const hasPeak = chunks.some(
-      (c) => Array.isArray(c.log_rate_peak_eps) && c.log_rate_peak_eps.length > 0,
-    );
-    if (hasPeak) {
-      merged.log_rate_peak_eps = mergeTimePoints(
-        chunks.map((c) => c.log_rate_peak_eps ?? []),
-      );
-    }
     const step = chunks.find((c) => typeof c.step_secs === "number")?.step_secs;
     if (typeof step === "number") merged.step_secs = step;
     const rateWindow = chunks.find(

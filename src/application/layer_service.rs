@@ -521,7 +521,6 @@ impl LayerService {
             return Ok(NodeTimeSeries {
                 node_id: "miss".to_string(),
                 log_rate_eps: Vec::new(),
-                log_rate_peak_eps: Vec::new(),
                 step_secs: 0,
                 rate_window_secs: 0,
                 log_count: Vec::new(),

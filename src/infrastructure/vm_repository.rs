@@ -122,13 +122,6 @@ impl VmHttpRepository {
         (factor * pow10).round() as i64
     }
 
-    /// 峰值子查询分辨率（秒）：
-    /// - 显式指定 resolution，避免 `[step:]` 被存储侧粗采样导致峰值偏低；
-    /// - 目标每个时间桶约 24 个采样点，限制在 5s~30s 之间控制查询成本。
-    fn peak_subquery_resolution_secs(step_secs: i64) -> i64 {
-        (step_secs / 24).clamp(5, 30)
-    }
-
     /// 执行 instant query（单时刻查询）。
     async fn instant_query(
         &self,
@@ -623,7 +616,6 @@ impl VmRepository for VmHttpRepository {
             return Ok(NodeTimeSeries {
                 node_id: node_id.to_string(),
                 log_rate_eps: Vec::new(),
-                log_rate_peak_eps: Vec::new(),
                 step_secs,
                 rate_window_secs: rate_window
                     .trim_end_matches('s')
@@ -644,7 +636,6 @@ impl VmRepository for VmHttpRepository {
         );
         let (kind, parts) = Self::parse_node_id(node_id);
 
-        let peak_subquery_resolution_secs = Self::peak_subquery_resolution_secs(step_secs);
         let range_secs = (end - start).max(1);
         let use_bucket_aggregation = range_secs >= 48 * 3600;
         // 未识别节点类型时返回 vector(0)，保证接口语义稳定且不报错。
@@ -699,44 +690,29 @@ impl VmRepository for VmHttpRepository {
             );
         }
         let rate_q = if use_bucket_aggregation {
-            format!(
-                "avg_over_time(({})[{}:{}s])",
-                avg_rate_base_q, step, peak_subquery_resolution_secs
-            )
+            format!("avg_over_time(({})[{}:{}s])", avg_rate_base_q, step, 30)
         } else {
             avg_rate_base_q.clone()
         };
-        let peak_q = format!(
-            "max_over_time(({})[{}:{}s])",
-            avg_rate_base_q, step, peak_subquery_resolution_secs
-        );
-
-        let (rate_series, peak_series) = tokio::try_join!(
-            self.range_query(&rate_q, start, end, &step),
-            self.range_query(&peak_q, start, end, &step),
-        )
-        .map_err(|e| VmRepoError::Request(e.to_string()))?;
+        let rate_series = self
+            .range_query(&rate_q, start, end, &step)
+            .await
+            .map_err(|e| VmRepoError::Request(e.to_string()))?;
 
         let mut rate_points = Self::series_to_points(&rate_series);
-        let mut peak_points = Self::series_to_points(&peak_series);
         if rate_points.is_empty() {
             rate_points = Self::build_zero_points(start, end, step_secs);
-        }
-        if peak_points.is_empty() {
-            peak_points = Self::build_zero_points(start, end, step_secs);
         }
 
         debug!(
             node_id = node_id,
             rate_points = rate_points.len(),
-            peak_points = peak_points.len(),
             "vm_repository.node_timeseries.success"
         );
 
         Ok(NodeTimeSeries {
             node_id: node_id.to_string(),
             log_rate_eps: rate_points,
-            log_rate_peak_eps: peak_points,
             step_secs,
             rate_window_secs: rate_window
                 .trim_end_matches('s')
