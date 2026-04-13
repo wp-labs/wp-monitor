@@ -595,6 +595,10 @@ impl VmRepository for VmHttpRepository {
         max_data_points: Option<usize>,
     ) -> Result<NodeTimeSeries, VmRepoError> {
         let (step, rate_window, step_secs) = Self::auto_step_for_timeseries(query, max_data_points);
+        let rate_window_secs = rate_window
+            .trim_end_matches('s')
+            .parse::<i64>()
+            .unwrap_or(0);
 
         // 实时查询右边界会受到入库延迟/窗口边界影响：
         // 为保证”最近窗口”也尽量返回真实值，统一回退一个安全延迟。
@@ -617,10 +621,7 @@ impl VmRepository for VmHttpRepository {
                 node_id: node_id.to_string(),
                 log_rate_eps: Vec::new(),
                 step_secs,
-                rate_window_secs: rate_window
-                    .trim_end_matches('s')
-                    .parse::<i64>()
-                    .unwrap_or(0),
+                rate_window_secs,
                 log_count: Vec::new(),
             });
         }
@@ -649,8 +650,8 @@ impl VmRepository for VmHttpRepository {
                 let source_type = Self::escape_promql_string(source_type);
                 let source_name = Self::escape_promql_string(source_name);
                 format!(
-                    r#"sum(rate(wparse_receive_data{{source_type="{}",source_name="{}"}}[{}]))"#,
-                    source_type, source_name, rate_window
+                    r#"sum(increase(wparse_receive_data{{source_type="{}",source_name="{}"}}[{}]))/{}"#,
+                    source_type, source_name, rate_window, rate_window_secs
                 )
             }
             "log" if parts.len() >= 2 => {
@@ -659,16 +660,16 @@ impl VmRepository for VmHttpRepository {
                 let package = Self::escape_promql_string(package);
                 let rule = Self::escape_promql_string(rule);
                 format!(
-                    r#"sum(rate(wparse_parse_all{{package_name="{}",rule_name="{}"}}[{}]))"#,
-                    package, rule, rate_window
+                    r#"sum(increase(wparse_parse_all{{package_name="{}",rule_name="{}"}}[{}]))/{}"#,
+                    package, rule, rate_window, rate_window_secs
                 )
             }
             "group" if !parts.is_empty() => {
                 let g = parts[0];
                 let g = Self::escape_promql_string(g);
                 format!(
-                    r#"sum(rate(wparse_send_to_sink{{sink_group="{}",sink_group!~"monitor|default|miss|residue|error"}}[{}]))"#,
-                    g, rate_window
+                    r#"sum(increase(wparse_send_to_sink{{sink_group="{}",sink_group!~"monitor|default|miss|residue|error"}}[{}]))/{}"#,
+                    g, rate_window, rate_window_secs
                 )
             }
             "sink" if parts.len() >= 2 => {
@@ -677,8 +678,8 @@ impl VmRepository for VmHttpRepository {
                 let g = Self::escape_promql_string(g);
                 let s = Self::escape_promql_string(s);
                 format!(
-                    r#"sum(rate(wparse_send_to_sink{{sink_group="{}",sink_name="{}",sink_group!~"monitor|default|miss|residue|error"}}[{}]))"#,
-                    g, s, rate_window
+                    r#"sum(increase(wparse_send_to_sink{{sink_group="{}",sink_name="{}",sink_group!~"monitor|default|miss|residue|error"}}[{}]))/{}"#,
+                    g, s, rate_window, rate_window_secs
                 )
             }
             _ => "vector(0)".to_string(),
@@ -714,10 +715,7 @@ impl VmRepository for VmHttpRepository {
             node_id: node_id.to_string(),
             log_rate_eps: rate_points,
             step_secs,
-            rate_window_secs: rate_window
-                .trim_end_matches('s')
-                .parse::<i64>()
-                .unwrap_or(0),
+            rate_window_secs,
             log_count: Vec::new(),
         })
     }
