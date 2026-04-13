@@ -141,7 +141,7 @@ pub struct NodeTimeSeries {
 }
 
 /// 标准化时间窗口查询对象。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TimeRangeQuery {
     pub start_time: DateTime<FixedOffset>,
     pub end_time: DateTime<FixedOffset>,

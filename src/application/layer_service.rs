@@ -535,6 +535,23 @@ impl LayerService {
             .await
     }
 
+    /// 获取 parse 层节点时间序列。
+    pub async fn get_parse_timeseries(
+        &self,
+        query: TimeRangeQuery,
+        package_name: Option<String>,
+        log_type: Option<String>,
+        max_data_points: Option<usize>,
+    ) -> Result<Vec<NodeTimeSeries>, VmRepoError> {
+        let package_name = package_name.as_deref().unwrap_or(".*");
+        let log_type = log_type.as_deref().unwrap_or(".*");
+        let timeseries = self
+            .vm_repo
+            .fetch_parse_timeseries(&query, package_name, log_type, max_data_points)
+            .await?;
+        Ok(timeseries)
+    }
+
     /// 返回前端初始化配置（从配置文件读取结果回传）。
     pub async fn get_meta_config(&self) -> serde_json::Value {
         serde_json::json!({

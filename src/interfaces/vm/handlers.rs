@@ -6,6 +6,7 @@ use actix_web::{
     error::{ErrorBadRequest, ErrorInternalServerError},
     get, web,
 };
+use serde::Deserialize;
 use tracing::{debug, error};
 
 /// HTTP 查询参数：通用时间窗口。
@@ -161,6 +162,51 @@ pub async fn get_node_timeseries(
                 error = %e,
                 "vm.handlers.node_timeseries.failed"
             );
+            ErrorInternalServerError(e.to_string())
+        })?;
+    Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
+}
+
+/// 获取多个节点的时间序列。
+#[derive(Debug, Deserialize)]
+pub struct ParseNodeTimeSeriesRequest {
+    pub package_name: Option<String>,
+    pub rule_name: Option<String>,
+    pub start_time: String,
+    pub end_time: String,
+    pub max_data_points: Option<usize>,
+}
+
+#[get("/nodes/timeseries")]
+pub async fn get_parse_timeseries(
+    svc: web::Data<LayerService>,
+    req: web::Query<ParseNodeTimeSeriesRequest>,
+) -> Result<HttpResponse> {
+    debug!(
+        start_time = %req.start_time,
+        end_time = %req.end_time,
+        max_data_points = req.max_data_points.unwrap_or(0),
+        "vm.handlers.node_timeseries.request"
+    );
+    let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
+        error!(
+            start_time = %req.start_time,
+            end_time = %req.end_time,
+            error = %e,
+            "vm.handlers.node_timeseries.invalid_params"
+        );
+        ErrorBadRequest(e.to_string())
+    })?;
+    let data = svc
+        .get_parse_timeseries(
+            query,
+            req.package_name.clone(),
+            req.rule_name.clone(),
+            req.max_data_points,
+        )
+        .await
+        .map_err(|e| {
+            error!(error = %e, "vm.handlers.parse_timeseries.failed");
             ErrorInternalServerError(e.to_string())
         })?;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))

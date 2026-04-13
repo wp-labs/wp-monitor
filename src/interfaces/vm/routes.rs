@@ -8,5 +8,6 @@ pub fn register_vm_routes(cfg: &mut web::ServiceConfig) {
         .service(handlers::get_node_detail)
         .service(handlers::get_node_timeseries)
         .service(handlers::get_meta_config)
+        .service(handlers::get_parse_timeseries)
         .service(handlers::get_health_ready);
 }

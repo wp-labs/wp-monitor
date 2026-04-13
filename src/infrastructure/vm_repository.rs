@@ -48,6 +48,13 @@ pub trait VmRepository: Send + Sync {
         query: &TimeRangeQuery,
         max_data_points: Option<usize>,
     ) -> Result<NodeTimeSeries, VmRepoError>;
+    async fn fetch_parse_timeseries(
+        &self,
+        query: &TimeRangeQuery,
+        package_name: &str,
+        rule_name: &str,
+        max_data_points: Option<usize>,
+    ) -> Result<Vec<NodeTimeSeries>, VmRepoError>;
 }
 
 /// 基于 HTTP 协议访问 VictoriaMetrics 的仓储实现。
@@ -718,6 +725,94 @@ impl VmRepository for VmHttpRepository {
             rate_window_secs,
             log_count: Vec::new(),
         })
+    }
+
+    /**
+     * 获取多个节点的时序数据。
+     */
+    async fn fetch_parse_timeseries(
+        &self,
+        query: &TimeRangeQuery,
+        package_name: &str,
+        rule_name: &str,
+        max_data_points: Option<usize>,
+    ) -> Result<Vec<NodeTimeSeries>, VmRepoError> {
+        let (step, rate_window, step_secs) = Self::auto_step_for_timeseries(query, max_data_points);
+        let rate_window_secs = rate_window
+            .trim_end_matches('s')
+            .parse::<i64>()
+            .unwrap_or(0);
+        let query_prom = format!(
+            r#"increase(wparse_parse_all{{package_name=~"{}",rule_name=~"{}"}}[{}])/{}"#,
+            package_name, rule_name, rate_window, rate_window_secs
+        );
+
+        // 实时查询右边界会受到入库延迟/窗口边界影响：
+        // 为保证”最近窗口”也尽量返回真实值，统一回退一个安全延迟。
+        // 右边界保护使用固定小延迟，不能随 step 放大，否则长时间范围会丢失最近数据。
+        let safe_lag_secs = 10;
+        let start = query.start_time.timestamp();
+        let requested_end = query.end_time.timestamp();
+        let now_safe_end = Utc::now().timestamp() - safe_lag_secs;
+        let end = requested_end.min(now_safe_end);
+
+        if start >= end {
+            debug!(
+                start_time = %query.start_time,
+                end_time = %query.end_time,
+                safe_lag_secs = safe_lag_secs,
+                "vm_repository.parse_timeseries.empty_due_to_realtime_boundary"
+            );
+            return Ok(Vec::new());
+        }
+        debug!(
+            start_time = %query.start_time,
+            end_time = %query.end_time,
+            effective_end_unix = end,
+            safe_lag_secs = safe_lag_secs,
+            step = %step,
+            max_data_points = max_data_points.unwrap_or(0),
+            "vm_repository.parse_timeseries.start"
+        );
+        let series = self
+            .range_query(&query_prom, start, end, &step)
+            .await
+            .map_err(|e| VmRepoError::Request(e.to_string()))?;
+        let mut out = Vec::with_capacity(series.len());
+        for s in series {
+            let instance = s
+                .metric
+                .get("instance")
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            let pid = s
+                .metric
+                .get("pid")
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            let node_id = format!(
+                "log:{}:{}:instance:{}:pid:{}",
+                package_name, rule_name, instance, pid
+            );
+            let points = s
+                .values
+                .iter()
+                .map(|p| TimePoint {
+                    ts: chrono::DateTime::from_timestamp(p.ts as i64, 0)
+                        .map(|d| d.to_rfc3339())
+                        .unwrap_or_else(|| Utc::now().to_rfc3339()),
+                    value: p.value.max(0.0),
+                })
+                .collect::<Vec<_>>();
+            out.push(NodeTimeSeries {
+                node_id,
+                log_rate_eps: points,
+                step_secs,
+                rate_window_secs,
+                log_count: Vec::new(),
+            });
+        }
+        Ok(out)
     }
 }
 
