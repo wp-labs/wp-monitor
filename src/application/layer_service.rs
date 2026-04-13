@@ -419,65 +419,65 @@ impl LayerService {
     ) -> Result<NodeDetail, VmRepoError> {
         debug!(node_id = %node_id, "layer_service.node_detail.start");
         let snapshot = self.get_layers_snapshot(query.clone()).await?;
-
-        for s in snapshot.sources {
-            if s.id == node_id {
-                return Ok(NodeDetail {
-                    id: s.id,
-                    name: s.name,
+        if let Some(detail) =
+            snapshot
+                .sources
+                .iter()
+                .find(|s| s.id == node_id)
+                .map(|s| NodeDetail {
+                    id: s.id.clone(),
+                    name: s.name.clone(),
                     node_type: "source".to_string(),
                     package_name: None,
-                    metrics: s.metrics,
-                });
-            }
+                    metrics: s.metrics.clone(),
+                })
+        {
+            return Ok(detail);
         }
 
-        for p in snapshot.parses {
+        if let Some(detail) = snapshot.parses.iter().find_map(|p| {
             if p.id == node_id {
-                return Ok(NodeDetail {
-                    id: p.id,
-                    name: p.package_name,
+                return Some(NodeDetail {
+                    id: p.id.clone(),
+                    name: p.package_name.clone(),
                     node_type: "package".to_string(),
                     package_name: None,
-                    metrics: p.metrics,
+                    metrics: p.metrics.clone(),
                 });
             }
-            for l in p.logs {
-                if l.id == node_id {
-                    return Ok(NodeDetail {
-                        id: l.id,
-                        name: l.name,
-                        node_type: "log_type".to_string(),
-                        package_name: Some(
-                            node_id.split(':').nth(1).unwrap_or_default().to_string(),
-                        ),
-                        metrics: l.metrics,
-                    });
-                }
-            }
+            p.logs.iter().find(|l| l.id == node_id).map(|l| NodeDetail {
+                id: l.id.clone(),
+                name: l.name.clone(),
+                node_type: "log_type".to_string(),
+                package_name: Some(p.package_name.clone()),
+                metrics: l.metrics.clone(),
+            })
+        }) {
+            return Ok(detail);
         }
 
-        for g in snapshot.sinks {
+        if let Some(detail) = snapshot.sinks.iter().find_map(|g| {
             if g.id == node_id {
-                return Ok(NodeDetail {
-                    id: g.id,
-                    name: g.sink_group,
+                return Some(NodeDetail {
+                    id: g.id.clone(),
+                    name: g.sink_group.clone(),
                     node_type: "sink_group".to_string(),
                     package_name: None,
-                    metrics: g.metrics,
+                    metrics: g.metrics.clone(),
                 });
             }
-            for s in g.sinks {
-                if s.id == node_id {
-                    return Ok(NodeDetail {
-                        id: s.id,
-                        name: s.sink_name,
-                        node_type: "sink".to_string(),
-                        package_name: None,
-                        metrics: s.metrics,
-                    });
-                }
-            }
+            g.sinks
+                .iter()
+                .find(|s| s.id == node_id)
+                .map(|s| NodeDetail {
+                    id: s.id.clone(),
+                    name: s.sink_name.clone(),
+                    node_type: "sink".to_string(),
+                    package_name: None,
+                    metrics: s.metrics.clone(),
+                })
+        }) {
+            return Ok(detail);
         }
 
         if node_id == "miss" {
@@ -550,6 +550,29 @@ impl LayerService {
             .fetch_parse_timeseries(&query, package_name, log_type, max_data_points)
             .await?;
         Ok(timeseries)
+    }
+
+    /// 获取 source 层节点时间序列。
+    pub async fn get_source_timeseries(
+        &self,
+        query: TimeRangeQuery,
+        max_data_points: Option<usize>,
+    ) -> Result<Vec<NodeTimeSeries>, VmRepoError> {
+        self.vm_repo
+            .fetch_source_timeseries(&query, max_data_points)
+            .await
+    }
+
+    /// 获取 sink 层（可按 sink_group 过滤）时间序列。
+    pub async fn get_sink_timeseries(
+        &self,
+        query: TimeRangeQuery,
+        sink_group: Option<String>,
+        max_data_points: Option<usize>,
+    ) -> Result<Vec<NodeTimeSeries>, VmRepoError> {
+        self.vm_repo
+            .fetch_sink_timeseries(&query, sink_group.as_deref(), max_data_points)
+            .await
     }
 
     /// 返回前端初始化配置（从配置文件读取结果回传）。

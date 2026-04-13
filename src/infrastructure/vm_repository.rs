@@ -55,6 +55,17 @@ pub trait VmRepository: Send + Sync {
         rule_name: &str,
         max_data_points: Option<usize>,
     ) -> Result<Vec<NodeTimeSeries>, VmRepoError>;
+    async fn fetch_source_timeseries(
+        &self,
+        query: &TimeRangeQuery,
+        max_data_points: Option<usize>,
+    ) -> Result<Vec<NodeTimeSeries>, VmRepoError>;
+    async fn fetch_sink_timeseries(
+        &self,
+        query: &TimeRangeQuery,
+        sink_group: Option<&str>,
+        max_data_points: Option<usize>,
+    ) -> Result<Vec<NodeTimeSeries>, VmRepoError>;
 }
 
 /// 基于 HTTP 协议访问 VictoriaMetrics 的仓储实现。
@@ -64,6 +75,9 @@ pub struct VmHttpRepository {
 }
 
 impl VmHttpRepository {
+    /// 实时查询统一安全回退秒数，避免读取到尚未稳定写入的尾部点。
+    const SAFE_LAG_SECS: i64 = 10;
+
     /// 创建仓储实例，自动去掉 base_url 尾部 `/`，避免 URL 拼接重复分隔符。
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
@@ -78,9 +92,52 @@ impl VmHttpRepository {
         (x * 100.0).round() / 100.0
     }
 
+    /// 将秒级时间戳安全转换为 RFC3339 字符串。
+    fn ts_to_rfc3339(ts: i64) -> String {
+        chrono::DateTime::from_timestamp(ts, 0)
+            .map(|d| d.to_rfc3339())
+            .unwrap_or_else(|| Utc::now().to_rfc3339())
+    }
+
+    /// 计算实际查询时间范围，并对右边界做安全回退。
+    fn effective_query_range(query: &TimeRangeQuery) -> Option<(i64, i64)> {
+        let start = query.start_time.timestamp();
+        let requested_end = query.end_time.timestamp();
+        let now_safe_end = Utc::now().timestamp() - Self::SAFE_LAG_SECS;
+        let end = requested_end.min(now_safe_end);
+        (start < end).then_some((start, end))
+    }
+
+    /// 将 VM 点位统一转换为时序点并做非负兜底。
+    fn vm_points_to_time_points(values: &[VmPoint]) -> Vec<TimePoint> {
+        values
+            .iter()
+            .map(|p| TimePoint {
+                ts: Self::ts_to_rfc3339(p.ts as i64),
+                value: p.value.max(0.0),
+            })
+            .collect::<Vec<_>>()
+    }
+
     /// 转义 PromQL 双引号字符串字面量。
     fn escape_promql_string(v: &str) -> String {
         v.replace('\\', r"\\").replace('"', r#"\""#)
+    }
+
+    /// 转义 PromQL 正则中的字面量字符，避免包名中包含特殊符号时误匹配。
+    fn escape_promql_regex(v: &str) -> String {
+        let mut out = String::with_capacity(v.len());
+        for ch in v.chars() {
+            match ch {
+                '\\' | '.' | '+' | '*' | '?' | '^' | '$' | '(' | ')' | '[' | ']' | '{' | '}'
+                | '|' => {
+                    out.push('\\');
+                    out.push(ch);
+                }
+                _ => out.push(ch),
+            }
+        }
+        out
     }
 
     /// 按时间范围与目标点数自动计算 query_range 的步长（Grafana 风格）。
@@ -455,16 +512,61 @@ impl VmHttpRepository {
         let mut out = Vec::new();
         let mut ts = start;
         while ts <= end {
-            let ts_text = chrono::DateTime::from_timestamp(ts, 0)
-                .map(|d| d.to_rfc3339())
-                .unwrap_or_else(|| Utc::now().to_rfc3339());
             out.push(TimePoint {
-                ts: ts_text,
+                ts: Self::ts_to_rfc3339(ts),
                 value: 0.0,
             });
             ts += step_secs;
         }
         out
+    }
+
+    async fn fetch_scope_timeseries_internal<F>(
+        &self,
+        query: &TimeRangeQuery,
+        max_data_points: Option<usize>,
+        query_prom: String,
+        node_id_builder: F,
+    ) -> Result<Vec<NodeTimeSeries>, VmRepoError>
+    where
+        F: Fn(&HashMap<String, String>) -> String,
+    {
+        let (step, rate_window, step_secs) = Self::auto_step_for_timeseries(query, max_data_points);
+        let rate_window_secs = rate_window
+            .trim_end_matches('s')
+            .parse::<i64>()
+            .unwrap_or(0);
+        let Some((start, end)) = Self::effective_query_range(query) else {
+            return Ok(Vec::new());
+        };
+
+        debug!(
+            start_time = %query.start_time,
+            end_time = %query.end_time,
+            effective_end_unix = end,
+            safe_lag_secs = Self::SAFE_LAG_SECS,
+            step = %step,
+            max_data_points = max_data_points.unwrap_or(0),
+            "vm_repository.scope_timeseries.start"
+        );
+
+        let series = self
+            .range_query(&query_prom, start, end, &step)
+            .await
+            .map_err(|e| VmRepoError::Request(e.to_string()))?;
+        let mut out = Vec::with_capacity(series.len());
+        for s in series {
+            let node_id = node_id_builder(&s.metric);
+            let points = Self::vm_points_to_time_points(&s.values);
+            out.push(NodeTimeSeries {
+                node_id,
+                log_rate_eps: points,
+                step_secs,
+                rate_window_secs,
+                log_count: Vec::new(),
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -607,21 +709,12 @@ impl VmRepository for VmHttpRepository {
             .parse::<i64>()
             .unwrap_or(0);
 
-        // 实时查询右边界会受到入库延迟/窗口边界影响：
-        // 为保证”最近窗口”也尽量返回真实值，统一回退一个安全延迟。
-        // 右边界保护使用固定小延迟，不能随 step 放大，否则长时间范围会丢失最近数据。
-        let safe_lag_secs = 10;
-        let start = query.start_time.timestamp();
-        let requested_end = query.end_time.timestamp();
-        let now_safe_end = Utc::now().timestamp() - safe_lag_secs;
-        let end = requested_end.min(now_safe_end);
-
-        if start >= end {
+        let Some((start, end)) = Self::effective_query_range(query) else {
             debug!(
                 node_id = node_id,
                 start_time = %query.start_time,
                 end_time = %query.end_time,
-                safe_lag_secs = safe_lag_secs,
+                safe_lag_secs = Self::SAFE_LAG_SECS,
                 "vm_repository.node_timeseries.empty_due_to_realtime_boundary"
             );
             return Ok(NodeTimeSeries {
@@ -631,13 +724,13 @@ impl VmRepository for VmHttpRepository {
                 rate_window_secs,
                 log_count: Vec::new(),
             });
-        }
+        };
         debug!(
             node_id = node_id,
             start_time = %query.start_time,
             end_time = %query.end_time,
             effective_end_unix = end,
-            safe_lag_secs = safe_lag_secs,
+            safe_lag_secs = Self::SAFE_LAG_SECS,
             step = %step,
             max_data_points = max_data_points.unwrap_or(0),
             "vm_repository.node_timeseries.start"
@@ -737,82 +830,97 @@ impl VmRepository for VmHttpRepository {
         rule_name: &str,
         max_data_points: Option<usize>,
     ) -> Result<Vec<NodeTimeSeries>, VmRepoError> {
-        let (step, rate_window, step_secs) = Self::auto_step_for_timeseries(query, max_data_points);
+        let (_, rate_window, _) = Self::auto_step_for_timeseries(query, max_data_points);
+        let rate_window_secs = rate_window
+            .trim_end_matches('s')
+            .parse::<i64>()
+            .unwrap_or(0);
+        let package_selector = if package_name == ".*" {
+            ".*".to_string()
+        } else {
+            format!("^{}$", Self::escape_promql_regex(package_name))
+        };
+        let rule_selector = if rule_name == ".*" {
+            ".*".to_string()
+        } else {
+            format!("^{}$", Self::escape_promql_regex(rule_name))
+        };
+        let query_prom = format!(
+            r#"(sum by (package_name, rule_name) (increase(wparse_parse_all{{package_name=~"{}",rule_name=~"{}"}}[{}])))/{}"#,
+            package_selector, rule_selector, rate_window, rate_window_secs
+        );
+        self.fetch_scope_timeseries_internal(query, max_data_points, query_prom, |metric| {
+            let package_name = metric
+                .get("package_name")
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            let rule_name = metric
+                .get("rule_name")
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            format!("log:{}:{}", package_name, rule_name)
+        })
+        .await
+    }
+
+    async fn fetch_source_timeseries(
+        &self,
+        query: &TimeRangeQuery,
+        max_data_points: Option<usize>,
+    ) -> Result<Vec<NodeTimeSeries>, VmRepoError> {
+        let (_, rate_window, _) = Self::auto_step_for_timeseries(query, max_data_points);
         let rate_window_secs = rate_window
             .trim_end_matches('s')
             .parse::<i64>()
             .unwrap_or(0);
         let query_prom = format!(
-            r#"increase(wparse_parse_all{{package_name=~"{}",rule_name=~"{}"}}[{}])/{}"#,
-            package_name, rule_name, rate_window, rate_window_secs
+            r#"(sum by (source_type, source_name) (increase(wparse_receive_data[{}])))/{}"#,
+            rate_window, rate_window_secs
         );
-
-        // 实时查询右边界会受到入库延迟/窗口边界影响：
-        // 为保证”最近窗口”也尽量返回真实值，统一回退一个安全延迟。
-        // 右边界保护使用固定小延迟，不能随 step 放大，否则长时间范围会丢失最近数据。
-        let safe_lag_secs = 10;
-        let start = query.start_time.timestamp();
-        let requested_end = query.end_time.timestamp();
-        let now_safe_end = Utc::now().timestamp() - safe_lag_secs;
-        let end = requested_end.min(now_safe_end);
-
-        if start >= end {
-            debug!(
-                start_time = %query.start_time,
-                end_time = %query.end_time,
-                safe_lag_secs = safe_lag_secs,
-                "vm_repository.parse_timeseries.empty_due_to_realtime_boundary"
-            );
-            return Ok(Vec::new());
-        }
-        debug!(
-            start_time = %query.start_time,
-            end_time = %query.end_time,
-            effective_end_unix = end,
-            safe_lag_secs = safe_lag_secs,
-            step = %step,
-            max_data_points = max_data_points.unwrap_or(0),
-            "vm_repository.parse_timeseries.start"
-        );
-        let series = self
-            .range_query(&query_prom, start, end, &step)
-            .await
-            .map_err(|e| VmRepoError::Request(e.to_string()))?;
-        let mut out = Vec::with_capacity(series.len());
-        for s in series {
-            let instance = s
-                .metric
-                .get("instance")
+        self.fetch_scope_timeseries_internal(query, max_data_points, query_prom, |metric| {
+            let source_type = metric
+                .get("source_type")
                 .cloned()
                 .unwrap_or_else(|| "unknown".to_string());
-            let pid = s
-                .metric
-                .get("pid")
+            let source_name = metric
+                .get("source_name")
                 .cloned()
                 .unwrap_or_else(|| "unknown".to_string());
-            let node_id = format!(
-                "log:{}:{}:instance:{}:pid:{}",
-                package_name, rule_name, instance, pid
-            );
-            let points = s
-                .values
-                .iter()
-                .map(|p| TimePoint {
-                    ts: chrono::DateTime::from_timestamp(p.ts as i64, 0)
-                        .map(|d| d.to_rfc3339())
-                        .unwrap_or_else(|| Utc::now().to_rfc3339()),
-                    value: p.value.max(0.0),
-                })
-                .collect::<Vec<_>>();
-            out.push(NodeTimeSeries {
-                node_id,
-                log_rate_eps: points,
-                step_secs,
-                rate_window_secs,
-                log_count: Vec::new(),
-            });
-        }
-        Ok(out)
+            format!("source:{}:{}", source_type, source_name)
+        })
+        .await
+    }
+
+    async fn fetch_sink_timeseries(
+        &self,
+        query: &TimeRangeQuery,
+        sink_group: Option<&str>,
+        max_data_points: Option<usize>,
+    ) -> Result<Vec<NodeTimeSeries>, VmRepoError> {
+        let (_, rate_window, _) = Self::auto_step_for_timeseries(query, max_data_points);
+        let rate_window_secs = rate_window
+            .trim_end_matches('s')
+            .parse::<i64>()
+            .unwrap_or(0);
+        let group_selector = sink_group
+            .map(|g| format!(r#",sink_group=~"^{}$""#, Self::escape_promql_regex(g)))
+            .unwrap_or_default();
+        let query_prom = format!(
+            r#"(sum by (sink_group, sink_name) (increase(wparse_send_to_sink{{sink_group!~"monitor|default|miss|residue|error"{} }}[{}])))/{}"#,
+            group_selector, rate_window, rate_window_secs
+        );
+        self.fetch_scope_timeseries_internal(query, max_data_points, query_prom, |metric| {
+            let group = metric
+                .get("sink_group")
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            let sink = metric
+                .get("sink_name")
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            format!("sink:{}:{}", group, sink)
+        })
+        .await
     }
 }
 

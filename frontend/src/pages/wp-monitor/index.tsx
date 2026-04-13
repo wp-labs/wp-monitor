@@ -11,12 +11,15 @@ import {
   fmtRate,
 } from "../../components/monitor/flowHelpers";
 import TimeSeriesChart from "../../components/monitor/TimeSeriesChart";
+import ScopeTrendPanel from "../../components/monitor/ScopeTrendPanel";
+import { MONITOR_SERIES_PALETTE } from "../../components/monitor/chartPalette";
 import {
   exportMissedLogs,
   fetchMissedLogs,
   fetchMetrics,
   fetchNodeDetail,
   fetchNodeTimeSeries,
+  fetchParseTimeSeries,
   fetchSnapshot,
 } from "../../services/monitor";
 import type {
@@ -68,6 +71,11 @@ type ParseSearchItem =
       logName: string;
       label: string;
     };
+type ScopeSeriesRequest = {
+  scope: "parse" | "source" | "sink";
+  packageName?: string;
+  sinkGroup?: string;
+};
 
 function toIsoByMinutesAgo(minutes: number) {
   return new Date(Date.now() - REALTIME_END_LAG_MS - minutes * 60 * 1000).toISOString();
@@ -117,6 +125,13 @@ function formatLocalTime(iso: string) {
   });
 }
 
+function normalizeNodePillText(name: string) {
+  if (name === "__source__") return "来源层";
+  if (name === "__parse__") return "Parse 层";
+  if (name === "__sink__") return "输出层";
+  return name;
+}
+
 function buildQuickRange(key: string) {
   const now = new Date(nowWithLagMs());
   if (key === "today") {
@@ -162,7 +177,20 @@ export default function WpMonitorPage() {
   const [selectedNode, setSelectedNode] = useState("");
   const [hoveredNode, setHoveredNode] = useState("");
   const [detail, setDetail] = useState<NodeDetail | null>(null);
+  const [detailNodePill, setDetailNodePill] = useState("");
+  const [detailViewMode, setDetailViewMode] = useState<"node" | "scope">(
+    "node",
+  );
   const [series, setSeries] = useState<NodeTimeSeries | null>(null);
+  const [parseSeriesList, setParseSeriesList] = useState<NodeTimeSeries[] | null>(
+    null,
+  );
+  const [hiddenScopeSeriesNames, setHiddenScopeSeriesNames] = useState<string[]>(
+    [],
+  );
+  const [scopeSeriesRequest, setScopeSeriesRequest] =
+    useState<ScopeSeriesRequest | null>(null);
+  const [parseSeriesTitle, setParseSeriesTitle] = useState("");
   const [detailStartTime, setDetailStartTime] = useState("");
   const [detailEndTime, setDetailEndTime] = useState("");
   const [drawerLoading, setDrawerLoading] = useState(false);
@@ -200,6 +228,8 @@ export default function WpMonitorPage() {
   const resizeStateRef = useRef<{ startY: number; startHeight: number } | null>(
     null,
   );
+  const scopeSeriesColorMapRef = useRef<Map<string, string>>(new Map());
+  const scopeSeriesColorCursorRef = useRef(0);
 
   const clampDetailPanelHeight = useCallback((h: number) => {
     const isMobile = window.innerWidth <= 768;
@@ -275,10 +305,12 @@ export default function WpMonitorPage() {
         selectedNode &&
         !detailPanelRef.current?.contains(target) &&
         !(target as Element).closest(
-          ".node, .package, .group, .log-item, .sink-item, .miss",
+          ".node, .package, .group, .log-item, .sink-item, .miss, .lane-title",
         )
       ) {
         setSelectedNode("");
+        setDetailNodePill("");
+        setScopeSeriesRequest(null);
       }
     }
     document.addEventListener("click", onDocClick);
@@ -327,6 +359,32 @@ export default function WpMonitorPage() {
     () => series?.log_rate_eps ?? [],
     [series?.log_rate_eps],
   );
+  const parseMultiSeries = useMemo(
+    () =>
+      (parseSeriesList ?? []).map((s) => ({
+        name: s.node_id,
+        points: s.log_rate_eps ?? [],
+        color: (() => {
+          const cached = scopeSeriesColorMapRef.current.get(s.node_id);
+          if (cached) return cached;
+          const color =
+            MONITOR_SERIES_PALETTE[
+              scopeSeriesColorCursorRef.current % MONITOR_SERIES_PALETTE.length
+            ];
+          scopeSeriesColorMapRef.current.set(s.node_id, color);
+          scopeSeriesColorCursorRef.current += 1;
+          return color;
+        })(),
+      })),
+    [parseSeriesList],
+  );
+  const visibleParseMultiSeries = useMemo(
+    () =>
+      parseMultiSeries.filter(
+        (line) => !hiddenScopeSeriesNames.includes(line.name),
+      ),
+    [parseMultiSeries, hiddenScopeSeriesNames],
+  );
   const isMissSelected = useMemo(
     () =>
       Boolean(snapshot && selectedNode && selectedNode === snapshot.miss.id),
@@ -345,6 +403,7 @@ export default function WpMonitorPage() {
     if (
       !selectedNode ||
       isMissSelected ||
+      Boolean(parseSeriesList) ||
       !detailTrendAutoRefresh ||
       drawerLoading
     )
@@ -401,6 +460,71 @@ export default function WpMonitorPage() {
     detailStartTime,
     detailEndTime,
     refreshIntervalSec,
+    parseSeriesList,
+  ]);
+
+  useEffect(() => {
+    if (
+      !selectedNode ||
+      detailViewMode !== "scope" ||
+      !scopeSeriesRequest ||
+      parseSeriesList === null ||
+      !detailTrendAutoRefresh ||
+      drawerLoading
+    )
+      return;
+    const startMs = new Date(detailStartTime).getTime();
+    const endMs = new Date(detailEndTime).getTime();
+    if (
+      !Number.isFinite(startMs) ||
+      !Number.isFinite(endMs) ||
+      startMs >= endMs
+    )
+      return;
+    const durationMs = endMs - startMs;
+    let cancelled = false;
+
+    const refreshScopeTimeseries = async () => {
+      try {
+        const nextEndMs = nowWithLagMs();
+        const nextStart = new Date(nextEndMs - durationMs).toISOString();
+        const nextEnd = new Date(nextEndMs).toISOString();
+        const timeseriesResp = await fetchParseTimeSeries(
+          scopeSeriesRequest.scope,
+          nextStart,
+          nextEnd,
+          estimateMaxDataPoints(),
+          scopeSeriesRequest.packageName,
+          scopeSeriesRequest.sinkGroup,
+        );
+        if (cancelled) return;
+        setParseSeriesList(timeseriesResp.data ?? []);
+        setDetailStartTime(nextStart);
+        setDetailEndTime(nextEnd);
+        setDrawerError("");
+      } catch (e) {
+        if (cancelled) return;
+        setDrawerError((e as Error).message || "范围时序获取失败");
+      }
+    };
+
+    const timer = setInterval(() => {
+      void refreshScopeTimeseries();
+    }, refreshIntervalSec * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [
+    selectedNode,
+    detailViewMode,
+    scopeSeriesRequest,
+    parseSeriesList,
+    detailTrendAutoRefresh,
+    drawerLoading,
+    detailStartTime,
+    detailEndTime,
+    refreshIntervalSec,
   ]);
 
   const parseSearchGroups = useMemo(() => {
@@ -450,6 +574,37 @@ export default function WpMonitorPage() {
   useEffect(() => {
     setParseSearchActiveIndex(0);
   }, [parseQuery, parseSearchOpen]);
+
+  useEffect(() => {
+    setHiddenScopeSeriesNames((prev) =>
+      prev.filter((name) => parseMultiSeries.some((line) => line.name === name)),
+    );
+  }, [parseMultiSeries]);
+
+  const resolveNodePillById = useCallback(
+    (nodeId: string) => {
+      if (!snapshot) return normalizeNodePillText(nodeId);
+      if (snapshot.miss.id === nodeId) {
+        return normalizeNodePillText(snapshot.miss.name);
+      }
+      const sourceNode = snapshot.sources.find((n) => n.id === nodeId);
+      if (sourceNode) return normalizeNodePillText(sourceNode.name);
+      const parseNode = snapshot.parses.find((p) => p.id === nodeId);
+      if (parseNode) return normalizeNodePillText(parseNode.package_name);
+      for (const parse of snapshot.parses) {
+        const logNode = parse.logs.find((l) => l.id === nodeId);
+        if (logNode) return normalizeNodePillText(logNode.name);
+      }
+      const sinkGroup = snapshot.sinks.find((g) => g.id === nodeId);
+      if (sinkGroup) return normalizeNodePillText(sinkGroup.sink_group);
+      for (const group of snapshot.sinks) {
+        const sinkNode = group.sinks.find((s) => s.id === nodeId);
+        if (sinkNode) return normalizeNodePillText(sinkNode.sink_name);
+      }
+      return normalizeNodePillText(nodeId);
+    },
+    [snapshot],
+  );
 
   function nodeClass(
     base: string,
@@ -526,6 +681,10 @@ export default function WpMonitorPage() {
   }
 
   async function openDetail(nodeId: string) {
+    setDetailViewMode("node");
+    setDetailNodePill(resolveNodePillById(nodeId));
+    setHiddenScopeSeriesNames([]);
+    setScopeSeriesRequest(null);
     const missNodeId = snapshot?.miss.id ?? "";
     const isMissNode = nodeId === missNodeId;
     let currentStart = startTime;
@@ -554,6 +713,8 @@ export default function WpMonitorPage() {
     setDrawerError("");
     setDetail(null);
     setSeries(null);
+    setParseSeriesList(null);
+    setParseSeriesTitle("");
     setMissLogs([]);
     setMissHasMore(false);
     setMissLogsError("");
@@ -587,6 +748,7 @@ export default function WpMonitorPage() {
         setMissLogsError("");
         setMissLogsLoading(false);
         setDetail(detailResp.data);
+        setDetailNodePill(normalizeNodePillText(detailResp.data.name));
         setSeries(seriesResp.data);
         return;
       }
@@ -595,6 +757,7 @@ export default function WpMonitorPage() {
         seriesPromise,
       ]);
       setDetail(detailResp.data);
+      setDetailNodePill(normalizeNodePillText(detailResp.data.name));
       setSeries(seriesResp.data);
     } catch (e) {
       if (isMissNode) {
@@ -603,6 +766,61 @@ export default function WpMonitorPage() {
         setMissLogsLoading(false);
       }
       setDrawerError((e as Error).message || "节点详情获取失败");
+    } finally {
+      setDrawerLoading(false);
+    }
+  }
+
+  async function openParseTimeseries(
+    scope: "parse" | "source" | "sink",
+    selectedId: string,
+    title: string,
+    packageName?: string,
+    sinkGroup?: string,
+  ) {
+    setDetailViewMode("scope");
+    setDetailNodePill(normalizeNodePillText(title.replace(/ 节点趋势$/, "")));
+    setHiddenScopeSeriesNames([]);
+    setScopeSeriesRequest({ scope, packageName, sinkGroup });
+    let currentStart = startTime;
+    let currentEnd = endTime || nowWithLagIso();
+    const startMs = new Date(currentStart).getTime();
+    const endMs = new Date(currentEnd).getTime();
+    if (
+      !Number.isFinite(startMs) ||
+      !Number.isFinite(endMs) ||
+      startMs >= endMs
+    ) {
+      currentEnd = nowWithLagIso();
+      const fallbackStart = new Date(
+        new Date(currentEnd).getTime() - 5 * 60 * 1000,
+      ).toISOString();
+      currentStart = Number.isFinite(startMs) ? currentStart : fallbackStart;
+      if (new Date(currentStart).getTime() >= new Date(currentEnd).getTime()) {
+        currentStart = fallbackStart;
+      }
+    }
+    setSelectedNode(selectedId);
+    setDetailStartTime(currentStart);
+    setDetailEndTime(currentEnd);
+    setDrawerLoading(true);
+    setDrawerError("");
+    setDetail(null);
+    setSeries(null);
+    setParseSeriesList(null);
+    setParseSeriesTitle(title);
+    try {
+      const timeseriesResp = await fetchParseTimeSeries(
+        scope,
+        currentStart,
+        currentEnd,
+        estimateMaxDataPoints(),
+        packageName,
+        sinkGroup,
+      );
+      setParseSeriesList(timeseriesResp.data ?? []);
+    } catch (e) {
+      setDrawerError((e as Error).message || "Parse 时间序列获取失败");
     } finally {
       setDrawerLoading(false);
     }
@@ -692,7 +910,12 @@ export default function WpMonitorPage() {
     );
     setParseQuery(packageName);
     setParseSearchOpen(false);
-    await openDetail(packageId);
+    await openParseTimeseries(
+      "parse",
+      packageId,
+      `Package ${packageName} 节点趋势`,
+      packageName,
+    );
   }
 
   async function onSelectParseLog(
@@ -909,7 +1132,19 @@ export default function WpMonitorPage() {
           <div className="columns">
             <section className="lane">
               <div className="lane-head">
-                <div className="lane-title">来源层</div>
+                <div
+                  className="lane-title"
+                  onClick={() =>
+                    void openParseTimeseries(
+                      "source",
+                      "__source__",
+                      "来源层全部节点趋势",
+                    )
+                  }
+                  style={{ cursor: "pointer" }}
+                >
+                  来源层
+                </div>
               </div>
               <div className="lane-scroll">
                 {snapshot.sources.map((n) => (
@@ -920,7 +1155,7 @@ export default function WpMonitorPage() {
                     onMouseLeave={() => setHoveredNode("")}
                     onClick={() => void openDetail(n.id)}
                   >
-                    <div className="node-name">● {n.name}</div>
+                    <div className="node-name">{n.name}</div>
                     <div className="metric">
                       {fmtRate(n.metrics.log_rate_eps)}
                       <br />
@@ -933,7 +1168,19 @@ export default function WpMonitorPage() {
 
             <section className="lane">
               <div className="lane-head">
-                <div className="lane-title">Parse</div>
+                <div
+                  className="lane-title"
+                  onClick={() =>
+                    void openParseTimeseries(
+                      "parse",
+                      "__parse__",
+                      "Parse 层全部节点趋势",
+                    )
+                  }
+                  style={{ cursor: "pointer" }}
+                >
+                  Parse
+                </div>
                 <div className="lane-actions">
                   <button
                     className="mini-btn"
@@ -1019,9 +1266,17 @@ export default function WpMonitorPage() {
                     >
                       <div
                         className="package-head"
-                        onClick={() => togglePackage(p.id)}
+                        onClick={() => {
+                          togglePackage(p.id);
+                          void openParseTimeseries(
+                            "parse",
+                            p.id,
+                            `Package ${p.package_name} 节点趋势`,
+                            p.package_name,
+                          );
+                        }}
                       >
-                        <div className="package-title">◆ {p.package_name}</div>
+                        <div className="package-title">{p.package_name}</div>
                         <div className="package-summary">
                           {fmtRate(p.metrics.log_rate_eps)} /{" "}
                           {fmtCount(p.metrics.log_count)} (汇总) ·{" "}
@@ -1044,7 +1299,7 @@ export default function WpMonitorPage() {
                               onClick={() => void openDetail(l.id)}
                             >
                               <div className="item-head">
-                                <div className="node-name">▣ {l.name}</div>
+                                <div className="node-name">{l.name}</div>
                                 <div className="metric-inline">
                                   {fmtRate(l.metrics.log_rate_eps)} /{" "}
                                   {fmtCount(l.metrics.log_count)}
@@ -1068,7 +1323,7 @@ export default function WpMonitorPage() {
                   onMouseLeave={() => setHoveredNode("")}
                   onClick={() => void openDetail(snapshot.miss.id)}
                 >
-                  <div className="node-name">⚠ {snapshot.miss.name}</div>
+                  <div className="node-name">{snapshot.miss.name}</div>
                   <div className="node-sub">未命中任何 WPL 规则</div>
                   <div className="metric">
                     {fmtRate(snapshot.miss.metrics.log_rate_eps)} /{" "}
@@ -1082,7 +1337,19 @@ export default function WpMonitorPage() {
 
             <section className="lane">
               <div className="lane-head">
-                <div className="lane-title">输出层（输出分组包含目标）</div>
+                <div
+                  className="lane-title"
+                  onClick={() =>
+                    void openParseTimeseries(
+                      "sink",
+                      "__sink__",
+                      "输出层全部节点趋势",
+                    )
+                  }
+                  style={{ cursor: "pointer" }}
+                >
+                  输出层（输出分组包含目标）
+                </div>
                 <div className="lane-actions">
                   <button
                     className="mini-btn"
@@ -1110,8 +1377,19 @@ export default function WpMonitorPage() {
                       onMouseEnter={() => setHoveredNode(g.id)}
                       onMouseLeave={() => setHoveredNode("")}
                     >
-                      <div onClick={() => toggleGroup(g.id)}>
-                        <div className="group-title">⬡ {g.sink_group}</div>
+                      <div
+                        onClick={() => {
+                          toggleGroup(g.id);
+                          void openParseTimeseries(
+                            "sink",
+                            g.id,
+                            `Sink Group ${g.sink_group} 节点趋势`,
+                            undefined,
+                            g.sink_group,
+                          );
+                        }}
+                      >
+                        <div className="group-title">{g.sink_group}</div>
                         <div className="package-summary">
                           {fmtRate(g.metrics.log_rate_eps)} /{" "}
                           {fmtCount(g.metrics.log_count)} · {g.sinks.length}{" "}
@@ -1133,7 +1411,7 @@ export default function WpMonitorPage() {
                               onClick={() => void openDetail(s.id)}
                             >
                               <div className="item-head">
-                                <div className="node-name">▢ {s.sink_name}</div>
+                                <div className="node-name">{s.sink_name}</div>
                                 <div className="metric-inline">
                                   {fmtRate(s.metrics.log_rate_eps)} /{" "}
                                   {fmtCount(s.metrics.log_count)}
@@ -1168,12 +1446,22 @@ export default function WpMonitorPage() {
         <div className="detail-panel-head">
           <div className="detail-panel-head-left">
             <div className="detail-panel-title">节点详情</div>
-            {detail && <span className="detail-node-pill">{detail.name}</span>}
+            {detailNodePill && (
+              <span className="detail-node-pill">{detailNodePill}</span>
+            )}
           </div>
           <div className="detail-panel-head-right">
             <button
               className="drawer-close"
-              onClick={() => setSelectedNode("")}
+              onClick={() => {
+                setSelectedNode("");
+                setParseSeriesList(null);
+                setParseSeriesTitle("");
+                setDetailNodePill("");
+                setHiddenScopeSeriesNames([]);
+                setScopeSeriesRequest(null);
+                setDetailViewMode("node");
+              }}
             >
               ✕
             </button>
@@ -1185,7 +1473,38 @@ export default function WpMonitorPage() {
           {!drawerLoading && drawerError && (
             <p className="error">错误: {drawerError}</p>
           )}
-          {!drawerLoading && !drawerError && detail && (
+          {!drawerLoading &&
+            !drawerError &&
+            detailViewMode === "scope" &&
+            parseSeriesList && (
+              <ScopeTrendPanel
+                title={parseSeriesTitle}
+                parseSeriesList={parseSeriesList}
+                parseMultiSeries={parseMultiSeries}
+                visibleParseMultiSeries={visibleParseMultiSeries}
+                hiddenScopeSeriesNames={hiddenScopeSeriesNames}
+                detailTrendAutoRefresh={detailTrendAutoRefresh}
+                detailStartTime={detailStartTime}
+                detailEndTime={detailEndTime}
+                onToggleAutoRefresh={() =>
+                  setDetailTrendAutoRefresh((prev) => !prev)
+                }
+                onShowAll={() => setHiddenScopeSeriesNames([])}
+                onToggleSeries={(name) =>
+                  setHiddenScopeSeriesNames((prev) =>
+                    prev.includes(name)
+                      ? prev.filter((x) => x !== name)
+                      : [...prev, name],
+                  )
+                }
+                formatRate2={formatRate2}
+                formatLocalTime={formatLocalTime}
+              />
+            )}
+          {!drawerLoading &&
+            !drawerError &&
+            detailViewMode === "node" &&
+            detail && (
             <div className={`detail-grid ${isMissSelected ? "miss-mode" : ""}`}>
               <section className="panel card detail-col">
                 <div className="panel-title">基本信息</div>
@@ -1353,7 +1672,17 @@ export default function WpMonitorPage() {
             </div>
           )}
 
-          {!drawerLoading && !drawerError && !detail && <p>点击节点查看详情</p>}
+          {!drawerLoading &&
+            !drawerError &&
+            !detail &&
+            detailViewMode === "node" &&
+            (!parseSeriesList || parseSeriesList.length === 0) && (
+              <p>点击节点查看详情</p>
+            )}
+          {!drawerLoading &&
+            !drawerError &&
+            detailViewMode === "scope" &&
+            parseSeriesList === null && <p>请选择范围以查看时序</p>}
         </div>
       </aside>
     </div>

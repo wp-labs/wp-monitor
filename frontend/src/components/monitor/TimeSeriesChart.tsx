@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ApexCharts, { type ApexOptions } from 'apexcharts';
 import type { TimePoint } from '../../types/monitor';
+import { MONITOR_SERIES_PALETTE } from './chartPalette';
 
 interface Props {
   title: string;
   points: TimePoint[];
+  multiSeries?: Array<{ name: string; points: TimePoint[]; color?: string }>;
   color: string;
+  showLegend?: boolean;
   showTitleValue?: boolean;
   valueFormatter?: (v: number) => string;
   axisValueFormatter?: (v: number) => string;
@@ -25,7 +28,9 @@ function timeText(ts: string) {
 export default function TimeSeriesChart({
   title,
   points,
+  multiSeries,
   color,
+  showLegend = true,
   showTitleValue = true,
   valueFormatter,
   axisValueFormatter,
@@ -35,12 +40,16 @@ export default function TimeSeriesChart({
   rangeEndLabel,
   showRangeMeta = true,
 }: Props) {
+  const isMulti = Boolean(multiSeries && multiSeries.length > 0);
+  const flatPoints = isMulti
+    ? (multiSeries ?? []).flatMap((s) => s.points)
+    : points;
   const latest = points[points.length - 1]?.value ?? 0;
-  const firstTs = points[0] ? new Date(points[0].ts).getTime() : undefined;
-  const lastTs = points[points.length - 1]
-    ? new Date(points[points.length - 1].ts).getTime()
+  const firstTs = flatPoints[0] ? new Date(flatPoints[0].ts).getTime() : undefined;
+  const lastTs = flatPoints[flatPoints.length - 1]
+    ? new Date(flatPoints[flatPoints.length - 1].ts).getTime()
     : undefined;
-  const values = points.map((p) => p.value);
+  const values = flatPoints.map((p) => p.value);
   const valueMin = values.length > 0 ? Math.min(...values) : undefined;
   const valueMax = values.length > 0 ? Math.max(...values) : undefined;
   const computedMinY =
@@ -59,19 +68,33 @@ export default function TimeSeriesChart({
   const xTickAmount = useMemo(() => {
     const baseWidth = chartWidth > 0 ? chartWidth : 560;
     const ticksByWidth = Math.max(4, Math.min(12, Math.floor(baseWidth / 88)));
-    const maxTicksByPoints = points.length > 0 ? Math.max(2, points.length) : 4;
+    const maxTicksByPoints =
+      flatPoints.length > 0 ? Math.max(2, flatPoints.length) : 4;
     return Math.min(ticksByWidth, maxTicksByPoints);
-  }, [chartWidth, points.length]);
+  }, [chartWidth, flatPoints.length]);
 
   const series = useMemo(
-    () => [
-      {
-        name: title,
-        data: points.map((p) => ({ x: new Date(p.ts).getTime(), y: p.value })),
-      },
-    ],
-    [points, title],
+    () =>
+      isMulti
+        ? (multiSeries ?? []).map((s) => ({
+            name: s.name,
+            data: s.points.map((p) => ({ x: new Date(p.ts).getTime(), y: p.value })),
+          }))
+        : [
+            {
+              name: title,
+              data: points.map((p) => ({ x: new Date(p.ts).getTime(), y: p.value })),
+            },
+          ],
+    [isMulti, multiSeries, points, title],
   );
+
+  const palette = useMemo(() => {
+    if (!isMulti) return [color];
+    return (multiSeries ?? []).map(
+      (s, idx) => s.color ?? MONITOR_SERIES_PALETTE[idx % MONITOR_SERIES_PALETTE.length],
+    );
+  }, [color, isMulti, multiSeries]);
 
   const options = useMemo<ApexOptions>(
     () => ({
@@ -83,10 +106,10 @@ export default function TimeSeriesChart({
         animations: { enabled: true, speed: 320 },
         fontFamily: '"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif',
       },
-      colors: [color],
+      colors: palette,
       stroke: {
         curve: 'monotoneCubic',
-        width: 2,
+        width: isMulti ? 1.6 : 2,
         lineCap: 'round',
       },
       dataLabels: { enabled: false },
@@ -139,7 +162,7 @@ export default function TimeSeriesChart({
         },
       },
       tooltip: {
-        shared: false,
+        shared: isMulti,
         intersect: false,
         followCursor: true,
         x: {
@@ -152,15 +175,21 @@ export default function TimeSeriesChart({
           formatter: (v) => (valueFormatter ? valueFormatter(Number(v)) : Number(v).toFixed(2)),
         },
       },
-      legend: { show: false },
+      legend: {
+        show: isMulti && showLegend,
+        position: "top",
+        horizontalAlign: "left",
+      },
     }),
     [
       axisValueFormatter,
-      color,
       computedMaxY,
       computedMinY,
       firstTs,
+      isMulti,
       lastTs,
+      palette,
+      showLegend,
       xTickAmount,
       valueFormatter,
       yTickAmount,
@@ -196,6 +225,7 @@ export default function TimeSeriesChart({
     // 实时刷新时避免整图重绘与动画闪烁，仅增量更新坐标轴与序列。
     void instanceRef.current.updateOptions(
       {
+        colors: options.colors,
         xaxis: options.xaxis,
         yaxis: options.yaxis,
         series,
@@ -209,7 +239,7 @@ export default function TimeSeriesChart({
   return (
     <div className="spark">
       <div className="spark-title">
-        {showTitleValue
+        {showTitleValue && !isMulti
           ? `${title} · ${valueFormatter ? valueFormatter(latest) : latest.toFixed(2)}`
           : title}
       </div>

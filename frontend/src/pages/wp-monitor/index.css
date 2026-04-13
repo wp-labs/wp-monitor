@@ -1394,6 +1394,13 @@ body {
     font-size: 11px;
 }
 
+.scope-empty-hint {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #64748b;
+    text-align: center;
+}
+
 .error {
     color: #b91c1c;
 }
