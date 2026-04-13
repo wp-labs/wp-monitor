@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ApexCharts, { type ApexOptions } from 'apexcharts';
 import type { TimePoint } from '../../types/monitor';
 
@@ -36,8 +36,32 @@ export default function TimeSeriesChart({
   showRangeMeta = true,
 }: Props) {
   const latest = points[points.length - 1]?.value ?? 0;
+  const firstTs = points[0] ? new Date(points[0].ts).getTime() : undefined;
+  const lastTs = points[points.length - 1]
+    ? new Date(points[points.length - 1].ts).getTime()
+    : undefined;
+  const values = points.map((p) => p.value);
+  const valueMin = values.length > 0 ? Math.min(...values) : undefined;
+  const valueMax = values.length > 0 ? Math.max(...values) : undefined;
+  const computedMinY =
+    typeof minY === 'number'
+      ? minY
+      : typeof valueMin === 'number'
+        ? Math.max(0, valueMin * 0.95)
+        : undefined;
+  const computedMaxY =
+    typeof valueMax === 'number'
+      ? Math.max(valueMax * 1.05, (computedMinY ?? 0) + 1)
+      : undefined;
   const chartRef = useRef<HTMLDivElement | null>(null);
   const instanceRef = useRef<ApexCharts | null>(null);
+  const [chartWidth, setChartWidth] = useState(0);
+  const xTickAmount = useMemo(() => {
+    const baseWidth = chartWidth > 0 ? chartWidth : 560;
+    const ticksByWidth = Math.max(4, Math.min(12, Math.floor(baseWidth / 88)));
+    const maxTicksByPoints = points.length > 0 ? Math.max(2, points.length) : 4;
+    return Math.min(ticksByWidth, maxTicksByPoints);
+  }, [chartWidth, points.length]);
 
   const series = useMemo(
     () => [
@@ -77,7 +101,9 @@ export default function TimeSeriesChart({
       },
       xaxis: {
         type: 'datetime',
-        tickAmount: 4,
+        min: firstTs,
+        max: lastTs,
+        tickAmount: xTickAmount,
         labels: {
           show: true,
           style: { colors: '#7f94b4', fontSize: '10px' },
@@ -97,7 +123,8 @@ export default function TimeSeriesChart({
         axisTicks: { color: '#cfdcf1' },
       },
       yaxis: {
-        min: minY,
+        min: computedMinY,
+        max: computedMaxY,
         tickAmount: yTickAmount,
         forceNiceScale: true,
         labels: {
@@ -127,7 +154,17 @@ export default function TimeSeriesChart({
       },
       legend: { show: false },
     }),
-    [axisValueFormatter, color, minY, valueFormatter, yTickAmount],
+    [
+      axisValueFormatter,
+      color,
+      computedMaxY,
+      computedMinY,
+      firstTs,
+      lastTs,
+      xTickAmount,
+      valueFormatter,
+      yTickAmount,
+    ],
   );
 
   useEffect(() => {
@@ -143,14 +180,31 @@ export default function TimeSeriesChart({
   }, []);
 
   useEffect(() => {
-    if (!instanceRef.current) return;
-    void instanceRef.current.updateOptions(options, false, true, false);
-  }, [options]);
+    if (!chartRef.current) return;
+    setChartWidth(chartRef.current.clientWidth || 0);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      setChartWidth(entry.contentRect.width || 0);
+    });
+    observer.observe(chartRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!instanceRef.current) return;
-    void instanceRef.current.updateSeries(series, true);
-  }, [series]);
+    // 实时刷新时避免整图重绘与动画闪烁，仅增量更新坐标轴与序列。
+    void instanceRef.current.updateOptions(
+      {
+        xaxis: options.xaxis,
+        yaxis: options.yaxis,
+        series,
+      },
+      false,
+      false,
+      false,
+    );
+  }, [options, series]);
 
   return (
     <div className="spark">
