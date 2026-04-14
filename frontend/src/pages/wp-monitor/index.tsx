@@ -173,6 +173,7 @@ export default function WpMonitorPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [toastVisible, setToastVisible] = useState(false);
+  const [toastPhase, setToastPhase] = useState<"enter" | "leave">("enter");
 
   const [selectedNode, setSelectedNode] = useState("");
   const [hoveredNode, setHoveredNode] = useState("");
@@ -218,6 +219,7 @@ export default function WpMonitorPage() {
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [refreshIntervalSec, setRefreshIntervalSec] = useState(5);
   const [refreshIntervalInput, setRefreshIntervalInput] = useState("5");
+  const [refreshSpin, setRefreshSpin] = useState(false);
   const [detailTrendAutoRefresh, setDetailTrendAutoRefresh] = useState(true);
 
   const [parseQuery, setParseQuery] = useState("");
@@ -225,6 +227,9 @@ export default function WpMonitorPage() {
   const [parseSearchActiveIndex, setParseSearchActiveIndex] = useState(0);
   const parseSearchRef = useRef<HTMLDivElement | null>(null);
   const detailPanelRef = useRef<HTMLElement | null>(null);
+  const toastAutoCloseTimerRef = useRef<number | null>(null);
+  const toastCloseTimerRef = useRef<number | null>(null);
+  const refreshSpinTimerRef = useRef<number | null>(null);
   const resizeStateRef = useRef<{ startY: number; startHeight: number } | null>(
     null,
   );
@@ -238,6 +243,37 @@ export default function WpMonitorPage() {
       ? Math.floor(window.innerHeight * 0.9)
       : Math.floor(window.innerHeight * 0.86);
     return Math.min(maxHeight, Math.max(minHeight, h));
+  }, []);
+
+  const clearToastTimers = useCallback(() => {
+    if (toastAutoCloseTimerRef.current !== null) {
+      window.clearTimeout(toastAutoCloseTimerRef.current);
+      toastAutoCloseTimerRef.current = null;
+    }
+    if (toastCloseTimerRef.current !== null) {
+      window.clearTimeout(toastCloseTimerRef.current);
+      toastCloseTimerRef.current = null;
+    }
+  }, []);
+
+  const hideToast = useCallback((clearError: boolean) => {
+    clearToastTimers();
+    setToastPhase("leave");
+    toastCloseTimerRef.current = window.setTimeout(() => {
+      setToastVisible(false);
+      setToastPhase("enter");
+      if (clearError) setError("");
+    }, 150);
+  }, [clearToastTimers]);
+
+  const triggerRefreshSpin = useCallback(() => {
+    if (refreshSpinTimerRef.current !== null) {
+      window.clearTimeout(refreshSpinTimerRef.current);
+    }
+    setRefreshSpin(true);
+    refreshSpinTimerRef.current = window.setTimeout(() => {
+      setRefreshSpin(false);
+    }, 300);
   }, []);
 
   async function loadSnapshot(start = startTime, end = endTime) {
@@ -257,6 +293,7 @@ export default function WpMonitorPage() {
 
   async function refreshMetricsOnly() {
     if (!snapshot) return;
+    triggerRefreshSpin();
     try {
       const ids = collectAllNodeIds(snapshot);
       // 自动刷新时保持窗口长度恒定，避免仅更新 end_time 导致时间范围持续漂移。
@@ -327,16 +364,26 @@ export default function WpMonitorPage() {
 
   useEffect(() => {
     if (!error) {
-      setToastVisible(false);
+      if (toastVisible) hideToast(false);
       return;
     }
+    clearToastTimers();
     setToastVisible(true);
-    const timer = window.setTimeout(() => {
-      setToastVisible(false);
-      setError("");
+    setToastPhase("enter");
+    toastAutoCloseTimerRef.current = window.setTimeout(() => {
+      hideToast(true);
     }, 2800);
-    return () => window.clearTimeout(timer);
-  }, [error]);
+    return clearToastTimers;
+  }, [clearToastTimers, error, hideToast, toastVisible]);
+
+  useEffect(() => {
+    return () => {
+      clearToastTimers();
+      if (refreshSpinTimerRef.current !== null) {
+        window.clearTimeout(refreshSpinTimerRef.current);
+      }
+    };
+  }, [clearToastTimers]);
 
   const nodesCount = useMemo(() => {
     if (!snapshot) return 0;
@@ -398,6 +445,32 @@ export default function WpMonitorPage() {
     );
   }, [snapshot]);
   const missPageItems = useMemo(() => missLogs, [missLogs]);
+  const detailNodePillType = useMemo(() => {
+    if (!selectedNode) return "generic";
+    if (snapshot?.miss.id === selectedNode) return "miss";
+    if (selectedNode === "__source__") return "source";
+    if (selectedNode === "__parse__") return "parse";
+    if (selectedNode === "__sink__") return "sink";
+    if (detail?.node_type === "source") return "source";
+    if (detail?.node_type === "parse") return "parse";
+    if (detail?.node_type === "sink") return "sink";
+    if (snapshot?.sources.some((n) => n.id === selectedNode)) return "source";
+    if (
+      snapshot?.parses.some(
+        (p) =>
+          p.id === selectedNode || p.logs.some((log) => log.id === selectedNode),
+      )
+    )
+      return "parse";
+    if (
+      snapshot?.sinks.some(
+        (g) =>
+          g.id === selectedNode || g.sinks.some((sink) => sink.id === selectedNode),
+      )
+    )
+      return "sink";
+    return "generic";
+  }, [detail?.node_type, selectedNode, snapshot]);
 
   useEffect(() => {
     if (
@@ -1027,7 +1100,18 @@ export default function WpMonitorPage() {
       }
     >
       <div className="title-wrap">
-        <div className="title">WP MONITOR</div>
+        <div className="title-head">
+          <div className="title-logo-shell" aria-hidden="true">
+            <img
+              className="title-logo"
+              src="/asset/wp-monitor-logo.png"
+              alt="WP Monitor logo"
+            />
+          </div>
+          <div className="title-brand">
+            <div className="title">Wp Monitor</div>
+          </div>
+        </div>
         <div className="toolbar-right">
           <div className="wd-quick-inline">
             {QUICK_RANGES.map((r) => (
@@ -1088,6 +1172,10 @@ export default function WpMonitorPage() {
           </button>
           <span className="wd-chip wd-refresh-chip">
             <span className="wd-time-field-label">自动刷新</span>
+            <span
+              className={`refresh-live-dot ${autoRefreshEnabled ? "on" : "off"} ${refreshSpin ? "spin" : ""}`}
+              aria-hidden="true"
+            />
             <input
               className="refresh-interval-input wd-refresh-input"
               type="number"
@@ -1103,15 +1191,18 @@ export default function WpMonitorPage() {
         </div>
       </div>
       {toastVisible && error && (
-        <div className="error-toast" role="alert" aria-live="assertive">
-          <span className="error-toast-icon">!</span>
+        <div
+          className={`error-toast ${toastPhase === "leave" ? "leave" : "enter"}`}
+          role="alert"
+          aria-live="assertive"
+        >
+          <span className="error-toast-icon" aria-hidden="true" />
           <span className="error-toast-text">{error}</span>
           <button
             className="error-toast-close"
             type="button"
             onClick={() => {
-              setToastVisible(false);
-              setError("");
+              hideToast(true);
             }}
           >
             ×
@@ -1119,7 +1210,18 @@ export default function WpMonitorPage() {
         </div>
       )}
 
-      {loading && <p>加载中...</p>}
+      {loading && !snapshot && (
+        <div className="loading-skeleton" aria-hidden="true">
+          {[0, 1, 2].map((lane) => (
+            <section key={lane} className="skeleton-lane">
+              <div className="skeleton-title shimmer" />
+              <div className="skeleton-card shimmer" />
+              <div className="skeleton-card shimmer" />
+              <div className="skeleton-card shimmer" />
+            </section>
+          ))}
+        </div>
+      )}
 
       {snapshot && (
         <div className="canvas" id="canvas">
@@ -1149,10 +1251,9 @@ export default function WpMonitorPage() {
                     onClick={() => void openDetail(n.id)}
                   >
                     <div className="node-name">{n.name}</div>
-                    <div className="metric">
-                      {fmtRate(n.metrics.log_rate_eps)}
-                      <br />
-                      {fmtCount(n.metrics.log_count)}
+                    <div className="metric-badges">
+                      <span className="metric-badge">速率 {fmtRate(n.metrics.log_rate_eps)}</span>
+                      <span className="metric-badge">数量 {fmtCount(n.metrics.log_count)}</span>
                     </div>
                   </article>
                 ))}
@@ -1306,9 +1407,13 @@ export default function WpMonitorPage() {
                             >
                               <div className="item-head">
                                 <div className="node-name">{l.name}</div>
-                                <div className="metric-inline">
-                                  {fmtRate(l.metrics.log_rate_eps)} /{" "}
-                                  {fmtCount(l.metrics.log_count)}
+                                <div className="metric-inline-badges">
+                                  <span className="metric-inline-badge">
+                                    速率 {fmtRate(l.metrics.log_rate_eps)}
+                                  </span>
+                                  <span className="metric-inline-badge">
+                                    数量 {fmtCount(l.metrics.log_count)}
+                                  </span>
                                 </div>
                               </div>
                             </article>
@@ -1331,12 +1436,11 @@ export default function WpMonitorPage() {
                 >
                   <div className="node-name">{snapshot.miss.name}</div>
                   <div className="node-sub">未命中任何 WPL 规则</div>
-                  <div className="metric">
-                    {fmtRate(snapshot.miss.metrics.log_rate_eps)} /{" "}
-                    {fmtCount(snapshot.miss.metrics.log_count)}
-                    <br />
-                    (不流向任何输出)
+                  <div className="metric-badges">
+                    <span className="metric-badge">速率 {fmtRate(snapshot.miss.metrics.log_rate_eps)}</span>
+                    <span className="metric-badge">数量 {fmtCount(snapshot.miss.metrics.log_count)}</span>
                   </div>
+                  <div className="node-sub">(不流向任何输出)</div>
                 </article>
               </div>
             </section>
@@ -1428,9 +1532,13 @@ export default function WpMonitorPage() {
                             >
                               <div className="item-head">
                                 <div className="node-name">{s.sink_name}</div>
-                                <div className="metric-inline">
-                                  {fmtRate(s.metrics.log_rate_eps)} /{" "}
-                                  {fmtCount(s.metrics.log_count)}
+                                <div className="metric-inline-badges">
+                                  <span className="metric-inline-badge">
+                                    速率 {fmtRate(s.metrics.log_rate_eps)}
+                                  </span>
+                                  <span className="metric-inline-badge">
+                                    数量 {fmtCount(s.metrics.log_count)}
+                                  </span>
                                 </div>
                               </div>
                             </article>
@@ -1463,7 +1571,9 @@ export default function WpMonitorPage() {
           <div className="detail-panel-head-left">
             <div className="detail-panel-title">节点详情</div>
             {detailNodePill && (
-              <span className="detail-node-pill">{detailNodePill}</span>
+              <span className={`detail-node-pill detail-node-pill--${detailNodePillType}`}>
+                {detailNodePill}
+              </span>
             )}
           </div>
           <div className="detail-panel-head-right">
