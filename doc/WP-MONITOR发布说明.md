@@ -1,5 +1,7 @@
 # Wp-Monitor 发布说明
 
+![Wp-Monitor](./asset/Wp-Monitor.jpg)
+
 ## 1. 文档说明
 
 本文档用于说明 Wp-Monitor 这个应用的用途、适用场景、使用方式，以及正式使用前需要完成的准备工作。
