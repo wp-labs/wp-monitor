@@ -654,6 +654,45 @@ body {
     font-weight: 700;
 }
 
+.lane-title-clickable {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    min-height: 30px;
+    padding: 0 12px 0 14px;
+    border: 1px solid #dbe5f3;
+    border-radius: 999px;
+    background: #f8fafc;
+    color: #334155;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.18s ease;
+}
+
+.lane-title-clickable:hover {
+    border-color: #93c5fd;
+    background: #eff6ff;
+    color: #1d4ed8;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.14);
+}
+
+.lane-title-clickable.selected {
+    background: #eaf2ff;
+    border-color: #93c5fd;
+    color: #1e40af;
+}
+
+.lane-title-clickable.selected::before {
+    content: "";
+    position: absolute;
+    left: 6px;
+    top: 6px;
+    bottom: 6px;
+    width: 3px;
+    border-radius: 999px;
+    background: #3b82f6;
+}
+
 .lane-actions {
     display: inline-flex;
     align-items: center;
@@ -808,6 +847,7 @@ body {
 }
 
 .package {
+    position: relative;
     background: var(--package-bg);
     border: 1px solid var(--package-border);
     border-radius: var(--radius-lg);
@@ -815,6 +855,31 @@ body {
     margin-bottom: 14px;
     cursor: pointer;
     box-shadow: 0 4px 12px rgba(139, 92, 246, 0.1);
+    transition: all 0.18s ease;
+}
+
+.package:hover {
+    border-color: #c4b5fd;
+    background: #faf5ff;
+    box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.16);
+    transform: translateY(-1px);
+}
+
+.package.selected {
+    border-color: #a78bfa;
+    background: #f5f3ff;
+    box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.2);
+}
+
+.package.selected::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 10px;
+    bottom: 10px;
+    width: 4px;
+    border-radius: 0 999px 999px 0;
+    background: #8b5cf6;
 }
 
 .package-title {
@@ -823,11 +888,59 @@ body {
     color: #6d28d9;
 }
 
+.package-title-clickable {
+    display: inline-flex;
+    align-items: center;
+    min-height: 26px;
+    padding: 0 8px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: rgba(139, 92, 246, 0.06);
+    color: #6d28d9;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.18s ease;
+}
+
+.package:hover .package-title-clickable {
+    border-color: #ddd6fe;
+    background: rgba(139, 92, 246, 0.12);
+    color: #5b21b6;
+    box-shadow: none;
+}
+
+.package-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+.package-head-main {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
 .package-summary {
     font-size: 13px;
     color: var(--text-sub);
     margin-top: 3px;
     font-family: var(--font-mono);
+}
+
+.package-summary-toggle {
+    border: 0;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+    color: #7c3aed;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.package-summary-toggle:hover {
+    color: #6d28d9;
+    text-decoration: underline;
 }
 
 .log-list {
@@ -848,6 +961,7 @@ body {
 }
 
 .group {
+    position: relative;
     background: var(--group-bg);
     border: 1px solid var(--group-border);
     border-radius: var(--radius-lg);
@@ -861,6 +975,37 @@ body {
     font-size: 16px;
     font-weight: 700;
     color: #0369a1;
+}
+
+.group-title-clickable {
+    display: inline-flex;
+    align-items: center;
+    min-height: 26px;
+    padding: 0 8px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: rgba(14, 165, 233, 0.08);
+    color: #0369a1;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.18s ease;
+}
+
+.group:hover .group-title-clickable {
+    border-color: #bfdbfe;
+    background: rgba(14, 165, 233, 0.14);
+    color: #075985;
+}
+
+.group.selected::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 10px;
+    bottom: 10px;
+    width: 4px;
+    border-radius: 0 999px 999px 0;
+    background: #0ea5e9;
 }
 
 .sink-list {
@@ -911,6 +1056,12 @@ body {
 .sink-item.selected {
     border-color: #94a3b8;
     box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.2);
+}
+
+.package.selected {
+    border-color: #a78bfa;
+    background: #f5f3ff;
+    box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.2);
 }
 
 .item-head {

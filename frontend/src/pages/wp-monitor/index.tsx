@@ -905,9 +905,6 @@ export default function WpMonitorPage() {
   }
 
   async function onSelectParsePackage(packageId: string, packageName: string) {
-    setExpandedPackages((prev) =>
-      prev.includes(packageId) ? prev : [...prev, packageId],
-    );
     setParseQuery(packageName);
     setParseSearchOpen(false);
     await openParseTimeseries(
@@ -919,14 +916,11 @@ export default function WpMonitorPage() {
   }
 
   async function onSelectParseLog(
-    packageId: string,
+    _packageId: string,
     logId: string,
     packageName: string,
     logName: string,
   ) {
-    setExpandedPackages((prev) =>
-      prev.includes(packageId) ? prev : [...prev, packageId],
-    );
     setParseQuery(`${packageName} / ${logName}`);
     setParseSearchOpen(false);
     await openDetail(logId);
@@ -1133,7 +1127,7 @@ export default function WpMonitorPage() {
             <section className="lane">
               <div className="lane-head">
                 <div
-                  className="lane-title"
+                  className={`lane-title lane-title-clickable ${selectedNode === "__source__" ? "selected" : ""}`}
                   onClick={() =>
                     void openParseTimeseries(
                       "source",
@@ -1141,7 +1135,6 @@ export default function WpMonitorPage() {
                       "来源层全部节点趋势",
                     )
                   }
-                  style={{ cursor: "pointer" }}
                 >
                   来源层
                 </div>
@@ -1169,7 +1162,7 @@ export default function WpMonitorPage() {
             <section className="lane">
               <div className="lane-head">
                 <div
-                  className="lane-title"
+                  className={`lane-title lane-title-clickable ${selectedNode === "__parse__" ? "selected" : ""}`}
                   onClick={() =>
                     void openParseTimeseries(
                       "parse",
@@ -1177,7 +1170,6 @@ export default function WpMonitorPage() {
                       "Parse 层全部节点趋势",
                     )
                   }
-                  style={{ cursor: "pointer" }}
                 >
                   Parse
                 </div>
@@ -1257,31 +1249,42 @@ export default function WpMonitorPage() {
               <div className="lane-scroll">
                 {snapshot.parses.map((p) => {
                   const isExpanded = expandedPackages.includes(p.id);
+                  const handlePackageClick = () => {
+                    void openParseTimeseries(
+                      "parse",
+                      p.id,
+                      `Package ${p.package_name} 节点趋势`,
+                      p.package_name,
+                    );
+                  };
                   return (
                     <section
                       key={p.id}
                       className={nodeClass("package card", p.id, "package")}
                       onMouseEnter={() => setHoveredNode(p.id)}
                       onMouseLeave={() => setHoveredNode("")}
+                      onClick={handlePackageClick}
                     >
-                      <div
-                        className="package-head"
-                        onClick={() => {
-                          togglePackage(p.id);
-                          void openParseTimeseries(
-                            "parse",
-                            p.id,
-                            `Package ${p.package_name} 节点趋势`,
-                            p.package_name,
-                          );
-                        }}
-                      >
-                        <div className="package-title">{p.package_name}</div>
-                        <div className="package-summary">
-                          {fmtRate(p.metrics.log_rate_eps)} /{" "}
-                          {fmtCount(p.metrics.log_count)} (汇总) ·{" "}
-                          {p.logs.length} 个日志类型 ·{" "}
-                          {isExpanded ? "点击收起" : "点击展开"}
+                      <div className="package-head">
+                        <div className="package-head-main">
+                          <div className="package-title package-title-clickable">
+                            {p.package_name}
+                          </div>
+                          <div className="package-summary">
+                            {fmtRate(p.metrics.log_rate_eps)} /{" "}
+                            {fmtCount(p.metrics.log_count)} (汇总) ·{" "}
+                            {p.logs.length} 个日志类型 ·{" "}
+                            <button
+                              type="button"
+                              className="package-summary-toggle"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                togglePackage(p.id);
+                              }}
+                            >
+                              {isExpanded ? "点击收起" : "点击展开"}
+                            </button>
+                          </div>
                         </div>
                       </div>
                       {isExpanded && (
@@ -1296,7 +1299,10 @@ export default function WpMonitorPage() {
                               )}
                               onMouseEnter={() => setHoveredNode(l.id)}
                               onMouseLeave={() => setHoveredNode("")}
-                              onClick={() => void openDetail(l.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void openDetail(l.id);
+                              }}
                             >
                               <div className="item-head">
                                 <div className="node-name">{l.name}</div>
@@ -1338,7 +1344,7 @@ export default function WpMonitorPage() {
             <section className="lane">
               <div className="lane-head">
                 <div
-                  className="lane-title"
+                  className={`lane-title lane-title-clickable ${selectedNode === "__sink__" ? "selected" : ""}`}
                   onClick={() =>
                     void openParseTimeseries(
                       "sink",
@@ -1346,9 +1352,8 @@ export default function WpMonitorPage() {
                       "输出层全部节点趋势",
                     )
                   }
-                  style={{ cursor: "pointer" }}
                 >
-                  输出层（输出分组包含目标）
+                  输出层 
                 </div>
                 <div className="lane-actions">
                   <button
@@ -1370,30 +1375,41 @@ export default function WpMonitorPage() {
               <div className="lane-scroll">
                 {snapshot.sinks.map((g) => {
                   const isExpanded = expandedGroups.includes(g.id);
+                  const handleGroupClick = () => {
+                    void openParseTimeseries(
+                      "sink",
+                      g.id,
+                      `Sink Group ${g.sink_group} 节点趋势`,
+                      undefined,
+                      g.sink_group,
+                    );
+                  };
                   return (
                     <section
                       key={g.id}
                       className={nodeClass("group card", g.id, "group")}
                       onMouseEnter={() => setHoveredNode(g.id)}
                       onMouseLeave={() => setHoveredNode("")}
+                      onClick={handleGroupClick}
                     >
-                      <div
-                        onClick={() => {
-                          toggleGroup(g.id);
-                          void openParseTimeseries(
-                            "sink",
-                            g.id,
-                            `Sink Group ${g.sink_group} 节点趋势`,
-                            undefined,
-                            g.sink_group,
-                          );
-                        }}
-                      >
-                        <div className="group-title">{g.sink_group}</div>
+                      <div>
+                        <div className="group-title group-title-clickable">
+                          {g.sink_group}
+                        </div>
                         <div className="package-summary">
                           {fmtRate(g.metrics.log_rate_eps)} /{" "}
                           {fmtCount(g.metrics.log_count)} · {g.sinks.length}{" "}
-                          个输出目标 · {isExpanded ? "点击收起" : "点击展开"}
+                          个输出目标 ·{" "}
+                          <button
+                            type="button"
+                            className="package-summary-toggle"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleGroup(g.id);
+                            }}
+                          >
+                            {isExpanded ? "点击收起" : "点击展开"}
+                          </button>
                         </div>
                       </div>
                       {isExpanded && (
