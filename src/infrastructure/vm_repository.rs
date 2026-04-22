@@ -140,6 +140,12 @@ impl VmHttpRepository {
         out
     }
 
+    /// 生成 VictoriaMetrics counter 增量表达式。
+    /// `increase_pure` 会把窗口内首次出现的 counter 视为从 0 起步，避免漏掉首批样本。
+    fn counter_increase_expr(metric_selector: &str, window: &str) -> String {
+        format!(r#"increase_pure({metric_selector}[{window}])"#)
+    }
+
     /// 按时间范围与目标点数自动计算 query_range 的步长（Grafana 风格）。
     /// 返回值：(step_str, rate_window_str, step_secs)
     ///
@@ -592,20 +598,26 @@ impl VmRepository for VmHttpRepository {
         let window = format!("{}s", (at_end - at_start).max(1));
 
         let source_count_q = format!(
-            r#"sum by (source_type, source_name) (increase(wparse_receive_data[{}]))"#,
-            window
+            r#"sum by (source_type, source_name) ({})"#,
+            Self::counter_increase_expr("wparse_receive_data", &window)
         );
         let parse_count_q = format!(
-            r#"sum by (package_name, rule_name) (increase(wparse_parse_all[{}]))"#,
-            window
+            r#"sum by (package_name, rule_name) ({})"#,
+            Self::counter_increase_expr("wparse_parse_all", &window)
         );
         let sink_group_count_q = format!(
-            r#"sum by (sink_group) (increase(wparse_send_to_sink{{sink_group!~"monitor|default|miss|residue|error"}}[{}]))"#,
-            window
+            r#"sum by (sink_group) ({})"#,
+            Self::counter_increase_expr(
+                r#"wparse_send_to_sink{sink_group!~"monitor|default|miss|residue|error"}"#,
+                &window,
+            )
         );
         let sink_count_q = format!(
-            r#"sum by (sink_group, sink_name) (increase(wparse_send_to_sink{{sink_group!~"monitor|default|miss|residue|error"}}[{}]))"#,
-            window
+            r#"sum by (sink_group, sink_name) ({})"#,
+            Self::counter_increase_expr(
+                r#"wparse_send_to_sink{sink_group!~"monitor|default|miss|residue|error"}"#,
+                &window,
+            )
         );
 
         let (source_count, parse_count, sink_group_count, sink_count) = tokio::try_join!(
@@ -671,8 +683,11 @@ impl VmRepository for VmHttpRepository {
             "vm_repository.miss_metrics.start"
         );
         let total_q = format!(
-            r#"sum(increase(wparse_send_to_sink{{sink_group="miss",sink_name="victorialogs_output"}}[{}s]))"#,
-            (at_end - at_start).max(1)
+            r#"sum({})"#,
+            Self::counter_increase_expr(
+                r#"wparse_send_to_sink{sink_group="miss",sink_name="victorialogs_output"}"#,
+                &format!("{}s", (at_end - at_start).max(1)),
+            )
         );
         let end_rows = self
             .instant_query(&total_q, at_end)
@@ -749,9 +764,14 @@ impl VmRepository for VmHttpRepository {
                 let source_name = parts[1];
                 let source_type = Self::escape_promql_string(source_type);
                 let source_name = Self::escape_promql_string(source_name);
+                let selector = format!(
+                    r#"wparse_receive_data{{source_type="{}",source_name="{}"}}"#,
+                    source_type, source_name
+                );
                 format!(
-                    r#"sum(increase(wparse_receive_data{{source_type="{}",source_name="{}"}}[{}]))/{}"#,
-                    source_type, source_name, rate_window, rate_window_secs
+                    r#"sum({})/{}"#,
+                    Self::counter_increase_expr(&selector, &rate_window),
+                    rate_window_secs
                 )
             }
             "log" if parts.len() >= 2 => {
@@ -759,17 +779,27 @@ impl VmRepository for VmHttpRepository {
                 let rule = parts[1];
                 let package = Self::escape_promql_string(package);
                 let rule = Self::escape_promql_string(rule);
+                let selector = format!(
+                    r#"wparse_parse_all{{package_name="{}",rule_name="{}"}}"#,
+                    package, rule
+                );
                 format!(
-                    r#"sum(increase(wparse_parse_all{{package_name="{}",rule_name="{}"}}[{}]))/{}"#,
-                    package, rule, rate_window, rate_window_secs
+                    r#"sum({})/{}"#,
+                    Self::counter_increase_expr(&selector, &rate_window),
+                    rate_window_secs
                 )
             }
             "group" if !parts.is_empty() => {
                 let g = parts[0];
                 let g = Self::escape_promql_string(g);
+                let selector = format!(
+                    r#"wparse_send_to_sink{{sink_group="{}",sink_group!~"monitor|default|miss|residue|error"}}"#,
+                    g
+                );
                 format!(
-                    r#"sum(increase(wparse_send_to_sink{{sink_group="{}",sink_group!~"monitor|default|miss|residue|error"}}[{}]))/{}"#,
-                    g, rate_window, rate_window_secs
+                    r#"sum({})/{}"#,
+                    Self::counter_increase_expr(&selector, &rate_window),
+                    rate_window_secs
                 )
             }
             "sink" if parts.len() >= 2 => {
@@ -777,9 +807,14 @@ impl VmRepository for VmHttpRepository {
                 let s = parts[1];
                 let g = Self::escape_promql_string(g);
                 let s = Self::escape_promql_string(s);
+                let selector = format!(
+                    r#"wparse_send_to_sink{{sink_group="{}",sink_name="{}",sink_group!~"monitor|default|miss|residue|error"}}"#,
+                    g, s
+                );
                 format!(
-                    r#"sum(increase(wparse_send_to_sink{{sink_group="{}",sink_name="{}",sink_group!~"monitor|default|miss|residue|error"}}[{}]))/{}"#,
-                    g, s, rate_window, rate_window_secs
+                    r#"sum({})/{}"#,
+                    Self::counter_increase_expr(&selector, &rate_window),
+                    rate_window_secs
                 )
             }
             _ => "vector(0)".to_string(),
@@ -846,8 +881,15 @@ impl VmRepository for VmHttpRepository {
             format!("^{}$", Self::escape_promql_regex(rule_name))
         };
         let query_prom = format!(
-            r#"(sum by (package_name, rule_name) (increase(wparse_parse_all{{package_name=~"{}",rule_name=~"{}"}}[{}])))/{}"#,
-            package_selector, rule_selector, rate_window, rate_window_secs
+            r#"(sum by (package_name, rule_name) ({}))/{}"#,
+            Self::counter_increase_expr(
+                &format!(
+                    r#"wparse_parse_all{{package_name=~"{}",rule_name=~"{}"}}"#,
+                    package_selector, rule_selector
+                ),
+                &rate_window,
+            ),
+            rate_window_secs
         );
         self.fetch_scope_timeseries_internal(query, max_data_points, query_prom, |metric| {
             let package_name = metric
@@ -874,8 +916,9 @@ impl VmRepository for VmHttpRepository {
             .parse::<i64>()
             .unwrap_or(0);
         let query_prom = format!(
-            r#"(sum by (source_type, source_name) (increase(wparse_receive_data[{}])))/{}"#,
-            rate_window, rate_window_secs
+            r#"(sum by (source_type, source_name) ({}))/{}"#,
+            Self::counter_increase_expr("wparse_receive_data", &rate_window),
+            rate_window_secs
         );
         self.fetch_scope_timeseries_internal(query, max_data_points, query_prom, |metric| {
             let source_type = metric
@@ -906,8 +949,15 @@ impl VmRepository for VmHttpRepository {
             .map(|g| format!(r#",sink_group=~"^{}$""#, Self::escape_promql_regex(g)))
             .unwrap_or_default();
         let query_prom = format!(
-            r#"(sum by (sink_group, sink_name) (increase(wparse_send_to_sink{{sink_group!~"monitor|default|miss|residue|error"{} }}[{}])))/{}"#,
-            group_selector, rate_window, rate_window_secs
+            r#"(sum by (sink_group, sink_name) ({}))/{}"#,
+            Self::counter_increase_expr(
+                &format!(
+                    r#"wparse_send_to_sink{{sink_group!~"monitor|default|miss|residue|error"{} }}"#,
+                    group_selector
+                ),
+                &rate_window,
+            ),
+            rate_window_secs
         );
         self.fetch_scope_timeseries_internal(query, max_data_points, query_prom, |metric| {
             let group = metric
