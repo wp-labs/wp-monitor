@@ -25,3 +25,13 @@ services:
       - "9428:9428"
       - "9899:9899"
     restart: unless-stopped
+  wp-monitor:
+    image: ghcr.io/wp-labs/wp-monitor:0.3.10-alpha
+    container_name: wp-monitor
+    restart: unless-stopped
+    ports:
+      - "18080:18080"
+    environment:
+      APP_CONFIG_PATH: config/app.toml
+    volumes:
+      - ./config/app.toml:/app/config/app.toml:ro

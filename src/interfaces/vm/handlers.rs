@@ -6,6 +6,7 @@ use actix_web::{
     error::{ErrorBadRequest, ErrorInternalServerError},
     get, web,
 };
+use serde::Deserialize;
 use tracing::{debug, error};
 
 /// HTTP 查询参数：通用时间窗口。
@@ -32,6 +33,7 @@ pub struct TimeSeriesRequest {
     pub end_time: String,
     #[allow(dead_code)]
     pub step: Option<String>,
+    pub max_data_points: Option<usize>,
 }
 
 /// 获取全量分层快照。
@@ -138,6 +140,7 @@ pub async fn get_node_timeseries(
         node_id = %node_id,
         start_time = %req.start_time,
         end_time = %req.end_time,
+        max_data_points = req.max_data_points.unwrap_or(0),
         "vm.handlers.node_timeseries.request"
     );
     let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
@@ -150,14 +153,91 @@ pub async fn get_node_timeseries(
         );
         ErrorBadRequest(e.to_string())
     })?;
-    let data = svc.get_node_timeseries(node_id, query).await.map_err(|e| {
+    let data = svc
+        .get_node_timeseries(node_id, query, req.max_data_points)
+        .await
+        .map_err(|e| {
+            error!(
+                node_id = %node_id,
+                error = %e,
+                "vm.handlers.node_timeseries.failed"
+            );
+            ErrorInternalServerError(e.to_string())
+        })?;
+    Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
+}
+
+/// 获取多个节点的时间序列。
+#[derive(Debug, Deserialize)]
+pub enum TimeSeriesScope {
+    #[serde(rename = "parse")]
+    Parse,
+    #[serde(rename = "source")]
+    Source,
+    #[serde(rename = "sink")]
+    Sink,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NodesTimeSeriesRequest {
+    pub scope: Option<TimeSeriesScope>,
+    pub package_name: Option<String>,
+    pub rule_name: Option<String>,
+    pub sink_group: Option<String>,
+    pub start_time: String,
+    pub end_time: String,
+    pub max_data_points: Option<usize>,
+}
+
+#[get("/nodes/timeseries")]
+pub async fn get_nodes_timeseries(
+    svc: web::Data<LayerService>,
+    req: web::Query<NodesTimeSeriesRequest>,
+) -> Result<HttpResponse> {
+    debug!(
+        start_time = %req.start_time,
+        end_time = %req.end_time,
+        max_data_points = req.max_data_points.unwrap_or(0),
+        "vm.handlers.node_timeseries.request"
+    );
+    let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
         error!(
-            node_id = %node_id,
+            start_time = %req.start_time,
+            end_time = %req.end_time,
             error = %e,
-            "vm.handlers.node_timeseries.failed"
+            "vm.handlers.node_timeseries.invalid_params"
         );
-        ErrorInternalServerError(e.to_string())
+        ErrorBadRequest(e.to_string())
     })?;
+    let scope = req.scope.as_ref().unwrap_or(&TimeSeriesScope::Parse);
+    let data = match scope {
+        TimeSeriesScope::Source => svc
+            .get_source_timeseries(query, req.max_data_points)
+            .await
+            .map_err(|e| {
+                error!(error = %e, "vm.handlers.source_timeseries.failed");
+                ErrorInternalServerError(e.to_string())
+            })?,
+        TimeSeriesScope::Sink => svc
+            .get_sink_timeseries(query, req.sink_group.clone(), req.max_data_points)
+            .await
+            .map_err(|e| {
+                error!(error = %e, "vm.handlers.sink_timeseries.failed");
+                ErrorInternalServerError(e.to_string())
+            })?,
+        TimeSeriesScope::Parse => svc
+            .get_parse_timeseries(
+                query,
+                req.package_name.clone(),
+                req.rule_name.clone(),
+                req.max_data_points,
+            )
+            .await
+            .map_err(|e| {
+                error!(error = %e, "vm.handlers.parse_timeseries.failed");
+                ErrorInternalServerError(e.to_string())
+            })?,
+    };
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }
 

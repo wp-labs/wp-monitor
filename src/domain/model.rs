@@ -135,11 +135,13 @@ pub struct TimePoint {
 pub struct NodeTimeSeries {
     pub node_id: String,
     pub log_rate_eps: Vec<TimePoint>,
+    pub step_secs: i64,
+    pub rate_window_secs: i64,
     pub log_count: Vec<TimePoint>,
 }
 
 /// 标准化时间窗口查询对象。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TimeRangeQuery {
     pub start_time: DateTime<FixedOffset>,
     pub end_time: DateTime<FixedOffset>,

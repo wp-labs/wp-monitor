@@ -108,6 +108,8 @@ export interface TimePoint {
 export interface NodeTimeSeries {
   node_id: string;
   log_rate_eps: TimePoint[];
+  step_secs?: number;
+  rate_window_secs?: number;
   log_count: TimePoint[];
 }
 
