@@ -1,11 +1,11 @@
-extern mod rust,ver,git { path = "./_gal/mods";  }
+extern mod rust,git,ver { path = "${GXL_START_ROOT}/_gal/mods"; }
 
 mod envs  {
    env _common  : rust_env.init   {
     root      = ".";
     target_name = "";
-    prj_key   = "wp-editor" ;
-    DIST_REPO = "unknow";
+    prj_key   = "wp-monitor" ;
+    PATCH_FLAG = "#";
 
   }
 
@@ -14,6 +14,9 @@ mod envs  {
   }
   #[usage(desp="use debug ",color="blue")]
   env release :  _common,rust_env.release{
+  }
+  env patch  {
+        PATCH_FLAG = " ";
   }
 
 
@@ -47,7 +50,7 @@ mod main  {
     }
 
   #[task(name="${ENV_PRJ_KEY}@build")]
-  flow ver.use | conf | rust_flow.build | @build | _pub_local {
+  flow ver.use | conf | rust_flow.build | @build  {
       gx.echo(  "${MAIN_HOME_BIN}" );
       //os.path (  "${MAIN_HOME_BIN}" );
   }
@@ -58,24 +61,4 @@ mod main  {
   flow build  |   @test  {
     gx.cmd ( "cargo test --all ${ENV_BUILD_FLAG}", log : "1" , out:"true"  );
   }
-
-  #[task(name="pub to local")]
-  flow _pub_local   {
-
-    gx.cmd (  "mkdir -p ${MAIN_HOME_BIN}" );
-    gx.cmd (  "cp ${MAIN_BLD_BINS}/wparse ${MAIN_HOME_BIN}/"  );
-    gx.cmd (  "cp ${MAIN_BLD_BINS}/wpgen ${MAIN_HOME_BIN}/"  );
-    gx.cmd (  "cp ${MAIN_BLD_BINS}/wproj ${MAIN_HOME_BIN}/"  );
-    gx.cmd (  "cp ${MAIN_BLD_BINS}/wprescue ${MAIN_HOME_BIN}/"  );
-  }
-  flow ci_msg {
-    gx.cmd("git diff > code_diff.txt");
-    gx.ai_chat( "Generate a brief summary for the git commit message", prompt_file : "./code_diff.txt");
-  }
-
-    flow dev_ai {
-        //gx.ai_regist(flow :"ci_msg", desc: "gen git commit message");
-        //gx.ai_task( task: "生成代码提交说明", role : "developer" ) ;
-    }
-
 }
