@@ -34,7 +34,7 @@ services:
 
   victoria-logs:
     container_name: victoria-logs
-    image: victoriametrics/victoria-logs:v1.43.0
+    image: victoriametrics/victoria-logs:v1.43.0 #@gxl:set(version)
     ports:
       - "9428:9428"
     # 数据存储目录,按需开启
