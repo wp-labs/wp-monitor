@@ -34,7 +34,7 @@ services:
 
   victoria-logs:
     container_name: victoria-logs
-    image: "0.4.2" #@gxl:set(version)
+    image: victoriametrics/victoria-logs:v1.43.0
     ports:
       - "9428:9428"
     # 数据存储目录,按需开启
@@ -68,7 +68,7 @@ services:
       start_period: 30s
 
   wp-monitor:
-    image: ghcr.io/wp-labs/wp-monitor:0.4.1-alpha
+    image: "ghcr.io/wp-labs/wp-monitor:0.4.2-alpha" #@gxl:set(images)
     container_name: wp-monitor
     restart: unless-stopped
     ports:

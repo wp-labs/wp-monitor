@@ -17,7 +17,22 @@ mod main   : ver_adm {
   flow _syn_cargo | ver.syn_file {
     SYN_FILE = "${ENV_ROOT}/Cargo.toml";
   }
-  flow _syn_compose | ver.syn_file {
-    SYN_FILE = "${ENV_ROOT}/install/docker/docker-compose.yml";
+  flow _syn_compose | _syn_images {
+    SYN_FILE = "${ENV_ROOT}/install/docker/docker-compose-${GXL_GIT_BRANCH}.yml";
+    if ${GXL_GIT_BRANCH} != "main" {
+        IMAGES =  "ghcr.io/wp-labs/wp-monitor:${VERSION}-${GXL_GIT_BRANCH}";
+    }
+    else {
+        IMAGES =  "ghcr.io/wp-labs/wp-monitor:${VERSION}";
+    }
   }
+    flow _syn_images {
+        gx.patch_file(
+        file   : "${SYN_FILE}",
+        action : "set",
+        marker : "images",
+        value  : r#""${IMAGES}""#
+        );
+    }
+
 }

@@ -2,7 +2,64 @@
 
 set -u
 
-. "$(cd -- "$(dirname -- "$0")/../scripts" && pwd)/compose-common.sh"
+SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
+
+COMPOSE_FILE=""
+COMPOSE_CMD=()
+
+ensure_docker_exists() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "未检测到 docker，请先安装 Docker。" >&2
+    exit 1
+  fi
+
+  if ! docker info >/dev/null 2>&1; then
+    echo "检测到 docker 命令已安装，但 Docker 未启动，请先启动 Docker 后再重试。" >&2
+    exit 1
+  fi
+}
+
+resolve_compose_cmd() {
+  ensure_docker_exists
+
+  if docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD=(docker compose)
+    return 0
+  fi
+
+  if command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE_CMD=(docker-compose)
+    return 0
+  fi
+
+  echo "未检测到 docker compose 或 docker-compose，请先安装 Docker Compose。" >&2
+  exit 1
+}
+
+trim_trailing_cr() {
+  local value="$1"
+  printf '%s' "${value%$'\r'}"
+}
+
+resolve_compose_file() {
+  local channel="${1:-main}"
+
+  case "$channel" in
+    main | alpha | beta)
+      COMPOSE_FILE="$SCRIPT_DIR/docker-compose-${channel}.yml"
+      ;;
+    *)
+      echo "不支持的环境参数: $channel" >&2
+      echo "用法: ./start.sh [alpha|beta]" >&2
+      exit 1
+      ;;
+  esac
+
+  if [[ ! -f "$COMPOSE_FILE" ]]; then
+    echo "未找到 compose 文件: $COMPOSE_FILE" >&2
+    exit 1
+  fi
+}
 
 create_env_if_missing() {
   local env_file="$SCRIPT_DIR/.env"
@@ -103,7 +160,7 @@ print_access_entries() {
 }
 
 main() {
-  find_compose_file
+  resolve_compose_file "${1:-main}"
   resolve_compose_cmd
   create_env_if_missing
   start_compose

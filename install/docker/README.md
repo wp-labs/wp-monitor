@@ -16,13 +16,19 @@ VLOG_MAX_DISK_SPACE_USAGE_BYTES=50GiB
 - `RETENTION_PERIOD`: 指标和日志数据保留时间
 - `VLOG_MAX_DISK_SPACE_USAGE_BYTES`: 日志最大磁盘空间使用量，超过后会触发数据清理
 
+`wp-monitor` 镜像版本由仓库内的 [version.txt](/Users/zuowenjian/devspace/wp-labs/developer/wparse/wp-monitor/version.txt:1) 统一管理，
+并通过版本同步流程写入 [docker-compose-main.yml](/Users/zuowenjian/devspace/wp-labs/developer/wparse/wp-monitor/install/docker/docker-compose-main.yml:71) 等 compose 文件。
+
 ## 安装和启动
 
 ```bash
 #安装
 ./setup.sh
-#启动
+#启动 main
 ./start.sh
+#启动 alpha / beta
+./start.sh alpha
+./start.sh beta
 ```
 
 ## 接入方式
