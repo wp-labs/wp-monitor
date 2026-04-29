@@ -186,7 +186,7 @@ jobs:
       - name: Export Docker compose image bundle
         run: |
           set -euo pipefail
-          PACKAGE_DIR="wp-monitor-${{ github.ref_name }}-docker-images"
+          PACKAGE_PREFIX="wp-monitor-${{ github.ref_name }}-docker-images"
           BUNDLE_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
 
           case "${{ github.ref_name }}" in
@@ -236,8 +236,6 @@ jobs:
 
           printf 'Bundling images:\n%s\n' "${IMAGES[*]}"
 
-          rm -rf "$PACKAGE_DIR-x86_64-linux-gnu" "$PACKAGE_DIR-aarch64-linux-gnu"
-
           for platform in linux/amd64 linux/arm64; do
             suffix="${platform##*/}"
             case "$suffix" in
@@ -253,16 +251,8 @@ jobs:
                 ;;
             esac
 
-            package_dir="$PACKAGE_DIR-$package_label"
-            archive="$package_dir/images.tar"
+            archive="$PACKAGE_PREFIX-$package_label.tar.gz"
             save_images=()
-
-            mkdir -p "$package_dir"
-            cp "$COMPOSE_FILE" "$package_dir/docker-compose.yml"
-            if [[ -f install/docker/.env.example ]]; then
-              cp install/docker/.env.example "$package_dir/.env.example"
-            fi
-            printf '%s\n' "${IMAGES[@]}" > "$package_dir/images.txt"
 
             for image in "${IMAGES[@]}"; do
               if [[ "${image##*/}" == *:* ]]; then
@@ -279,36 +269,7 @@ jobs:
               save_images+=("$arch_image")
             done
 
-            docker save "${save_images[@]}" -o "$archive"
-
-            printf '%s\n' \
-              '#!/usr/bin/env bash' \
-              'set -euo pipefail' \
-              '' \
-              'PACKAGE_DIR="$(cd "$(dirname "$0")" && pwd)"' \
-              'docker load -i "$PACKAGE_DIR/images.tar"' \
-              '' \
-              'while IFS= read -r image; do' \
-              '  if [[ -z "$image" ]]; then' \
-              '    continue' \
-              '  fi' \
-              '' \
-              '  if [[ "${image##*/}" == *:* ]]; then' \
-              '    repo="${image%:*}"' \
-              '    tag="${image##*:}"' \
-              '  else' \
-              '    repo="$image"' \
-              '    tag="latest"' \
-              '  fi' \
-              '' \
-              "  docker tag \"\${repo}:\${tag}-${suffix}\" \"\$image\"" \
-              'done < "$PACKAGE_DIR/images.txt"' \
-              '' \
-              "echo \"Loaded ${suffix} images and restored compose tags.\"" \
-              > "$package_dir/load-images.sh"
-
-            chmod +x "$package_dir/load-images.sh"
-            tar -czf "$package_dir.tar.gz" "$package_dir"
+            docker save "${save_images[@]}" | gzip > "$archive"
           done
 
       - name: Upload Docker compose image bundle
