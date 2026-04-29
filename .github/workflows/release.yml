@@ -187,7 +187,6 @@ jobs:
         run: |
           set -euo pipefail
           PACKAGE_DIR="wp-monitor-${{ github.ref_name }}-docker-images"
-          ARCHIVE="$PACKAGE_DIR/images.tar"
           BUNDLE_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
 
           case "${{ github.ref_name }}" in
@@ -235,85 +234,88 @@ jobs:
             fi
           done
 
-          rm -rf "$PACKAGE_DIR"
-          mkdir -p "$PACKAGE_DIR"
-
-          cp "$COMPOSE_FILE" "$PACKAGE_DIR/docker-compose.yml"
-          if [[ -f install/docker/.env.example ]]; then
-            cp install/docker/.env.example "$PACKAGE_DIR/.env.example"
-          fi
-
-          printf '%s\n' "${IMAGES[@]}" > "$PACKAGE_DIR/images.txt"
           printf 'Bundling images:\n%s\n' "${IMAGES[*]}"
 
-          SAVE_IMAGES=()
-          for image in "${IMAGES[@]}"; do
-            if [[ "${image##*/}" == *:* ]]; then
-              repo="${image%:*}"
-              tag="${image##*:}"
-            else
-              repo="$image"
-              tag="latest"
-            fi
+          rm -rf "$PACKAGE_DIR-x86_64-linux-gnu" "$PACKAGE_DIR-aarch64-linux-gnu"
 
-            for platform in linux/amd64 linux/arm64; do
-              suffix="${platform##*/}"
+          for platform in linux/amd64 linux/arm64; do
+            suffix="${platform##*/}"
+            case "$suffix" in
+              amd64)
+                package_label="x86_64-linux-gnu"
+                ;;
+              arm64)
+                package_label="aarch64-linux-gnu"
+                ;;
+              *)
+                echo "Unsupported platform suffix: $suffix" >&2
+                exit 1
+                ;;
+            esac
+
+            package_dir="$PACKAGE_DIR-$package_label"
+            archive="$package_dir/images.tar"
+            save_images=()
+
+            mkdir -p "$package_dir"
+            cp "$COMPOSE_FILE" "$package_dir/docker-compose.yml"
+            if [[ -f install/docker/.env.example ]]; then
+              cp install/docker/.env.example "$package_dir/.env.example"
+            fi
+            printf '%s\n' "${IMAGES[@]}" > "$package_dir/images.txt"
+
+            for image in "${IMAGES[@]}"; do
+              if [[ "${image##*/}" == *:* ]]; then
+                repo="${image%:*}"
+                tag="${image##*:}"
+              else
+                repo="$image"
+                tag="latest"
+              fi
+
               arch_image="${repo}:${tag}-${suffix}"
               docker pull --platform "$platform" "$image"
               docker tag "$image" "$arch_image"
-              SAVE_IMAGES+=("$arch_image")
+              save_images+=("$arch_image")
             done
+
+            docker save "${save_images[@]}" -o "$archive"
+
+            cat > "$package_dir/load-images.sh" <<EOF
+            #!/usr/bin/env bash
+            set -euo pipefail
+
+            PACKAGE_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+            docker load -i "\$PACKAGE_DIR/images.tar"
+
+            while IFS= read -r image; do
+              if [[ -z "\$image" ]]; then
+                continue
+              fi
+
+              if [[ "\${image##*/}" == *:* ]]; then
+                repo="\${image%:*}"
+                tag="\${image##*:}"
+              else
+                repo="\$image"
+                tag="latest"
+              fi
+
+              docker tag "\${repo}:\${tag}-${suffix}" "\$image"
+            done < "\$PACKAGE_DIR/images.txt"
+
+            echo "Loaded ${suffix} images and restored compose tags."
+            EOF
+
+            chmod +x "$package_dir/load-images.sh"
+            tar -czf "$package_dir.tar.gz" "$package_dir"
           done
-
-          docker save "${SAVE_IMAGES[@]}" -o "$ARCHIVE"
-
-          cat > "$PACKAGE_DIR/load-images.sh" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-
-          PACKAGE_DIR="$(cd "$(dirname "$0")" && pwd)"
-          case "$(uname -m)" in
-            x86_64|amd64)
-              suffix="amd64"
-              ;;
-            aarch64|arm64)
-              suffix="arm64"
-              ;;
-            *)
-              echo "Unsupported architecture: $(uname -m)" >&2
-              exit 1
-              ;;
-          esac
-
-          docker load -i "$PACKAGE_DIR/images.tar"
-
-          while IFS= read -r image; do
-            if [[ -z "$image" ]]; then
-              continue
-            fi
-
-            if [[ "${image##*/}" == *:* ]]; then
-              repo="${image%:*}"
-              tag="${image##*:}"
-            else
-              repo="$image"
-              tag="latest"
-            fi
-
-            docker tag "${repo}:${tag}-${suffix}" "$image"
-          done < "$PACKAGE_DIR/images.txt"
-
-          echo "Loaded images for $suffix and restored compose tags."
-          EOF
-
-          chmod +x "$PACKAGE_DIR/load-images.sh"
-          tar -czf "$PACKAGE_DIR.tar.gz" "$PACKAGE_DIR"
 
       - name: Upload Docker compose image bundle
         uses: actions/upload-artifact@v6
         with:
           name: ${{ github.event.repository.name }}-${{ github.ref_name }}-docker-images
-          path: wp-monitor-${{ github.ref_name }}-docker-images.tar.gz
+          path: wp-monitor-${{ github.ref_name }}-docker-images-*.tar.gz
           if-no-files-found: error
           retention-days: 7
 
