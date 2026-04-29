@@ -255,18 +255,8 @@ jobs:
             save_images=()
 
             for image in "${IMAGES[@]}"; do
-              if [[ "${image##*/}" == *:* ]]; then
-                repo="${image%:*}"
-                tag="${image##*:}"
-              else
-                repo="$image"
-                tag="latest"
-              fi
-
-              arch_image="${repo}:${tag}-${suffix}"
               docker pull --platform "$platform" "$image"
-              docker tag "$image" "$arch_image"
-              save_images+=("$arch_image")
+              save_images+=("$image")
             done
 
             docker save "${save_images[@]}" | gzip > "$archive"
