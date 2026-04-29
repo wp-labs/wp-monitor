@@ -73,7 +73,7 @@ services:
     environment:
       APP_CONFIG_PATH: /app/config/app.toml
     volumes:
-      - ./wp-monitor/config:/app/config/app.toml:ro
+      - ./wp-monitor/config:/app/config:ro
 
 volumes:
   logs_data:
