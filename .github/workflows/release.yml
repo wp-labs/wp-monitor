@@ -166,9 +166,10 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern=v{{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern=v{{major}}
+            type=raw,value=${{ github.ref_name }}
+            # type=semver,pattern=${{ github.ref_name }}
+            # type=semver,pattern=v{{major}}.{{minor}}
+            # type=semver,pattern=v{{major}}
             type=raw,value=latest
 
       - name: Build and push Docker image
@@ -181,6 +182,102 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Export Docker compose image bundle
+        run: |
+          set -euo pipefail
+          PACKAGE_DIR="wp-monitor-${{ github.ref_name }}-docker-images"
+          ARCHIVE="$PACKAGE_DIR/images.tar"
+          BUNDLE_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+
+          mapfile -t COMPOSE_IMAGES < <(
+            sed -n 's/^\s*image:\s*//p' install/docker/docker-compose.yml
+          )
+
+          IMAGES=("$BUNDLE_IMAGE")
+          for image in "${COMPOSE_IMAGES[@]}"; do
+            if [[ "$image" == "$BUNDLE_IMAGE" ]]; then
+              continue
+            fi
+            IMAGES+=("$image")
+          done
+
+          rm -rf "$PACKAGE_DIR"
+          mkdir -p "$PACKAGE_DIR"
+
+          printf '%s\n' "${IMAGES[@]}" > "$PACKAGE_DIR/images.txt"
+          printf 'Bundling images:\n%s\n' "${IMAGES[*]}"
+
+          SAVE_IMAGES=()
+          for image in "${IMAGES[@]}"; do
+            if [[ "${image##*/}" == *:* ]]; then
+              repo="${image%:*}"
+              tag="${image##*:}"
+            else
+              repo="$image"
+              tag="latest"
+            fi
+
+            for platform in linux/amd64 linux/arm64; do
+              suffix="${platform##*/}"
+              arch_image="${repo}:${tag}-${suffix}"
+              docker pull --platform "$platform" "$image"
+              docker tag "$image" "$arch_image"
+              SAVE_IMAGES+=("$arch_image")
+            done
+          done
+
+          docker save "${SAVE_IMAGES[@]}" -o "$ARCHIVE"
+
+          cat > "$PACKAGE_DIR/load-images.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          PACKAGE_DIR="$(cd "$(dirname "$0")" && pwd)"
+          case "$(uname -m)" in
+            x86_64|amd64)
+              suffix="amd64"
+              ;;
+            aarch64|arm64)
+              suffix="arm64"
+              ;;
+            *)
+              echo "Unsupported architecture: $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+
+          docker load -i "$PACKAGE_DIR/images.tar"
+
+          while IFS= read -r image; do
+            if [[ -z "$image" ]]; then
+              continue
+            fi
+
+            if [[ "${image##*/}" == *:* ]]; then
+              repo="${image%:*}"
+              tag="${image##*:}"
+            else
+              repo="$image"
+              tag="latest"
+            fi
+
+            docker tag "${repo}:${tag}-${suffix}" "$image"
+          done < "$PACKAGE_DIR/images.txt"
+
+          echo "Loaded images for $suffix and restored compose tags."
+          EOF
+
+          chmod +x "$PACKAGE_DIR/load-images.sh"
+          tar -czf "$PACKAGE_DIR.tar.gz" "$PACKAGE_DIR"
+
+      - name: Upload Docker compose image bundle
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ github.event.repository.name }}-${{ github.ref_name }}-docker-images
+          path: wp-monitor-${{ github.ref_name }}-docker-images.tar.gz
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v3
