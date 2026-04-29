@@ -1,17 +1,11 @@
 name: Deploy wp-monitor
 
 on:
-  workflow_dispatch:
-    inputs:
-      compose_suffix:
-        description: "Compose suffix"
-        required: false
-        default: "alpha"
-        type: choice
-        options:
-          - alpha
-          - beta
-          - main
+  push:
+    tags:
+      - "v*.*.*"
+      - "v*.*.*-alpha"
+      - "v*.*.*-beta"
 
 permissions:
   contents: read
@@ -34,10 +28,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          suffix="${{ inputs.compose_suffix }}"
-          if [ -z "$suffix" ]; then
-            suffix="alpha"
-          fi
+          tag_name="${{ github.ref_name }}"
+
+          case "$tag_name" in
+            *-alpha)
+              suffix="alpha"
+              ;;
+            *-beta)
+              suffix="beta"
+              ;;
+            *)
+              suffix="main"
+              ;;
+          esac
 
           compose_name="docker-compose-${suffix}.yml"
           local_compose="install/docker/${compose_name}"
