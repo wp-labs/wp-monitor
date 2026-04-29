@@ -53,14 +53,14 @@ jobs:
           echo "compose_name=$compose_name" >> "$GITHUB_OUTPUT"
 
 
-      - name: Debug
-        uses: mxschmitt/action-tmate@v3
-        
+      # - name: Debug
+      #   uses: mxschmitt/action-tmate@v3
+
       - name: Prepare SSH
         shell: bash
         run: |
           set -euo pipefail
-
+          rm -rf ~/.ssh
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           printf '%s\n' "$MONITOR_SSH" > ~/.ssh/id_rsa

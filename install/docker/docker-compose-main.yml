@@ -66,7 +66,7 @@ services:
       start_period: 30s
 
   wp-monitor:
-    image: "ghcr.io/wp-labs/wp-monitor:0.4.2" #@gxl:set(images)
+    image: "ghcr.io/wp-labs/wp-monitor:v0.4.2" #@gxl:set(images)
     restart: unless-stopped
     ports:
       - "10628:18080"

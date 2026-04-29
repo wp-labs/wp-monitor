@@ -69,7 +69,7 @@ services:
 
 
   wp-monitor:
-    image: "ghcr.io/wp-labs/wp-monitor:0.4.3-alpha" #@gxl:set(images)
+    image: "ghcr.io/wp-labs/wp-monitor:v0.4.3-alpha" #@gxl:set(images)
     container_name: wp-monitor
     restart: unless-stopped
     ports:
