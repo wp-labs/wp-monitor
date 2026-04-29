@@ -281,31 +281,31 @@ jobs:
 
             docker save "${save_images[@]}" -o "$archive"
 
-            cat > "$package_dir/load-images.sh" <<EOF
-            #!/usr/bin/env bash
-            set -euo pipefail
-
-            PACKAGE_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
-            docker load -i "\$PACKAGE_DIR/images.tar"
-
-            while IFS= read -r image; do
-              if [[ -z "\$image" ]]; then
-                continue
-              fi
-
-              if [[ "\${image##*/}" == *:* ]]; then
-                repo="\${image%:*}"
-                tag="\${image##*:}"
-              else
-                repo="\$image"
-                tag="latest"
-              fi
-
-              docker tag "\${repo}:\${tag}-${suffix}" "\$image"
-            done < "\$PACKAGE_DIR/images.txt"
-
-            echo "Loaded ${suffix} images and restored compose tags."
-            EOF
+            printf '%s\n' \
+              '#!/usr/bin/env bash' \
+              'set -euo pipefail' \
+              '' \
+              'PACKAGE_DIR="$(cd "$(dirname "$0")" && pwd)"' \
+              'docker load -i "$PACKAGE_DIR/images.tar"' \
+              '' \
+              'while IFS= read -r image; do' \
+              '  if [[ -z "$image" ]]; then' \
+              '    continue' \
+              '  fi' \
+              '' \
+              '  if [[ "${image##*/}" == *:* ]]; then' \
+              '    repo="${image%:*}"' \
+              '    tag="${image##*:}"' \
+              '  else' \
+              '    repo="$image"' \
+              '    tag="latest"' \
+              '  fi' \
+              '' \
+              "  docker tag \"\${repo}:\${tag}-${suffix}\" \"\$image\"" \
+              'done < "$PACKAGE_DIR/images.txt"' \
+              '' \
+              "echo \"Loaded ${suffix} images and restored compose tags.\"" \
+              > "$package_dir/load-images.sh"
 
             chmod +x "$package_dir/load-images.sh"
             tar -czf "$package_dir.tar.gz" "$package_dir"
