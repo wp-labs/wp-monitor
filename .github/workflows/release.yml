@@ -188,22 +188,60 @@ jobs:
           set -euo pipefail
           PACKAGE_DIR="wp-monitor-${{ github.ref_name }}-docker-images"
           ARCHIVE="$PACKAGE_DIR/images.tar"
-          BUNDLE_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          BUNDLE_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
+
+          case "${{ github.ref_name }}" in
+            *-alpha*)
+              CHANNEL="alpha"
+              ;;
+            *-beta*)
+              CHANNEL="beta"
+              ;;
+            *)
+              CHANNEL="main"
+              ;;
+          esac
+
+          COMPOSE_FILE="install/docker/docker-compose-${CHANNEL}.yml"
+          if [[ ! -f "$COMPOSE_FILE" ]]; then
+            echo "Compose file not found: $COMPOSE_FILE" >&2
+            exit 1
+          fi
 
           mapfile -t COMPOSE_IMAGES < <(
-            sed -n 's/^\s*image:\s*//p' install/docker/docker-compose.yml
+            sed -nE 's/^[[:space:]]*image:[[:space:]]*"?([^"#]+)"?.*/\1/p' "$COMPOSE_FILE"
           )
 
-          IMAGES=("$BUNDLE_IMAGE")
+          IMAGES=()
           for image in "${COMPOSE_IMAGES[@]}"; do
-            if [[ "$image" == "$BUNDLE_IMAGE" ]]; then
+            if [[ "$image" == "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:"* ]]; then
+              image="$BUNDLE_IMAGE"
+            fi
+
+            if [[ -z "$image" ]]; then
               continue
             fi
-            IMAGES+=("$image")
+
+            already_added="false"
+            for existing in "${IMAGES[@]}"; do
+              if [[ "$existing" == "$image" ]]; then
+                already_added="true"
+                break
+              fi
+            done
+
+            if [[ "$already_added" == "false" ]]; then
+              IMAGES+=("$image")
+            fi
           done
 
           rm -rf "$PACKAGE_DIR"
           mkdir -p "$PACKAGE_DIR"
+
+          cp "$COMPOSE_FILE" "$PACKAGE_DIR/docker-compose.yml"
+          if [[ -f install/docker/.env.example ]]; then
+            cp install/docker/.env.example "$PACKAGE_DIR/.env.example"
+          fi
 
           printf '%s\n' "${IMAGES[@]}" > "$PACKAGE_DIR/images.txt"
           printf 'Bundling images:\n%s\n' "${IMAGES[*]}"
