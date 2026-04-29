@@ -183,6 +183,40 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+      - name: Export Docker compose image bundle
+        run: |
+          set -euo pipefail
+          ARCHIVE="wp-monitor-${{ github.ref_name }}-docker-images.tar"
+          BUNDLE_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+
+          mapfile -t COMPOSE_IMAGES < <(
+            sed -n 's/^\s*image:\s*//p' install/docker/docker-compose.yml
+          )
+
+          IMAGES=("$BUNDLE_IMAGE")
+          for image in "${COMPOSE_IMAGES[@]}"; do
+            if [[ "$image" == "$BUNDLE_IMAGE" ]]; then
+              continue
+            fi
+            IMAGES+=("$image")
+          done
+
+          printf 'Bundling images:\n%s\n' "${IMAGES[*]}"
+          for image in "${IMAGES[@]}"; do
+            docker pull "$image"
+          done
+
+          docker save "${IMAGES[@]}" -o "$ARCHIVE"
+          gzip -f "$ARCHIVE"
+
+      - name: Upload Docker compose image bundle
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ github.event.repository.name }}-${{ github.ref_name }}-docker-images
+          path: wp-monitor-${{ github.ref_name }}-docker-images.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v3
         continue-on-error: true
