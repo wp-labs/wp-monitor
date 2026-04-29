@@ -383,3 +383,157 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           prerelease: ${{ contains(github.ref, '-alpha') || contains(github.ref, '-beta') }}
           files: artifacts/*
+
+  deploy:
+    needs: [docker-build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    env:
+      REMOTE_DIR: /root/wp/wp-monitor/wp-monitor
+      MONITOR_IP: ${{ secrets.MONITOR_IP }}
+      MONITOR_USER: ${{ secrets.MONITOR_USER }}
+      MONITOR_SSH: ${{ secrets.MONITOR_SSH }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Resolve compose file
+        id: compose
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag_name="${{ github.ref_name }}"
+
+          case "$tag_name" in
+            *-alpha)
+              suffix="alpha"
+              ;;
+            *-beta)
+              suffix="beta"
+              ;;
+            *)
+              suffix="main"
+              ;;
+          esac
+
+          compose_name="docker-compose-${suffix}.yml"
+          local_compose="install/docker/${compose_name}"
+
+          if [ ! -f "$local_compose" ]; then
+            echo "Compose file not found: $local_compose" >&2
+            exit 1
+          fi
+
+          echo "compose_name=$compose_name" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$MONITOR_USER" in
+            ""|*[@[:space:]]*)
+              echo "MONITOR_USER must be a plain username" >&2
+              exit 1
+              ;;
+          esac
+
+          case "$MONITOR_IP" in
+            ""|*[@[:space:]]*)
+              echo "MONITOR_IP must be a plain host or IP" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ -z "${MONITOR_SSH:-}" ]; then
+            echo "MONITOR_SSH is empty" >&2
+            exit 1
+          fi
+
+          rm -rf ~/.ssh
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$MONITOR_SSH" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -T 10 -H "$MONITOR_IP" > ~/.ssh/known_hosts
+
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "ssh-keyscan returned no host key for $MONITOR_IP" >&2
+            exit 1
+          fi
+
+      - name: Ensure remote directory exists
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ssh -l "$MONITOR_USER" "$MONITOR_IP" "mkdir -p '${REMOTE_DIR}'"
+
+      - name: Sync install/docker to remote
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rsync -avz --delete \
+            -e "ssh -l ${MONITOR_USER}" \
+            "install/docker/" \
+            "${MONITOR_IP}:${REMOTE_DIR}/"
+
+      - name: Deploy services
+        shell: bash
+        env:
+          COMPOSE_NAME: ${{ steps.compose.outputs.compose_name }}
+        run: |
+          set -euo pipefail
+
+          ssh -l "$MONITOR_USER" "$MONITOR_IP" \
+            "REMOTE_DIR='${REMOTE_DIR}' COMPOSE_NAME='${COMPOSE_NAME}' bash -s" <<'EOF'
+          set -euo pipefail
+
+          cd "$REMOTE_DIR"
+
+          if [ ! -f "$COMPOSE_NAME" ]; then
+            echo "Compose file not found: $REMOTE_DIR/$COMPOSE_NAME" >&2
+            exit 1
+          fi
+
+          echo "Using compose file: $COMPOSE_NAME"
+          docker compose -f "$COMPOSE_NAME" config --services
+
+          running_services="$(docker compose -f "$COMPOSE_NAME" ps --status running --services || true)"
+
+          metrics_running=false
+          logs_running=false
+
+          if printf '%s\n' "$running_services" | grep -qx 'victoria-metrics'; then
+            metrics_running=true
+          fi
+
+          if printf '%s\n' "$running_services" | grep -qx 'victoria-logs'; then
+            logs_running=true
+          fi
+
+          echo "victoria-metrics running: $metrics_running"
+          echo "victoria-logs running: $logs_running"
+
+          echo "Pull latest images declared in compose"
+          if [ "$metrics_running" = true ] && [ "$logs_running" = true ]; then
+            docker compose -f "$COMPOSE_NAME" pull wp-monitor
+          else
+            docker compose -f "$COMPOSE_NAME" pull
+          fi
+
+          echo "Stop and remove old wp-monitor"
+          docker compose -f "$COMPOSE_NAME" stop wp-monitor || true
+          docker compose -f "$COMPOSE_NAME" rm -f wp-monitor || true
+
+          if [ "$metrics_running" = true ] && [ "$logs_running" = true ]; then
+            echo "Only start wp-monitor"
+            docker compose -f "$COMPOSE_NAME" up -d wp-monitor
+          else
+            echo "Start full compose stack"
+            docker compose -f "$COMPOSE_NAME" up -d
+          fi
+          EOF
