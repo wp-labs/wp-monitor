@@ -52,6 +52,10 @@ jobs:
 
           echo "compose_name=$compose_name" >> "$GITHUB_OUTPUT"
 
+
+      - name: Debug
+        uses: mxschmitt/action-tmate@v3
+        
       - name: Prepare SSH
         shell: bash
         run: |
