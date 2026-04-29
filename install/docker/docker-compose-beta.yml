@@ -3,7 +3,7 @@ services:
     container_name: victoria-metrics
     image: victoriametrics/victoria-metrics:v1.133.0
     ports:
-      - "8428:8428"
+      - "18439:8428"
     volumes:
       # 数据存储目录，按需开启
       - metrics_data:/storage
@@ -36,7 +36,7 @@ services:
     container_name: victoria-logs
     image: victoriametrics/victoria-logs:v1.43.0
     ports:
-      - "9428:9428"
+      - "19439:9428"
     # 数据存储目录,按需开启
     volumes:
       - logs_data:/storage
@@ -72,11 +72,11 @@ services:
     container_name: wp-monitor
     restart: unless-stopped
     ports:
-      - "18080:18080"
+      - "10528:18080"
     environment:
       APP_CONFIG_PATH: /app/config/app.toml
     volumes:
-      - ./wp-monitor/config:/app/config:ro
+      - ./wp-monitor/config:/app/config/app.toml:ro
 
 volumes:
   logs_data:

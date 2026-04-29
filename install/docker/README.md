@@ -22,8 +22,6 @@ VLOG_MAX_DISK_SPACE_USAGE_BYTES=50GiB
 ## 安装和启动
 
 ```bash
-#安装
-./setup.sh
 #启动 main
 ./start.sh
 #启动 alpha / beta
