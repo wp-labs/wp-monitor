@@ -1,6 +1,5 @@
 services:
   victoria-metrics:
-    container_name: victoria-metrics
     image: victoriametrics/victoria-metrics:v1.133.0
     ports:
       - "18429:8428"
@@ -33,7 +32,6 @@ services:
       start_period: 30s
 
   victoria-logs:
-    container_name: victoria-logs
     image: victoriametrics/victoria-logs:v1.43.0
     ports:
       - "19429:9428"
@@ -70,7 +68,6 @@ services:
 
   wp-monitor:
     image: "ghcr.io/wp-labs/wp-monitor:v0.4.3-alpha" #@gxl:set(images)
-    container_name: wp-monitor
     restart: unless-stopped
     ports:
       - "10428:18080"
