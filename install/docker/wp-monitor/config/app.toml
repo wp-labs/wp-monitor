@@ -1,0 +1,3 @@
+vm_base_url = "http://victoria-metrics:8428"
+vlog_base_url = "http://victoria-logs:9428"
+log_level = "info"

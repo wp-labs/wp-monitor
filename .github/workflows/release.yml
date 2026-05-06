@@ -166,9 +166,10 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern=v{{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern=v{{major}}
+            type=raw,value=${{ github.ref_name }}
+            # type=semver,pattern=${{ github.ref_name }}
+            # type=semver,pattern=v{{major}}.{{minor}}
+            # type=semver,pattern=v{{major}}
             type=raw,value=latest
 
       - name: Build and push Docker image
@@ -181,6 +182,93 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Export Docker compose image bundle
+        run: |
+          set -euo pipefail
+          PACKAGE_PREFIX="wp-monitor-${{ github.ref_name }}-docker-images"
+          BUNDLE_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
+
+          case "${{ github.ref_name }}" in
+            *-alpha*)
+              CHANNEL="alpha"
+              ;;
+            *-beta*)
+              CHANNEL="beta"
+              ;;
+            *)
+              CHANNEL="main"
+              ;;
+          esac
+
+          COMPOSE_FILE="install/docker/docker-compose-${CHANNEL}.yml"
+          if [[ ! -f "$COMPOSE_FILE" ]]; then
+            echo "Compose file not found: $COMPOSE_FILE" >&2
+            exit 1
+          fi
+
+          mapfile -t COMPOSE_IMAGES < <(
+            sed -nE 's/^[[:space:]]*image:[[:space:]]*"?([^"#]+)"?.*/\1/p' "$COMPOSE_FILE"
+          )
+
+          IMAGES=()
+          for image in "${COMPOSE_IMAGES[@]}"; do
+            if [[ "$image" == "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:"* ]]; then
+              image="$BUNDLE_IMAGE"
+            fi
+
+            if [[ -z "$image" ]]; then
+              continue
+            fi
+
+            already_added="false"
+            for existing in "${IMAGES[@]}"; do
+              if [[ "$existing" == "$image" ]]; then
+                already_added="true"
+                break
+              fi
+            done
+
+            if [[ "$already_added" == "false" ]]; then
+              IMAGES+=("$image")
+            fi
+          done
+
+          printf 'Bundling images:\n%s\n' "${IMAGES[*]}"
+
+          for platform in linux/amd64 linux/arm64; do
+            suffix="${platform##*/}"
+            case "$suffix" in
+              amd64)
+                package_label="x86_64-linux-gnu"
+                ;;
+              arm64)
+                package_label="aarch64-linux-gnu"
+                ;;
+              *)
+                echo "Unsupported platform suffix: $suffix" >&2
+                exit 1
+                ;;
+            esac
+
+            archive="$PACKAGE_PREFIX-$package_label.tar.gz"
+            save_images=()
+
+            for image in "${IMAGES[@]}"; do
+              docker pull --platform "$platform" "$image"
+              save_images+=("$image")
+            done
+
+            docker save "${save_images[@]}" | gzip > "$archive"
+          done
+
+      - name: Upload Docker compose image bundle
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ github.event.repository.name }}-${{ github.ref_name }}-docker-images
+          path: wp-monitor-${{ github.ref_name }}-docker-images-*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v3
@@ -295,3 +383,157 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           prerelease: ${{ contains(github.ref, '-alpha') || contains(github.ref, '-beta') }}
           files: artifacts/*
+
+  deploy:
+    needs: [docker-build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    env:
+      REMOTE_DIR: /root/wp/wp-monitor/wp-monitor
+      MONITOR_IP: ${{ secrets.MONITOR_IP }}
+      MONITOR_USER: ${{ secrets.MONITOR_USER }}
+      MONITOR_SSH: ${{ secrets.MONITOR_SSH }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Resolve compose file
+        id: compose
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag_name="${{ github.ref_name }}"
+
+          case "$tag_name" in
+            *-alpha)
+              suffix="alpha"
+              ;;
+            *-beta)
+              suffix="beta"
+              ;;
+            *)
+              suffix="main"
+              ;;
+          esac
+
+          compose_name="docker-compose-${suffix}.yml"
+          local_compose="install/docker/${compose_name}"
+
+          if [ ! -f "$local_compose" ]; then
+            echo "Compose file not found: $local_compose" >&2
+            exit 1
+          fi
+
+          echo "compose_name=$compose_name" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$MONITOR_USER" in
+            ""|*[@[:space:]]*)
+              echo "MONITOR_USER must be a plain username" >&2
+              exit 1
+              ;;
+          esac
+
+          case "$MONITOR_IP" in
+            ""|*[@[:space:]]*)
+              echo "MONITOR_IP must be a plain host or IP" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ -z "${MONITOR_SSH:-}" ]; then
+            echo "MONITOR_SSH is empty" >&2
+            exit 1
+          fi
+
+          rm -rf ~/.ssh
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$MONITOR_SSH" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -T 10 -H "$MONITOR_IP" > ~/.ssh/known_hosts
+
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "ssh-keyscan returned no host key for $MONITOR_IP" >&2
+            exit 1
+          fi
+
+      - name: Ensure remote directory exists
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ssh -l "$MONITOR_USER" "$MONITOR_IP" "mkdir -p '${REMOTE_DIR}'"
+
+      - name: Sync install/docker to remote
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rsync -avz --delete \
+            -e "ssh -l ${MONITOR_USER}" \
+            "install/docker/" \
+            "${MONITOR_IP}:${REMOTE_DIR}/"
+
+      - name: Deploy services
+        shell: bash
+        env:
+          COMPOSE_NAME: ${{ steps.compose.outputs.compose_name }}
+        run: |
+          set -euo pipefail
+
+          ssh -l "$MONITOR_USER" "$MONITOR_IP" \
+            "REMOTE_DIR='${REMOTE_DIR}' COMPOSE_NAME='${COMPOSE_NAME}' bash -s" <<'EOF'
+          set -euo pipefail
+
+          cd "$REMOTE_DIR"
+
+          if [ ! -f "$COMPOSE_NAME" ]; then
+            echo "Compose file not found: $REMOTE_DIR/$COMPOSE_NAME" >&2
+            exit 1
+          fi
+
+          echo "Using compose file: $COMPOSE_NAME"
+          docker compose -f "$COMPOSE_NAME" config --services
+
+          running_services="$(docker compose -f "$COMPOSE_NAME" ps --status running --services || true)"
+
+          metrics_running=false
+          logs_running=false
+
+          if printf '%s\n' "$running_services" | grep -qx 'victoria-metrics'; then
+            metrics_running=true
+          fi
+
+          if printf '%s\n' "$running_services" | grep -qx 'victoria-logs'; then
+            logs_running=true
+          fi
+
+          echo "victoria-metrics running: $metrics_running"
+          echo "victoria-logs running: $logs_running"
+
+          echo "Pull latest images declared in compose"
+          if [ "$metrics_running" = true ] && [ "$logs_running" = true ]; then
+            docker compose -f "$COMPOSE_NAME" pull wp-monitor
+          else
+            docker compose -f "$COMPOSE_NAME" pull
+          fi
+
+          echo "Stop and remove old wp-monitor"
+          docker compose -f "$COMPOSE_NAME" stop wp-monitor || true
+          docker compose -f "$COMPOSE_NAME" rm -f wp-monitor || true
+
+          if [ "$metrics_running" = true ] && [ "$logs_running" = true ]; then
+            echo "Only start wp-monitor"
+            docker compose -f "$COMPOSE_NAME" up -d wp-monitor
+          else
+            echo "Start full compose stack"
+            docker compose -f "$COMPOSE_NAME" up -d
+          fi
+          EOF
