@@ -20,10 +20,10 @@ mod main   : ver_adm {
   flow _syn_compose | _syn_images {
     SYN_FILE = "${ENV_ROOT}/install/docker/docker-compose-${GXL_GIT_BRANCH}.yml";
     if ${GXL_GIT_BRANCH} != "main" {
-        IMAGES =  "ghcr.io/wp-labs/wp-monitor:${VERSION}-${GXL_GIT_BRANCH}";
+        IMAGES =  "ghcr.io/wp-labs/wp-monitor:v${VERSION}-${GXL_GIT_BRANCH}";
     }
     else {
-        IMAGES =  "ghcr.io/wp-labs/wp-monitor:${VERSION}";
+        IMAGES =  "ghcr.io/wp-labs/wp-monitor:v${VERSION}";
     }
   }
     flow _syn_images {
