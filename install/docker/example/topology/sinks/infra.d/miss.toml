@@ -19,3 +19,7 @@ min = 0.0
 [[sink_group.sinks]]
 name = "victorialogs_output"
 connect = "victorialogs_sink"
+[sink_group.sinks.params]
+endpoint = "http://127.0.0.1:19429"
+insert_path = "/insert/jsonline"
+flush_interval_secs = 3
