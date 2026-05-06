@@ -152,19 +152,42 @@ start_compose() {
 }
 
 print_access_entries() {
+  local channel
+  channel="${1:-main}"
   printf '\n访问入口：\n'
-  printf '  - wparse观测平台: http://localhost:18080 (宿主机端口: 18080)\n'
-  printf '其他非关键服务入口：\n'
-  printf '  - victoria-metrics: http://localhost:8428 (宿主机端口: 8428)\n'
-  printf '  - victoria-logs: http://localhost:9428 (宿主机端口: 9428)\n'
+  case "$channel" in
+    alpha)
+      printf '  - wparse观测平台: http://localhost:10428 (宿主机端口: 10428)\n'
+      printf '其他非关键服务入口：\n'
+      printf '  - victoria-metrics: http://localhost:18429 (宿主机端口: 18429)\n'
+      printf '  - victoria-logs: http://localhost:19429 (宿主机端口: 19429)\n'
+      ;;
+    beta)
+      printf '  - wparse观测平台: http://localhost:10528 (宿主机端口: 10528)\n'
+      printf '其他非关键服务入口：\n'
+      printf '  - victoria-metrics: http://localhost:18439 (宿主机端口: 18439)\n'
+      printf '  - victoria-logs: http://localhost:19439 (宿主机端口: 19439)\n'
+      ;;
+    main)
+      printf '  - wparse观测平台: http://localhost:10628 (宿主机端口: 10628)\n'
+      printf '其他非关键服务入口：\n'
+      printf '  - victoria-metrics: http://localhost:18449 (宿主机端口: 18449)\n'
+      printf '  - victoria-logs: http://localhost:19449 (宿主机端口: 19449)\n'
+      ;;
+    *)
+      printf '  - 未知环境: %s\n' "$channel"
+      ;;
+  esac
 }
 
 main() {
-  resolve_compose_file "${1:-main}"
+  local channel
+  channel="${1:-main}"
+  resolve_compose_file "$channel"
   resolve_compose_cmd
   create_env_if_missing
   start_compose
-  print_access_entries
+  print_access_entries "$channel"
 }
 
 main "$@"
