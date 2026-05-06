@@ -27,7 +27,12 @@ VLOG_MAX_DISK_SPACE_USAGE_BYTES=50GiB
 #启动 alpha / beta
 ./start.sh alpha
 ./start.sh beta
+# 强制重新渲染 .env 后启动
+./start.sh -f
+./start.sh -f alpha
 ```
+
+`-f` 参数会在 `.env` 已存在时仍然根据 `.env.example` 重新渲染配置。
 
 ## 接入方式
 在wparse的`topology/sinks/infra.d/monitor.toml`中添加如下监控配置

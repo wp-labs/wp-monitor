@@ -7,6 +7,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 COMPOSE_FILE=""
 COMPOSE_CMD=()
 
+usage() {
+  echo "用法: ./start.sh [-f] [main|alpha|beta]" >&2
+}
+
 ensure_docker_exists() {
   if ! command -v docker >/dev/null 2>&1; then
     echo "未检测到 docker，请先安装 Docker。" >&2
@@ -50,7 +54,7 @@ resolve_compose_file() {
       ;;
     *)
       echo "不支持的环境参数: $channel" >&2
-      echo "用法: ./start.sh [alpha|beta]" >&2
+      usage
       exit 1
       ;;
   esac
@@ -62,6 +66,7 @@ resolve_compose_file() {
 }
 
 create_env_if_missing() {
+  local force_render="${1:-0}"
   local env_file="$SCRIPT_DIR/.env"
   local env_example_file="$SCRIPT_DIR/.env.example"
   local prompt_input="/dev/tty"
@@ -74,9 +79,13 @@ create_env_if_missing() {
   local intro_shown="0"
   local generated_lines=()
 
-  if [[ -f "$env_file" ]]; then
+  if [[ -f "$env_file" && "$force_render" != "1" ]]; then
     echo "检测到已存在的 .env，跳过生成。"
     return 0
+  fi
+
+  if [[ -f "$env_file" && "$force_render" == "1" ]]; then
+    echo "检测到 -f，重新渲染 .env。"
   fi
 
   if [[ ! -f "$env_example_file" ]]; then
@@ -181,11 +190,33 @@ print_access_entries() {
 }
 
 main() {
-  local channel
-  channel="${1:-main}"
+  local channel="main"
+  local force_render="0"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -f)
+        force_render="1"
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      main|alpha|beta)
+        channel="$1"
+        ;;
+      *)
+        echo "不支持的参数: $1" >&2
+        usage
+        exit 1
+        ;;
+    esac
+    shift
+  done
+
   resolve_compose_file "$channel"
   resolve_compose_cmd
-  create_env_if_missing
+  create_env_if_missing "$force_render"
   start_compose
   print_access_entries "$channel"
 }
