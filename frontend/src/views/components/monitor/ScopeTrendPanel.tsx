@@ -1,4 +1,5 @@
 import { Spin } from "antd";
+import { useTranslation } from "react-i18next";
 import TimeSeriesChart from "@/views/components/monitor/TimeSeriesChart";
 import type { TimePoint } from "@/types/monitor";
 
@@ -12,8 +13,6 @@ interface ScopeTrendPanelProps {
   parseMultiSeries: ScopeSeriesLine[];
   visibleParseMultiSeries: ScopeSeriesLine[];
   hiddenScopeSeriesNames: string[];
-  detailStartTime: string;
-  detailEndTime: string;
   accentColor: string;
   onToggleSeries: (name: string) => void;
   formatRate2: (value: number) => string;
@@ -24,13 +23,13 @@ export default function ScopeTrendPanel({
   parseMultiSeries,
   visibleParseMultiSeries,
   hiddenScopeSeriesNames,
-  detailStartTime: _detailStartTime,
-  detailEndTime: _detailEndTime,
   accentColor,
   onToggleSeries,
   formatRate2,
   loading = false,
 }: ScopeTrendPanelProps) {
+  const { t } = useTranslation();
+
   return (
     <section className="detail-col">
       {parseMultiSeries.length > 0 && (
@@ -49,7 +48,7 @@ export default function ScopeTrendPanel({
                 <span
                   key={line.name}
                   onClick={() => onToggleSeries(line.name)}
-                  title={hidden ? "点击显示该曲线" : "点击隐藏该曲线"}
+                  title={hidden ? t("monitor.detail.showSeries") : t("monitor.detail.hideSeries")}
                   style={{
                     cursor: "pointer",
                     display: "inline-flex",
@@ -80,7 +79,7 @@ export default function ScopeTrendPanel({
       )}
       <Spin spinning={loading}>
         <TimeSeriesChart
-          title="速率趋势"
+          title={t("monitor.detail.rateTrend")}
           points={[]}
           multiSeries={visibleParseMultiSeries}
           showLegend={false}
@@ -93,10 +92,10 @@ export default function ScopeTrendPanel({
         />
       </Spin>
       {parseMultiSeries.length === 0 && (
-        <div className="scope-empty-hint">当前范围暂无节点时序数据</div>
+        <div className="scope-empty-hint">{t("monitor.detail.noScopeData")}</div>
       )}
       {parseMultiSeries.length > 0 && visibleParseMultiSeries.length === 0 && (
-        <div className="scope-empty-hint">当前已隐藏全部曲线</div>
+        <div className="scope-empty-hint">{t("monitor.detail.allSeriesHidden")}</div>
       )}
     </section>
   );

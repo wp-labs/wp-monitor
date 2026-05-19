@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ApexCharts, { type ApexOptions } from 'apexcharts';
 import type { TimePoint } from '@/types/monitor';
+import { useLocale } from '@/context/LocaleContext';
 import { MONITOR_SERIES_PALETTE } from '@/views/components/monitor/chartPalette';
 
 interface Props {
@@ -33,6 +34,7 @@ export default function TimeSeriesChart({
   minY,
   yTickAmount = 6,
 }: Props) {
+  const { intlLocale } = useLocale();
   const isMulti = Boolean(multiSeries && multiSeries.length > 0);
   const flatPoints = isMulti
     ? (multiSeries ?? []).flatMap((seriesItem) => seriesItem.points)
@@ -93,6 +95,7 @@ export default function TimeSeriesChart({
       chart: {
         type: 'line',
         height: '100%',
+        parentHeightOffset: 0,
         toolbar: { show: false },
         zoom: { enabled: false },
         animations: { enabled: true, speed: 320 },
@@ -112,7 +115,7 @@ export default function TimeSeriesChart({
       grid: {
         borderColor: '#d2ddf0',
         strokeDashArray: 4,
-        padding: { left: 16, right: 10, top: 4, bottom: 8 },
+        padding: { left: 16, right: 10, top: -12, bottom: 2 },
       },
       xaxis: {
         type: 'datetime',
@@ -161,7 +164,15 @@ export default function TimeSeriesChart({
         x: {
           formatter: (value) => {
             const date = new Date(value);
-            return date.toLocaleString('zh-CN', { hour12: false });
+            return new Intl.DateTimeFormat(intlLocale, {
+              hour12: false,
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+            }).format(date);
           },
         },
         y: {
@@ -179,6 +190,7 @@ export default function TimeSeriesChart({
       computedMaxY,
       computedMinY,
       firstTs,
+      intlLocale,
       isMulti,
       lastTs,
       palette,

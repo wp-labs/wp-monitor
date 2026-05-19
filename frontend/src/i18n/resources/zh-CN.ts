@@ -1,0 +1,113 @@
+export const zhCN = {
+  common: {
+    query: '查询',
+    custom: '自定义',
+    expandAll: '全部展开',
+    collapseAll: '全部收起',
+    previousPage: '上一页',
+    nextPage: '下一页',
+    loading: '加载中...',
+    loadingEllipsis: '加载中...',
+    errorWithMessage: '错误: {{message}}',
+  },
+  language: {
+    switchTitle: '切换语言',
+  },
+  theme: {
+    switchTitle: '切换主题',
+  },
+  monitor: {
+    appLogoAlt: 'WP Monitor logo',
+    versionAria: '当前版本 v{{version}}',
+    quickRanges: {
+      '1m': '最近 1 分钟',
+      '5m': '最近 5 分钟',
+      '1h': '最近 1 小时',
+      '6h': '最近 6 小时',
+      '24h': '最近 24 小时',
+      week: '本周',
+    },
+    toolbar: {
+      timeRange: '时间范围',
+      startTime: '开始时间',
+      endTime: '结束时间',
+      autoRefresh: '自动刷新',
+      secondsShort: 's',
+    },
+    layer: {
+      source: '来源层',
+      parse: 'Parse 层',
+      sink: '输出层',
+    },
+    metric: {
+      rate: '速率',
+      count: '数量',
+      total: '总量',
+      cumulativeTotal: '累计总量',
+      sampleInterval: '采样间隔',
+      statWindow: '统计窗口',
+    },
+    parse: {
+      active: '活跃',
+      silent: '静默',
+      searchPlaceholder: '搜索 package 或日志类型',
+      noSearchResults: '无匹配结果',
+      packageLabel: 'package',
+      logTypeLabel: '日志类型',
+      packageSummary: '{{rate}} / {{count}} (汇总) · {{logs}} 个日志类型',
+      pageInfo: '{{page}} / {{total}} 页',
+    },
+    sink: {
+      outputTargets: '{{count}} 个输出目标',
+      groupTrend: 'Sink Group {{name}} 节点趋势',
+    },
+    trend: {
+      packageTrend: 'Package {{name}} 节点趋势',
+      sourceAll: '来源层全部节点趋势',
+      sinkAll: '输出层全部节点趋势',
+      parsePackageActive: 'Parse 层 Package 趋势（活跃）',
+      parsePackageSilent: 'Parse 层 Package 趋势（静默）',
+    },
+    detail: {
+      basicInfo: '基本信息',
+      timeWindow: '时间窗口',
+      dragResize: '拖拽调整高度',
+      nodeDetail: '节点详情',
+      realtimeRefresh: '实时刷新',
+      rateTrend: '速率趋势',
+      clickNodeForDetail: '点击节点查看详情',
+      selectScopeForTimeseries: '请选择范围以查看时序',
+      showSeries: '点击显示该曲线',
+      hideSeries: '点击隐藏该曲线',
+      noScopeData: '当前范围暂无节点时序数据',
+      allSeriesHidden: '当前已隐藏全部曲线',
+    },
+    miss: {
+      rawLogs: 'MISS 原始日志',
+      refreshCurrentPage: '刷新本页',
+      exportData: '数据导出',
+      exporting: '导出中...',
+      loading: 'MISS 日志加载中...',
+      empty: '当前时间窗口无 MISS 日志',
+      pageMeta: '第 {{page}} 页 / 每页 {{pageSize}} 条',
+      hasMore: '（可继续翻页）',
+      lastPage: '（已到末页）',
+      description: '未命中任何 WPL 规则 · 不流向任何输出',
+    },
+    error: {
+      invalidTimeRange: '开始时间必须早于结束时间',
+      invalidTimeFormat: '时间格式无效',
+      nodeDetailFetchFailed: '节点详情获取失败',
+      scopeTimeseriesFetchFailed: '范围时序获取失败',
+      parseTimeseriesFetchFailed: 'Parse 时间序列获取失败',
+      missedLogsFetchFailed: 'MISS 日志获取失败',
+      missedLogsExportFailed: 'MISS 日志导出失败',
+    },
+  },
+} as const;
+
+type DeepStringValues<T> = {
+  readonly [K in keyof T]: T[K] extends string ? string : DeepStringValues<T[K]>;
+};
+
+export type LocaleResource = DeepStringValues<typeof zhCN>;
