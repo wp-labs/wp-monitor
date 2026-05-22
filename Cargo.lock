@@ -3017,7 +3017,7 @@ dependencies = [
 
 [[package]]
 name = "wp_monitor"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "actix-web",
  "async-trait",
