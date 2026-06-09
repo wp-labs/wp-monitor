@@ -91,9 +91,6 @@ export const zhTW = {
       exporting: '匯出中...',
       loading: 'MISS 日誌載入中...',
       empty: '目前時間視窗無 MISS 日誌',
-      pageMeta: '第 {{page}} 頁 / 每頁 {{pageSize}} 筆',
-      hasMore: '（可繼續翻頁）',
-      lastPage: '（已到末頁）',
       description: '未命中任何 WPL 規則 · 不流向任何輸出',
     },
     error: {

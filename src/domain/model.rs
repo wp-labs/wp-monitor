@@ -62,7 +62,6 @@ pub struct SinkGroupNode {
 pub struct MissNode {
     pub id: String,
     pub name: String,
-    pub fixed: bool,
     pub metrics: MetricsSnapshot,
 }
 
@@ -139,7 +138,6 @@ pub struct NodeTimeSeries {
     pub log_rate_eps: Vec<TimePoint>,
     pub step_secs: i64,
     pub rate_window_secs: i64,
-    pub log_count: Vec<TimePoint>,
 }
 
 /// 标准化时间窗口查询对象。

@@ -244,7 +244,6 @@ export async function fetchNodeTimeSeries(
     const merged: NodeTimeSeries = {
       node_id: chunks[0]?.node_id ?? nodeId,
       log_rate_eps: mergeTimePoints(chunks.map((chunk) => chunk.log_rate_eps ?? [])),
-      log_count: mergeTimePoints(chunks.map((chunk) => chunk.log_count ?? [])),
     };
     const step = chunks.find((chunk) => typeof chunk.step_secs === "number")?.step_secs;
     if (typeof step === "number") merged.step_secs = step;
@@ -257,32 +256,15 @@ export async function fetchNodeTimeSeries(
   }
 }
 
-export async function fetchMissedLogs(
-  startTime: string,
-  endTime: string,
-  page = 1,
-  pageSize = 10,
-) {
-  const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(
-    startTime,
-    endTime,
-  );
-  const safePage = Math.max(1, Math.floor(page || 1));
-  const safePageSize = Math.max(1, Math.min(100, Math.floor(pageSize || 10)));
-  const url = `/api/v1/wp-monitor/vlog/missed?query=${encodeURIComponent("wp_stage:miss")}&start=${encodeURIComponent(normalizedStart)}&end=${encodeURIComponent(normalizedEnd)}&page=${safePage}&page_size=${safePageSize}`;
+export async function fetchMissedLogs() {
+  const url = `/api/v1/wp-monitor/vlog/missed?query=${encodeURIComponent("wp_stage:miss")}`;
   const data = await requestJson<MissedLogsPage>(url);
   const body = data.data;
-  // 文件模式响应无分页字段，统一补默认值。
   if (body.source === "file") {
     return {
       source: "file" as const,
       items: body.items,
-      page: 1,
-      page_size: body.items.length,
-      has_more: false,
-      start: normalizedStart,
-      end: normalizedEnd,
-      query: "",
+      total: body.items.length,
     };
   }
   return body;

@@ -89,9 +89,6 @@ export const zhCN = {
       exporting: '导出中...',
       loading: 'MISS 日志加载中...',
       empty: '当前时间窗口无 MISS 日志',
-      pageMeta: '第 {{page}} 页 / 每页 {{pageSize}} 条',
-      hasMore: '（可继续翻页）',
-      lastPage: '（已到末页）',
       description: '未命中任何 WPL 规则 · 不流向任何输出',
     },
     error: {

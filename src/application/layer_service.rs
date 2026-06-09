@@ -357,7 +357,6 @@ impl LayerService {
             miss: MissNode {
                 id: "miss".to_string(),
                 name: "MISS".to_string(),
-                fixed: false,
                 metrics: miss_metrics,
             },
             sys_metrics: snapshot_data.sys_metrics,
@@ -550,7 +549,6 @@ impl LayerService {
                 log_rate_eps: Vec::new(),
                 step_secs: 0,
                 rate_window_secs: 0,
-                log_count: Vec::new(),
             });
         }
         debug!(

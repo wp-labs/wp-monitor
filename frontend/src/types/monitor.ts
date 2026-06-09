@@ -55,7 +55,6 @@ export interface LayerSnapshot {
   miss: {
     id: string;
     name: string;
-    fixed: boolean;
     metrics: MetricsSnapshot;
   };
   sys_metrics: {
@@ -89,12 +88,6 @@ export interface VlogRecord {
 export interface MissedLogsPage {
   source?: string;
   total?: number;
-  start?: string;
-  end?: string;
-  query?: string;
-  page?: number;
-  page_size?: number;
-  has_more?: boolean;
   items: VlogRecord[];
 }
 
@@ -108,7 +101,6 @@ export interface NodeTimeSeries {
   log_rate_eps: TimePoint[];
   step_secs?: number;
   rate_window_secs?: number;
-  log_count: TimePoint[];
 }
 
 /** 成功响应（code=0 的场景） */

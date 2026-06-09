@@ -534,7 +534,6 @@ impl VmHttpRepository {
                 log_rate_eps: points,
                 step_secs,
                 rate_window_secs,
-                log_count: Vec::new(),
             });
         }
         Ok(out)
@@ -696,7 +695,6 @@ impl VmRepository for VmHttpRepository {
                 log_rate_eps: Vec::new(),
                 step_secs,
                 rate_window_secs,
-                log_count: Vec::new(),
             });
         };
         debug!(
@@ -807,7 +805,6 @@ impl VmRepository for VmHttpRepository {
             log_rate_eps: rate_points,
             step_secs,
             rate_window_secs,
-            log_count: Vec::new(),
         })
     }
 

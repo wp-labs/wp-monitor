@@ -13,11 +13,7 @@ use crate::{
 
 #[derive(Debug, serde::Deserialize)]
 pub struct VlogMissedPageQuery {
-    pub start: DateTime<Utc>,
-    pub end: DateTime<Utc>,
     pub query: Option<String>,
-    pub page: Option<u32>,
-    pub page_size: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -33,12 +29,7 @@ impl From<MissRecord> for MissedLogItem {
 
 #[derive(Debug, Serialize)]
 pub struct VlogMissedPageData {
-    pub start: String,
-    pub end: String,
     pub query: String,
-    pub page: u32,
-    pub page_size: u32,
-    pub has_more: bool,
     pub total: u64,
     pub items: Vec<MissedLogItem>,
 }
@@ -59,19 +50,8 @@ pub struct VlogMissedExportQuery {
 }
 
 const DEFAULT_MISS_QUERY: &str = "wp_stage:miss";
-const DEFAULT_PAGE_SIZE: u32 = 10;
-const MAX_PAGE_SIZE: u32 = 100;
+const MAX_MISS_TOTAL: u32 = 100;
 const MAX_FETCH_ROWS: u32 = 5000;
-
-fn normalize_page(page: Option<u32>) -> u32 {
-    page.unwrap_or(1).max(1)
-}
-
-fn normalize_page_size(page_size: Option<u32>) -> u32 {
-    page_size
-        .unwrap_or(DEFAULT_PAGE_SIZE)
-        .clamp(1, MAX_PAGE_SIZE)
-}
 
 fn normalize_query(query: &Option<String>) -> String {
     query
@@ -81,25 +61,24 @@ fn normalize_query(query: &Option<String>) -> String {
         .unwrap_or_else(|| DEFAULT_MISS_QUERY.to_string())
 }
 
-/// 获取缺失数据。
-/// - 文件模式：返回最后 N 条，无分页。
-/// - Vlog 模式：走 logsql 分页查询。
+/// 获取缺失数据（最多返回最近 100 条，分页由前端处理）。
+/// - 文件模式：返回尾部最多 100 条。
+/// - Vlog 模式：走 logsql 查询最近 100 条。
 #[get("/vlog/missed")]
 pub async fn get_missed_data(
     state: web::Data<AppState>,
     req: web::Query<VlogMissedPageQuery>,
 ) -> Result<HttpResponse> {
     let req = req.into_inner();
-    let page_size = normalize_page_size(req.page_size);
 
     match state.miss.source {
         MissSource::File => {
-            debug!(page_size = page_size, "vlog.handlers.missed_page.file_mode");
+            debug!("vlog.handlers.missed_page.file_mode");
             let (records, total) = tokio::try_join!(
                 state.miss.fetch_records(MissQuery {
-                    limit: page_size as usize,
-                    start: req.start,
-                    end: req.end,
+                    limit: MAX_MISS_TOTAL as usize,
+                    start: DateTime::UNIX_EPOCH,
+                    end: Utc::now(),
                     query: None,
                 }),
                 state.miss.count_total(),
@@ -117,54 +96,33 @@ pub async fn get_missed_data(
         }
         MissSource::Vlog => {
             let query = normalize_query(&req.query);
-            let page = normalize_page(req.page);
-            let offset = (page - 1).saturating_mul(page_size);
-            let fetch_limit = page_size.saturating_add(1).min(MAX_PAGE_SIZE + 1);
             let paged_query = format!(
-                "{} | sort by (_time) asc | offset {} | limit {}",
-                query, offset, fetch_limit
+                "{} | sort by (_time) desc | limit {} | sort by (_time) asc",
+                query, MAX_MISS_TOTAL
             );
             debug!(
-                start_time = %req.start,
-                end_time = %req.end,
-                page = page,
-                page_size = page_size,
                 paged_query = &paged_query,
                 "vlog.handlers.missed_page.vlog_mode"
             );
             let (records, total) = tokio::try_join!(
                 state.miss.fetch_records(MissQuery {
-                    limit: fetch_limit as usize,
-                    start: req.start,
-                    end: req.end,
+                    limit: MAX_MISS_TOTAL as usize,
+                    start: DateTime::UNIX_EPOCH,
+                    end: Utc::now(),
                     query: Some(paged_query),
                 }),
                 state.miss.count_total(),
             )
             .map_err(|e| {
                 error!(
-                    start_time = %req.start,
-                    end_time = %req.end,
-                    page = page,
-                    page_size = page_size,
                     error = %e,
                     "vlog.handlers.missed_page.failed"
                 );
                 AppErrorResponse::from(e)
             })?;
-            let has_more = records.len() > page_size as usize;
-            let items: Vec<MissedLogItem> = records
-                .into_iter()
-                .take(page_size as usize)
-                .map(MissedLogItem::from)
-                .collect();
+            let items: Vec<MissedLogItem> = records.into_iter().map(MissedLogItem::from).collect();
             Ok(HttpResponse::Ok().json(ApiResponse::ok(VlogMissedPageData {
-                start: req.start.to_rfc3339(),
-                end: req.end.to_rfc3339(),
                 query,
-                page,
-                page_size,
-                has_more,
                 total,
                 items,
             })))

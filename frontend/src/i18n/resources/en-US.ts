@@ -91,9 +91,6 @@ export const enUS = {
       exporting: 'Exporting...',
       loading: 'Loading MISS logs...',
       empty: 'No MISS logs in the current time window',
-      pageMeta: 'Page {{page}} / {{pageSize}} per page',
-      hasMore: ' (more pages available)',
-      lastPage: ' (last page)',
       description: 'Matched no WPL rule · Not routed to any output',
     },
     error: {

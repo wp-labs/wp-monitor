@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  App, Button, DatePicker, Divider, Input, InputNumber, Space, Spin, Switch, Typography,
+  App, Button, DatePicker, Divider, Input, InputNumber, Pagination, Space, Spin, Switch, Typography,
 } from "antd";
 import { ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -221,12 +221,10 @@ export default function WpMonitorPage() {
   const [missLogsLoading, setMissLogsLoading] = useState(false);
   const [missLogsError, setMissLogsError] = useState("");
   const [missLogs, setMissLogs] = useState<VlogRecord[]>([]);
-  const [missHasMore, setMissHasMore] = useState(false);
+  const [missTotal, setMissTotal] = useState(0);
   const [missPage, setMissPage] = useState(1);
   const [missIsFileMode, setMissIsFileMode] = useState(false);
   const [missExporting, setMissExporting] = useState(false);
-  const [missWindowStart, setMissWindowStart] = useState("");
-  const [missWindowEnd, setMissWindowEnd] = useState("");
 
   const [expandedPackages, setExpandedPackages] = useState<string[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
@@ -489,7 +487,10 @@ export default function WpMonitorPage() {
   const parseTotalPages = parsePages.length;
   const parsePageItems = parsePages[Math.min(parsePage - 1, parseTotalPages - 1)] || [];
 
-  const missPageItems = useMemo(() => missLogs, [missLogs]);
+  const missPageItems = useMemo(() => {
+    const offset = (missPage - 1) * MISS_PAGE_SIZE;
+    return missLogs.slice(offset, offset + MISS_PAGE_SIZE);
+  }, [missLogs, missPage]);
   const detailNodePillType = useMemo(() => {
     if (!selectedNode) return "generic";
     if (snapshot?.miss.id === selectedNode) return "miss";
@@ -797,19 +798,19 @@ export default function WpMonitorPage() {
     return classes.join(" ");
   }
 
-  async function loadMissedLogs(start: string, end: string, page: number) {
+  async function loadMissedLogs() {
     try {
       setMissLogsLoading(true);
       setMissLogsError("");
-      const data = await fetchMissedLogs(start, end, page, MISS_PAGE_SIZE);
+      const data = await fetchMissedLogs();
       setMissLogs(data.items);
-      setMissHasMore(data.has_more ?? false);
-      setMissPage(data.page ?? 1);
+      setMissTotal(data.total ?? data.items.length);
+      setMissPage(1);
       setMissIsFileMode((data as any).source === "file");
       return true;
     } catch (err) {
       setMissLogs([]);
-      setMissHasMore(false);
+      setMissTotal(0);
       setMissLogsError((err as Error).message || t("monitor.error.missedLogsFetchFailed"));
       return false;
     } finally {
@@ -821,9 +822,7 @@ export default function WpMonitorPage() {
     if (!isMissSelected) return;
     try {
       setMissExporting(true);
-      const exportStart = missWindowStart || detailStartTime;
-      const exportEnd = missWindowEnd || detailEndTime;
-      const resp = await exportMissedLogs(exportStart, exportEnd);
+      const resp = await exportMissedLogs(detailStartTime, detailEndTime);
       const blob = await resp.blob();
       const contentDisposition = resp.headers.get("content-disposition") || "";
       const matched = contentDisposition.match(/filename="([^"]+)"/i);
@@ -847,20 +846,8 @@ export default function WpMonitorPage() {
     }
   }
 
-  async function onPrevMissPage() {
-    const safePage = missPage ?? 1;
-    if (safePage <= 1) return;
-    const pageStart = missWindowStart || detailStartTime;
-    const pageEnd = missWindowEnd || detailEndTime;
-    await loadMissedLogs(pageStart, pageEnd, safePage - 1);
-  }
-
-  async function onNextMissPage() {
-    if (!missHasMore) return;
-    const safePage = missPage ?? 1;
-    const pageStart = missWindowStart || detailStartTime;
-    const pageEnd = missWindowEnd || detailEndTime;
-    await loadMissedLogs(pageStart, pageEnd, safePage + 1);
+  function onMissPageChange(page: number) {
+    setMissPage(page);
   }
 
   async function openDetail(nodeId: string) {
@@ -878,12 +865,10 @@ export default function WpMonitorPage() {
     setDrawerLoading(true);
     setDrawerError("");
     setMissLogs([]);
-    setMissHasMore(false);
+    setMissTotal(0);
     setMissLogsError("");
     setMissLogsLoading(false);
     setMissIsFileMode(false);
-    setMissWindowStart("");
-    setMissWindowEnd("");
     try {
       const detailPromise = fetchNodeDetail(
         nodeId,
@@ -898,17 +883,15 @@ export default function WpMonitorPage() {
       );
       if (isMissNode) {
         setMissLogsLoading(true);
-        setMissWindowStart(detailRange.start);
-        setMissWindowEnd(detailRange.end);
         const [detailResp, seriesResp, missedResp] = await Promise.all([
           detailPromise,
           seriesPromise,
-          fetchMissedLogs(detailRange.start, detailRange.end, 1, MISS_PAGE_SIZE),
+          fetchMissedLogs(),
         ]);
         if (detailRequestSeqRef.current !== seq) return;
         setMissLogs(missedResp.items);
-        setMissHasMore(missedResp.has_more ?? false);
-        setMissPage(missedResp.page ?? 1);
+        setMissTotal(missedResp.total ?? missedResp.items.length);
+        setMissPage(1);
         setMissIsFileMode((missedResp as any).source === "file");
         setMissLogsError("");
         setMissLogsLoading(false);
@@ -1825,13 +1808,7 @@ export default function WpMonitorPage() {
                     <div className="miss-query-toolbar">
                       <Button
                         size="small"
-                        onClick={() =>
-                          void loadMissedLogs(
-                            missWindowStart || detailStartTime,
-                            missWindowEnd || detailEndTime,
-                            missPage,
-                          )
-                        }
+                        onClick={() => void loadMissedLogs()}
                         disabled={missLogsLoading}
                       >
                         {t("monitor.miss.refreshCurrentPage")}
@@ -1851,17 +1828,10 @@ export default function WpMonitorPage() {
                       !missLogsError &&
                       missLogs.length > 0 && (
                         <>
-                          {!missIsFileMode && (
-                            <p className="miss-page-meta">
-                              {t("monitor.miss.pageMeta", { page: missPage, pageSize: MISS_PAGE_SIZE })}
-                              {missHasMore ? t("monitor.miss.hasMore") : t("monitor.miss.lastPage")}
-                            </p>
-                          )}
                           <div className="miss-scroll">
                             <div className="miss-list">
                               {missPageItems.map((item, index) => {
-                                const safePage = missPage ?? 1;
-                                const offset = (safePage - 1) * MISS_PAGE_SIZE;
+                                const offset = (missPage - 1) * MISS_PAGE_SIZE;
                                 const rowNo = offset + index + 1;
                                 return (
                                   <article
@@ -1876,16 +1846,17 @@ export default function WpMonitorPage() {
                               })}
                             </div>
                           </div>
-                          {!missIsFileMode && (
-                            <div className="miss-pager">
-                              <Button size="small" disabled={missPage <= 1 || missLogsLoading} onClick={() => void onPrevMissPage()}>
-                                {t("common.previousPage")}
-                              </Button>
-                              <Button size="small" disabled={missLogsLoading || !missHasMore} onClick={() => void onNextMissPage()}>
-                                {t("common.nextPage")}
-                              </Button>
-                            </div>
-                          )}
+                          <div className="miss-pager">
+                            <Pagination
+                              size="small"
+                              current={missPage}
+                              total={missLogs.length}
+                              pageSize={MISS_PAGE_SIZE}
+                              showSizeChanger={false}
+                              showQuickJumper
+                              onChange={onMissPageChange}
+                            />
+                          </div>
                         </>
                       )}
                   </section>
