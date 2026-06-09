@@ -22,12 +22,6 @@ pub struct MissQuery {
 pub trait MissRepository: Send + Sync {
     /// 获取 miss 记录。
     async fn fetch_records(&self, query: MissQuery) -> Result<Vec<MissRecord>, AppError>;
-    /// 导出 miss 记录。
-    async fn export_records(
-        &self,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
-    ) -> Result<Vec<MissRecord>, AppError>;
     /// 获取 miss 数据总量。
     async fn count_total(&self) -> Result<u64, AppError>;
 }

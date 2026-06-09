@@ -44,14 +44,11 @@ pub struct FileMissedData {
 
 #[derive(Debug, serde::Deserialize)]
 pub struct VlogMissedExportQuery {
-    pub start: DateTime<Utc>,
-    pub end: DateTime<Utc>,
     pub query: Option<String>,
 }
 
 const DEFAULT_MISS_QUERY: &str = "wp_stage:miss";
 const MAX_MISS_TOTAL: u32 = 100;
-const MAX_FETCH_ROWS: u32 = 5000;
 
 fn normalize_query(query: &Option<String>) -> String {
     query
@@ -143,7 +140,12 @@ pub async fn export_missed_data(
             info!("vlog.handlers.missed_export.file_mode");
             let records = state
                 .miss
-                .export_records(req.start, req.end)
+                .fetch_records(MissQuery {
+                    limit: MAX_MISS_TOTAL as usize,
+                    start: DateTime::UNIX_EPOCH,
+                    end: Utc::now(),
+                    query: None,
+                })
                 .await
                 .map_err(|e| {
                     error!(error = %e, "vlog.handlers.missed_export.file_failed");
@@ -154,11 +156,7 @@ pub async fn export_missed_data(
                 .map(|r| r.content)
                 .collect::<Vec<_>>()
                 .join("\n");
-            let filename = format!(
-                "miss-{}-{}.dat",
-                req.start.format("%Y%m%d%H%M%S"),
-                req.end.format("%Y%m%d%H%M%S")
-            );
+            let filename = format!("miss-{}.dat", Utc::now().format("%Y%m%d%H%M%S"));
             info!(
                 filename = %filename,
                 line_count = content.lines().count(),
@@ -174,27 +172,25 @@ pub async fn export_missed_data(
         }
         MissSource::Vlog => {
             let query = normalize_query(&req.query);
-            let export_query =
-                format!("{} | sort by (_time) asc | limit {}", query, MAX_FETCH_ROWS);
+            let export_query = format!(
+                "{} | sort by (_time) desc | limit {} | sort by (_time) asc",
+                query, MAX_MISS_TOTAL
+            );
             info!(
-                start_time = %req.start,
-                end_time = %req.end,
-                limit = MAX_FETCH_ROWS,
+                limit = MAX_MISS_TOTAL,
                 "vlog.handlers.missed_export.vlog_mode"
             );
             let records = state
                 .miss
                 .fetch_records(MissQuery {
-                    limit: MAX_FETCH_ROWS as usize,
-                    start: req.start,
-                    end: req.end,
+                    limit: MAX_MISS_TOTAL as usize,
+                    start: DateTime::UNIX_EPOCH,
+                    end: Utc::now(),
                     query: Some(export_query),
                 })
                 .await
                 .map_err(|e| {
                     error!(
-                        start_time = %req.start,
-                        end_time = %req.end,
                         error = %e,
                         "vlog.handlers.missed_export.failed"
                     );
@@ -207,11 +203,7 @@ pub async fn export_missed_data(
                     content.push('\n');
                 }
             }
-            let filename = format!(
-                "miss-{}-{}.dat",
-                req.start.format("%Y%m%d%H%M%S"),
-                req.end.format("%Y%m%d%H%M%S")
-            );
+            let filename = format!("miss-{}.dat", Utc::now().format("%Y%m%d%H%M%S"));
             info!(
                 filename = %filename,
                 line_count = content.lines().count(),

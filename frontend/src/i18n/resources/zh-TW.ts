@@ -91,6 +91,7 @@ export const zhTW = {
       exporting: '匯出中...',
       loading: 'MISS 日誌載入中...',
       empty: '目前時間視窗無 MISS 日誌',
+      latestHint: '僅展示最新 100 筆（共 {{total}} 筆）',
       description: '未命中任何 WPL 規則 · 不流向任何輸出',
     },
     error: {

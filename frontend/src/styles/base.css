@@ -936,10 +936,23 @@ body::before {
 .miss-scroll { max-height: 420px; overflow-y: auto; padding-right: 4px; }
 .miss-list { display: flex; flex-direction: column; gap: 10px; }
 .miss-record {
+  display: flex;
+  align-items: flex-start;
   border: 1px solid rgba(var(--miss-rgb), 0.18);
   border-radius: 8px;
   background: rgba(var(--miss-rgb), 0.05);
   padding: 10px;
+}
+.miss-record-lineno {
+  min-width: 2.5rem;
+  padding-right: 0.75rem;
+  text-align: right;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  user-select: none;
+  flex-shrink: 0;
 }
 .miss-record-raw {
   margin: 0;

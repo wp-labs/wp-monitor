@@ -270,12 +270,8 @@ export async function fetchMissedLogs() {
   return body;
 }
 
-export async function exportMissedLogs(startTime: string, endTime: string) {
-  const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(
-    startTime,
-    endTime,
-  );
-  const url = `/api/v1/wp-monitor/vlog/missed/export?query=${encodeURIComponent("wp_stage:miss")}&start=${encodeURIComponent(normalizedStart)}&end=${encodeURIComponent(normalizedEnd)}`;
+export async function exportMissedLogs() {
+  const url = `/api/v1/wp-monitor/vlog/missed/export?query=${encodeURIComponent("wp_stage:miss")}`;
   const resp = await fetch(url);
   if (!resp.ok) {
     const body = await resp.json() as ApiErrorBody;

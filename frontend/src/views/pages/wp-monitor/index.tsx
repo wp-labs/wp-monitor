@@ -223,7 +223,6 @@ export default function WpMonitorPage() {
   const [missLogs, setMissLogs] = useState<VlogRecord[]>([]);
   const [missTotal, setMissTotal] = useState(0);
   const [missPage, setMissPage] = useState(1);
-  const [missIsFileMode, setMissIsFileMode] = useState(false);
   const [missExporting, setMissExporting] = useState(false);
 
   const [expandedPackages, setExpandedPackages] = useState<string[]>([]);
@@ -806,7 +805,6 @@ export default function WpMonitorPage() {
       setMissLogs(data.items);
       setMissTotal(data.total ?? data.items.length);
       setMissPage(1);
-      setMissIsFileMode((data as any).source === "file");
       return true;
     } catch (err) {
       setMissLogs([]);
@@ -822,7 +820,7 @@ export default function WpMonitorPage() {
     if (!isMissSelected) return;
     try {
       setMissExporting(true);
-      const resp = await exportMissedLogs(detailStartTime, detailEndTime);
+      const resp = await exportMissedLogs();
       const blob = await resp.blob();
       const contentDisposition = resp.headers.get("content-disposition") || "";
       const matched = contentDisposition.match(/filename="([^"]+)"/i);
@@ -868,7 +866,6 @@ export default function WpMonitorPage() {
     setMissTotal(0);
     setMissLogsError("");
     setMissLogsLoading(false);
-    setMissIsFileMode(false);
     try {
       const detailPromise = fetchNodeDetail(
         nodeId,
@@ -892,7 +889,6 @@ export default function WpMonitorPage() {
         setMissLogs(missedResp.items);
         setMissTotal(missedResp.total ?? missedResp.items.length);
         setMissPage(1);
-        setMissIsFileMode((missedResp as any).source === "file");
         setMissLogsError("");
         setMissLogsLoading(false);
         setDetail(detailResp.data);
@@ -1828,6 +1824,11 @@ export default function WpMonitorPage() {
                       !missLogsError &&
                       missLogs.length > 0 && (
                         <>
+                          {missTotal > missLogs.length && (
+                            <p className="miss-latest-hint">
+                              {t("monitor.miss.latestHint", { total: missTotal })}
+                            </p>
+                          )}
                           <div className="miss-scroll">
                             <div className="miss-list">
                               {missPageItems.map((item, index) => {
@@ -1838,6 +1839,7 @@ export default function WpMonitorPage() {
                                     key={rowNo}
                                     className="miss-record"
                                   >
+                                    <span className="miss-record-lineno">{rowNo}</span>
                                     <pre className="miss-record-raw">
                                       {item.content}
                                     </pre>

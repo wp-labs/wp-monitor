@@ -91,6 +91,7 @@ export const enUS = {
       exporting: 'Exporting...',
       loading: 'Loading MISS logs...',
       empty: 'No MISS logs in the current time window',
+      latestHint: 'Showing latest 100 of {{total}} records',
       description: 'Matched no WPL rule · Not routed to any output',
     },
     error: {

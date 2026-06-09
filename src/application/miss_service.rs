@@ -1,6 +1,5 @@
 use crate::domain::miss_repository::{MissQuery, MissRecord, MissRepository};
 use crate::shared::error::AppError;
-use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
 /// Miss 数据源类型。
@@ -23,14 +22,6 @@ impl MissService {
 
     pub async fn fetch_records(&self, query: MissQuery) -> Result<Vec<MissRecord>, AppError> {
         self.repository.fetch_records(query).await
-    }
-
-    pub async fn export_records(
-        &self,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
-    ) -> Result<Vec<MissRecord>, AppError> {
-        self.repository.export_records(start, end).await
     }
 
     pub async fn count_total(&self) -> Result<u64, AppError> {

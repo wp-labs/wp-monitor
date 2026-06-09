@@ -4,7 +4,6 @@ use crate::infrastructure::file_repository::FileRepository;
 use crate::infrastructure::vlog_repository::VlogHttpRepository;
 use crate::shared::error::{AppError, AppReason};
 use async_trait::async_trait;
-use chrono::Utc;
 use orion_error::conversion::ToStructError;
 use std::sync::Arc;
 
@@ -31,25 +30,6 @@ impl MissRepository for FileMissRepository {
         let file = Arc::clone(&self.file);
         let limit = query.limit;
         let records = tokio::task::spawn_blocking(move || file.tail_records(limit))
-            .await
-            .map_err(|e| {
-                AppReason::FileReadFailed
-                    .to_err()
-                    .with_detail(format!("spawn_blocking failed: {e}"))
-            })??;
-        Ok(records
-            .into_iter()
-            .map(|r| MissRecord { content: r })
-            .collect())
-    }
-
-    async fn export_records(
-        &self,
-        _start: chrono::DateTime<Utc>,
-        _end: chrono::DateTime<Utc>,
-    ) -> Result<Vec<MissRecord>, AppError> {
-        let file = Arc::clone(&self.file);
-        let records = tokio::task::spawn_blocking(move || file.tail_records(usize::MAX))
             .await
             .map_err(|e| {
                 AppReason::FileReadFailed
@@ -111,29 +91,10 @@ impl MissRepository for VlogMissRepository {
         let records = self.vlog.instant_query(&vq).await?;
         Ok(records
             .into_iter()
-            .map(|r| MissRecord { content: r.raw })
-            .collect())
-    }
-
-    async fn export_records(
-        &self,
-        start: chrono::DateTime<Utc>,
-        end: chrono::DateTime<Utc>,
-    ) -> Result<Vec<MissRecord>, AppError> {
-        let logsql = format!(
-            "{} | sort by (_time) asc | limit {}",
-            DEFAULT_MISS_QUERY, MAX_EXPORT_ROWS
-        );
-        let vq = VlogInstantQuery {
-            query: logsql,
-            limit: MAX_EXPORT_ROWS,
-            start,
-            end,
-        };
-        let records = self.vlog.instant_query(&vq).await?;
-        Ok(records
-            .into_iter()
-            .map(|r| MissRecord { content: r.raw })
+            .map(|r| {
+                let content = r.raw.lines().nth(1).unwrap_or("").to_string();
+                MissRecord { content }
+            })
             .collect())
     }
 
