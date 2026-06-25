@@ -860,7 +860,7 @@ export default function WpMonitorPage() {
     setMissPage(page);
   }
 
-  async function openDetail(nodeId: string) {
+  async function openDetail(nodeId: string, showLoading = true) {
     const seq = ++detailRequestSeqRef.current;
     setDetailViewMode("node");
     setDetailNodePill(resolveNodePillById(nodeId));
@@ -873,7 +873,7 @@ export default function WpMonitorPage() {
     setSelectedNode(nodeId);
     setDetailStartTime(detailRange.start);
     setDetailEndTime(detailRange.end);
-    setDrawerLoading(true);
+    if (showLoading) setDrawerLoading(true);
     setDrawerError("");
     setMissLogs([]);
     setMissTotal(0);
@@ -935,6 +935,7 @@ export default function WpMonitorPage() {
     pillName: string,
     packageName?: string,
     sinkGroup?: string,
+    showLoading = true,
   ) {
     const seq = ++detailRequestSeqRef.current;
     scopeModeRef.current = "log";
@@ -946,7 +947,7 @@ export default function WpMonitorPage() {
     setSelectedNode(selectedId);
     setDetailStartTime(range.start);
     setDetailEndTime(range.end);
-    setDrawerLoading(true);
+    if (showLoading) setDrawerLoading(true);
     setDrawerError("");
     try {
       // 按活跃/静默收集应查询的 log node_ids
@@ -976,7 +977,7 @@ export default function WpMonitorPage() {
     }
   }
 
-  async function openParseScope() {
+  async function openParseScope(showLoading = true) {
     const seq = ++detailRequestSeqRef.current;
     scopeModeRef.current = "package";
     setDetailViewMode("scope");
@@ -987,7 +988,7 @@ export default function WpMonitorPage() {
     setSelectedNode("__parse__");
     setDetailStartTime(range.start);
     setDetailEndTime(range.end);
-    setDrawerLoading(true);
+    if (showLoading) setDrawerLoading(true);
     setDrawerError("");
     try {
       if (filteredParses.length === 0) {
@@ -1020,10 +1021,10 @@ export default function WpMonitorPage() {
     }
     if (!selectedNode) return;
     if (detailViewMode === "node") {
-      void openDetail(selectedNode);
+      void openDetail(selectedNode, false);
     } else if (detailViewMode === "scope") {
       if (scopeModeRef.current === "package") {
-        void openParseScope();
+        void openParseScope(false);
       } else if (scopeModeRef.current === "log" && scopeSeriesRequest) {
         void openParseTimeseries(
           scopeSeriesRequest.scope,
@@ -1031,6 +1032,7 @@ export default function WpMonitorPage() {
           detailNodePill ?? "",
           scopeSeriesRequest.packageName,
           scopeSeriesRequest.sinkGroup,
+          false,
         );
       }
     }

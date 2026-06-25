@@ -83,6 +83,11 @@ export default function TimeSeriesChart({
     [isMulti, multiSeries, points, title],
   );
 
+  const seriesKey = useMemo(
+    () => JSON.stringify(series),
+    [series],
+  );
+
   const palette = useMemo(() => {
     if (!isMulti) return [color];
     return (multiSeries ?? []).map(
@@ -90,7 +95,7 @@ export default function TimeSeriesChart({
     );
   }, [color, isMulti, multiSeries]);
 
-  const options = useMemo<ApexOptions>(
+  const chartConfig = useMemo<ApexOptions>(
     () => ({
       chart: {
         type: 'line',
@@ -98,7 +103,7 @@ export default function TimeSeriesChart({
         parentHeightOffset: 0,
         toolbar: { show: false },
         zoom: { enabled: false },
-        animations: { enabled: true, speed: 320 },
+        animations: { enabled: isMulti ? false : true, speed: 320 },
         fontFamily: '"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif',
       },
       colors: palette,
@@ -107,16 +112,12 @@ export default function TimeSeriesChart({
         width: isMulti ? 1.6 : 2,
         lineCap: 'round',
       },
-      dataLabels: { enabled: false },
-      markers: {
-        size: 0,
-        hover: { size: 5, sizeOffset: 2 },
-      },
-      grid: {
-        borderColor: '#d2ddf0',
-        strokeDashArray: 4,
-        padding: { left: 16, right: 10, top: -12, bottom: 2 },
-      },
+    }),
+    [isMulti, palette],
+  );
+
+  const axisOptions = useMemo<ApexOptions>(
+    () => ({
       xaxis: {
         type: 'datetime',
         min: firstTs,
@@ -156,6 +157,24 @@ export default function TimeSeriesChart({
           },
         },
       },
+    }),
+    [axisValueFormatter, computedMaxY, computedMinY, firstTs, lastTs, valueFormatter, xTickAmount, yTickAmount],
+  );
+
+  const options = useMemo<ApexOptions>(
+    () => ({
+      ...chartConfig,
+      ...axisOptions,
+      dataLabels: { enabled: false },
+      markers: {
+        size: 0,
+        hover: { size: 5, sizeOffset: 2 },
+      },
+      grid: {
+        borderColor: '#d2ddf0',
+        strokeDashArray: 4,
+        padding: { left: 16, right: 10, top: -12, bottom: 2 },
+      },
       tooltip: {
         theme: 'dark',
         shared: isMulti,
@@ -185,20 +204,7 @@ export default function TimeSeriesChart({
         horizontalAlign: "left",
       },
     }),
-    [
-      axisValueFormatter,
-      computedMaxY,
-      computedMinY,
-      firstTs,
-      intlLocale,
-      isMulti,
-      lastTs,
-      palette,
-      showLegend,
-      xTickAmount,
-      valueFormatter,
-      yTickAmount,
-    ],
+    [axisOptions, chartConfig, intlLocale, isMulti, showLegend, valueFormatter],
   );
 
   useEffect(() => {
@@ -225,21 +231,24 @@ export default function TimeSeriesChart({
     return () => observer.disconnect();
   }, []);
 
+  // 仅更新序列数据，避免整图重绘导致的闪烁
   useEffect(() => {
     if (!instanceRef.current) return;
-    // 实时刷新时避免整图重绘与动画闪烁，仅增量更新坐标轴与序列。
+    void instanceRef.current.updateSeries(series, false).then(() => removeApexNativeSvgTitles(chartRef.current));
+  }, [seriesKey]);
+
+  // 坐标轴等配置变更时才更新 options（不含 series）
+  useEffect(() => {
+    if (!instanceRef.current) return;
     void instanceRef.current.updateOptions(
       {
-        colors: options.colors,
-        xaxis: options.xaxis,
-        yaxis: options.yaxis,
-        series,
+        ...chartConfig,
+        ...axisOptions,
       },
       false,
       false,
-      false,
     ).then(() => removeApexNativeSvgTitles(chartRef.current));
-  }, [options, series]);
+  }, [chartConfig, axisOptions]);
 
   return (
     <div className="spark">
