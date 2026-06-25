@@ -39,11 +39,11 @@ import logoDarkUrl from "@/assets/logo-dark.png";
 import logoLightUrl from "@/assets/logo-light.png";
 
 const QUICK_RANGES = [
-  { key: "today" },
   { key: "5m", minutes: 5 },
   { key: "1h", minutes: 60 },
   { key: "6h", minutes: 360 },
   { key: "24h", minutes: 1440 },
+  { key: "today" },
   { key: "week" },
 ] as const;
 const MISS_PAGE_SIZE = 10;
@@ -1019,7 +1019,6 @@ export default function WpMonitorPage() {
       return;
     }
     if (!selectedNode) return;
-    const range = resolveTimeRange(startTime, endTime || nowWithLagIso());
     if (detailViewMode === "node") {
       void openDetail(selectedNode);
     } else if (detailViewMode === "scope") {
