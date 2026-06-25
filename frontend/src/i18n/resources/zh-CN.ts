@@ -20,7 +20,7 @@ export const zhCN = {
     appLogoAlt: 'WP Monitor logo',
     versionAria: '当前版本 v{{version}}',
     quickRanges: {
-      '1m': '最近 1 分钟',
+      today: '今天',
       '5m': '最近 5 分钟',
       '1h': '最近 1 小时',
       '6h': '最近 6 小时',
