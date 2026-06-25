@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  App, Button, DatePicker, Divider, Input, InputNumber, Pagination, Space, Spin, Switch, Typography,
+  App, Button, DatePicker, Divider, Input, InputNumber, Pagination, Space, Spin, Switch, Tabs, Typography,
 } from "antd";
 import { ChevronDown } from "lucide-react";
+
+const WfMonitor = lazy(() => import('@/views/components/monitor/WfMonitor'));
 import { useTranslation } from "react-i18next";
 import dayjs, { type Dayjs } from "dayjs";
 
@@ -188,6 +190,7 @@ export default function WpMonitorPage() {
     [layerLabels],
   );
 
+  const [activeTab, setActiveTab] = useState<'pipeline' | 'engine'>('pipeline');
   const [appVersion, setAppVersion] = useState("");
   const [snapshot, setSnapshot] = useState<LayerSnapshot | null>(null);
   const [startTime, setStartTime] = useState(() => toIsoByMinutesAgo(5));
@@ -1180,7 +1183,7 @@ export default function WpMonitorPage() {
       className="app"
       id="app"
       style={
-        selectedNode
+        selectedNode && activeTab === 'pipeline'
           ? { paddingBottom: `${detailPanelHeight + 22}px` }
           : undefined
       }
@@ -1204,6 +1207,16 @@ export default function WpMonitorPage() {
               ) : null}
             </div>
           </div>
+          <Tabs
+            activeKey={activeTab}
+            onChange={(k) => setActiveTab(k as 'pipeline' | 'engine')}
+            className="wf-tabs"
+            tabBarStyle={{ marginBottom: 0 }}
+            items={[
+              { key: 'pipeline', label: '流水线监控' },
+              { key: 'engine', label: '引擎监控' },
+            ]}
+          />
         </div>
         <div className="toolbar-right">
           <div className="wd-quick-inline">
@@ -1284,6 +1297,15 @@ export default function WpMonitorPage() {
           <ThemeSwitcher />
         </div>
       </div>
+
+      {activeTab === 'engine' ? (
+        <Suspense fallback={<div style={{ padding: 24, color: 'var(--text-dim)' }}>加载中...</div>}>
+          <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+            <WfMonitor />
+          </div>
+        </Suspense>
+      ) : (
+      <>
       <div className="canvas" id="canvas">
         {!snapshot && (
           <div className="loading-skeleton" aria-hidden="true">
@@ -1879,6 +1901,8 @@ export default function WpMonitorPage() {
             parseSeriesList === null && <p>{t("monitor.detail.selectScopeForTimeseries")}</p>}
         </div>
       </aside>
+      </>
+      )}
     </div>
   );
 }

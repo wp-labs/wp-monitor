@@ -31,6 +31,26 @@
   --detail-heading-color: #333;
   --miss-border-style: dashed;
   --color-scheme: light;
+  --success: #34C759;
+  --warning: #FF9500;
+  --danger: #FF3B30;
+  --purple: #AF52DE;
+  --orange: #FF9500;
+
+  --wf-surface: var(--surface-raised);
+  --wf-border: var(--border-subtle);
+  --wf-border-light: rgba(0,0,0,0.04);
+  --wf-text: var(--text-main);
+  --wf-text-dim: var(--text-muted);
+  --wf-text-sub: var(--text-sub);
+  --wf-radius: var(--radius-sm);
+  --wf-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  --wf-bg-hover: rgba(var(--accent-rgb), 0.04);
+  --wf-bg-row-hover: rgba(var(--accent-rgb), 0.06);
+  --wf-bg-stripe: rgba(0,0,0,0.01);
+  --wf-bg-th: rgba(0,0,0,0.015);
+  --wf-bar-bg: rgba(0,0,0,0.05);
+  --wf-tooltip-border: rgba(0,0,0,0.08);
   --scrollbar-track: rgba(0, 0, 0, 0.06);
   --scrollbar-thumb: rgba(0, 0, 0, 0.18);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.32);

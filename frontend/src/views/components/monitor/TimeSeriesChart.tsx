@@ -15,6 +15,13 @@ interface Props {
   axisValueFormatter?: (v: number) => string;
   minY?: number;
   yTickAmount?: number;
+  gridColor?: string;
+  labelColor?: string;
+  hideXAxis?: boolean;
+  legendPosition?: 'top' | 'bottom';
+  legendAlign?: 'left' | 'center' | 'right';
+  legendFontSize?: string;
+  legendMarkerSize?: number;
 }
 
 function removeApexNativeSvgTitles(root: HTMLDivElement | null) {
@@ -33,6 +40,13 @@ export default function TimeSeriesChart({
   axisValueFormatter,
   minY,
   yTickAmount = 6,
+  gridColor,
+  labelColor,
+  hideXAxis = false,
+  legendPosition,
+  legendAlign,
+  legendFontSize,
+  legendMarkerSize,
 }: Props) {
   const { intlLocale } = useLocale();
   const isMulti = Boolean(multiSeries && multiSeries.length > 0);
@@ -113,7 +127,7 @@ export default function TimeSeriesChart({
         hover: { size: 5, sizeOffset: 2 },
       },
       grid: {
-        borderColor: '#d2ddf0',
+        borderColor: gridColor || '#d2ddf0',
         strokeDashArray: 4,
         padding: { left: 16, right: 10, top: -12, bottom: 2 },
       },
@@ -123,8 +137,8 @@ export default function TimeSeriesChart({
         max: lastTs,
         tickAmount: xTickAmount,
         labels: {
-          show: true,
-          style: { colors: '#7f94b4', fontSize: '10px' },
+          show: !hideXAxis,
+          style: { colors: labelColor || '#7f94b4', fontSize: '10px' },
           offsetY: 0,
           datetimeUTC: false,
           datetimeFormatter: {
@@ -137,8 +151,8 @@ export default function TimeSeriesChart({
           },
         },
         tooltip: { enabled: false },
-        axisBorder: { color: '#cfdcf1' },
-        axisTicks: { color: '#cfdcf1' },
+        axisBorder: { color: gridColor || '#cfdcf1' },
+        axisTicks: { color: gridColor || '#cfdcf1' },
       },
       yaxis: {
         min: computedMinY,
@@ -149,7 +163,7 @@ export default function TimeSeriesChart({
           show: true,
           minWidth: 64,
           offsetX: -2,
-          style: { colors: '#6b84a8', fontSize: '10px' },
+          style: { colors: labelColor || '#6b84a8', fontSize: '10px' },
           formatter: (value) => {
             if (axisValueFormatter) return axisValueFormatter(Number(value));
             return valueFormatter ? valueFormatter(Number(value)) : Number(value).toFixed(1);
@@ -181,8 +195,16 @@ export default function TimeSeriesChart({
       },
       legend: {
         show: isMulti && showLegend,
-        position: "top",
-        horizontalAlign: "left",
+        position: legendPosition || "top",
+        horizontalAlign: legendAlign || "left",
+        fontSize: legendFontSize || '12px',
+        fontFamily: 'var(--font-mono)',
+        labels: { colors: labelColor || '#7f94b4' },
+        markers: {
+          size: legendMarkerSize ?? 6,
+          strokeWidth: 0,
+        },
+        itemMargin: { horizontal: 4, vertical: 2 },
       },
     }),
     [
@@ -190,9 +212,16 @@ export default function TimeSeriesChart({
       computedMaxY,
       computedMinY,
       firstTs,
+      gridColor,
+      hideXAxis,
       intlLocale,
       isMulti,
+      labelColor,
       lastTs,
+      legendAlign,
+      legendFontSize,
+      legendMarkerSize,
+      legendPosition,
       palette,
       showLegend,
       xTickAmount,
