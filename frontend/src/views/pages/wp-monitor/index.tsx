@@ -39,15 +39,24 @@ import logoDarkUrl from "@/assets/logo-dark.png";
 import logoLightUrl from "@/assets/logo-light.png";
 
 const QUICK_RANGES = [
-  { key: "1m", minutes: 1 },
   { key: "5m", minutes: 5 },
   { key: "1h", minutes: 60 },
   { key: "6h", minutes: 360 },
   { key: "24h", minutes: 1440 },
+  { key: "today" },
   { key: "week" },
 ] as const;
 const MISS_PAGE_SIZE = 10;
 const REALTIME_END_LAG_MS = 5000;
+
+function escapeSpecialChars(str: string): string {
+  return str
+    .replace(/\\/g, '\\\\')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t');
+}
+
 const { RangePicker } = DatePicker;
 
 type LegendType =
@@ -240,6 +249,7 @@ export default function WpMonitorPage() {
   const [refreshIntervalInput, setRefreshIntervalInput] = useState("5");
   const [refreshSpin, setRefreshSpin] = useState(false);
   const [detailTrendAutoRefresh, setDetailTrendAutoRefresh] = useState(true);
+  const [isRangePickerOpen, setIsRangePickerOpen] = useState(false);
 
   const [parseFilter, setParseFilter] = useState<"withData" | "noData">("withData");
   const PARSE_PAGE_SIZE = 20;
@@ -262,6 +272,7 @@ export default function WpMonitorPage() {
   const scopeSeriesColorMapRef = useRef<Map<string, string>>(new Map());
   const scopeSeriesColorCursorRef = useRef(0);
   const detailRequestSeqRef = useRef(0);
+  const isInitialMountRef = useRef(true);
 
   const clampDetailPanelHeight = useCallback((h: number) => {
     const isMobile = window.innerWidth <= 768;
@@ -362,7 +373,7 @@ export default function WpMonitorPage() {
   }, []);
 
   useEffect(() => {
-    if (!autoRefreshEnabled) return;
+    if (!autoRefreshEnabled || isRangePickerOpen) return;
     const timer = setInterval(() => {
       void refreshMetricsOnly();
     }, refreshIntervalSec * 1000);
@@ -372,6 +383,7 @@ export default function WpMonitorPage() {
     startTime,
     autoRefreshEnabled,
     refreshIntervalSec,
+    isRangePickerOpen,
   ]);
 
   useEffect(() => {
@@ -854,6 +866,7 @@ export default function WpMonitorPage() {
     setDetailNodePill(resolveNodePillById(nodeId));
     setHiddenScopeSeriesNames([]);
     setScopeSeriesRequest(null);
+    setParseSeriesList(null);
     const missNodeId = snapshot?.miss.id ?? "";
     const isMissNode = nodeId === missNodeId;
     const detailRange = resolveTimeRange(startTime, endTime || nowWithLagIso());
@@ -999,6 +1012,30 @@ export default function WpMonitorPage() {
     }
   }
 
+  // 全局时间范围变化时，同步刷新详情面板趋势图
+  useEffect(() => {
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      return;
+    }
+    if (!selectedNode) return;
+    if (detailViewMode === "node") {
+      void openDetail(selectedNode);
+    } else if (detailViewMode === "scope") {
+      if (scopeModeRef.current === "package") {
+        void openParseScope();
+      } else if (scopeModeRef.current === "log" && scopeSeriesRequest) {
+        void openParseTimeseries(
+          scopeSeriesRequest.scope,
+          selectedNode,
+          detailNodePill ?? "",
+          scopeSeriesRequest.packageName,
+          scopeSeriesRequest.sinkGroup,
+        );
+      }
+    }
+  }, [startTime, endTime]);
+
   function togglePackage(pkgId: string) {
     setExpandedPackages((prev) =>
       prev.includes(pkgId)
@@ -1028,6 +1065,7 @@ export default function WpMonitorPage() {
     setStartTime(nextStart);
     setEndTime(nextEnd);
     setAutoRefreshEnabled(enableAutoRefresh);
+    setIsRangePickerOpen(false);
     await loadSnapshot(nextStart, nextEnd);
   }
 
@@ -1037,6 +1075,7 @@ export default function WpMonitorPage() {
     if (!range) return;
     setDraftStart(new Date(range.start));
     setDraftEnd(new Date(range.end));
+    setIsRangePickerOpen(false);
     await applyTimeRange(range.start, range.end, true);
   }
 
@@ -1047,6 +1086,7 @@ export default function WpMonitorPage() {
     }
     const nextStart = draftStart.toISOString();
     const nextEnd = draftEnd.toISOString();
+    setIsRangePickerOpen(false);
     // 手动点击“查询”视为自定义时间查询，固定关闭自动刷新，避免选定窗口被改写。
     await applyTimeRange(nextStart, nextEnd, false);
   }
@@ -1244,6 +1284,7 @@ export default function WpMonitorPage() {
                 setDraftRange("custom");
               }}
               onOpenChange={(open) => {
+                setIsRangePickerOpen(open);
                 if (open) setDraftRange("custom");
               }}
               showTime={{ format: "HH:mm:ss", minuteStep: 1, secondStep: 1 }}
@@ -1695,7 +1736,7 @@ export default function WpMonitorPage() {
                   </span>
                   <span className="detail-head-meta-value">{fmtCount(detail.metrics.log_count)}</span>
                 </span>
-                {series && (
+                {!isMissSelected && series && (
                   <>
                     <Divider orientation="vertical" style={{ margin: "0 2px", borderColor: "rgba(228,77,38,0.18)" }} />
                     <span className="detail-head-meta">
@@ -1720,6 +1761,19 @@ export default function WpMonitorPage() {
                 <span className="detail-head-meta">
                   <span className="detail-head-meta-label">{t("monitor.metric.statWindow")}</span>
                   <span className="detail-head-meta-value">{series.rate_window_secs}s</span>
+                </span>
+              </>
+            )}
+            {detailViewMode === "scope" && parseSeriesList && parseSeriesList.length > 0 && (
+              <>
+                <Divider orientation="vertical" style={{ margin: "0 2px", borderColor: "rgba(228,77,38,0.18)" }} />
+                <span className="detail-head-meta">
+                  <span className="detail-head-meta-label">{t("monitor.metric.sampleInterval")}</span>
+                  <span className="detail-head-meta-value">{parseSeriesList[0].step_secs ?? 0}s</span>
+                </span>
+                <span className="detail-head-meta">
+                  <span className="detail-head-meta-label">{t("monitor.metric.statWindow")}</span>
+                  <span className="detail-head-meta-value">{parseSeriesList[0].rate_window_secs ?? 0}s</span>
                 </span>
               </>
             )}
@@ -1841,7 +1895,7 @@ export default function WpMonitorPage() {
                                   >
                                     <span className="miss-record-lineno">{rowNo}</span>
                                     <pre className="miss-record-raw">
-                                      {item.content}
+                                      {escapeSpecialChars(item.content)}
                                     </pre>
                                   </article>
                                 );

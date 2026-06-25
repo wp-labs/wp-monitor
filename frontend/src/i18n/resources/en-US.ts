@@ -22,7 +22,7 @@ export const enUS = {
     appLogoAlt: 'WP Monitor logo',
     versionAria: 'Current version v{{version}}',
     quickRanges: {
-      '1m': 'Last 1m',
+      today: 'Today',
       '5m': 'Last 5m',
       '1h': 'Last 1h',
       '6h': 'Last 6h',

@@ -22,7 +22,7 @@ export const zhTW = {
     appLogoAlt: 'WP Monitor logo',
     versionAria: '目前版本 v{{version}}',
     quickRanges: {
-      '1m': '最近 1 分鐘',
+      today: '今天',
       '5m': '最近 5 分鐘',
       '1h': '最近 1 小時',
       '6h': '最近 6 小時',
