@@ -7,8 +7,28 @@ import type {
   NodeDetail,
   NodeTimeSeries,
   VersionInfo,
+  WfPipelineResponse,
+  WfSourceItem,
+  WfSourceMachineItem,
+  WfWindowItem,
+  WfRuleItem,
+  WfStateMachineItem,
+  WfRuleMachineItem,
 } from "@/types/monitor";
 import { ApiError } from "@/types/monitor";
+import {
+  buildPipelineResponse,
+  buildSourcesResponse,
+  buildSourceMachinesResponse,
+  buildWindowsResponse,
+  buildRulesResponse,
+  buildStateMachinesResponse,
+  buildRuleMachinesResponse,
+  buildThroughputTimeseries,
+  buildWindowsTimeseries,
+  buildAlertsTimeseries,
+  tickMockState,
+} from '@/views/components/monitor/wfMock';
 
 function normalizeIsoToSecondBoundary(iso: string) {
   const date = new Date(iso);
@@ -278,4 +298,66 @@ export async function exportMissedLogs() {
     throw new ApiError(body);
   }
   return resp;
+}
+
+// ── wfusion engine monitoring (mock) ──
+
+function wrap<T>(data: T): ApiResp<T> {
+  return { code: 0, message: 'ok', data };
+}
+
+export async function fetchWfPipeline(_startTime: string, _endTime: string) {
+  tickMockState();
+  return wrap<WfPipelineResponse>(buildPipelineResponse());
+}
+
+export async function fetchWfSources(_startTime: string, _endTime: string) {
+  return wrap<WfSourceItem[]>(buildSourcesResponse());
+}
+
+export async function fetchWfSourceMachines(_startTime: string, _endTime: string) {
+  return wrap<WfSourceMachineItem[]>(buildSourceMachinesResponse());
+}
+
+export async function fetchWfWindows(_startTime: string, _endTime: string) {
+  return wrap<WfWindowItem[]>(buildWindowsResponse());
+}
+
+export async function fetchWfRules(_startTime: string, _endTime: string) {
+  return wrap<WfRuleItem[]>(buildRulesResponse());
+}
+
+export async function fetchWfStateMachines(ruleName: string) {
+  return wrap<WfStateMachineItem[]>(buildStateMachinesResponse(ruleName));
+}
+
+export async function fetchWfRuleMachines(_startTime: string, _endTime: string) {
+  return wrap<WfRuleMachineItem[]>(buildRuleMachinesResponse());
+}
+
+export async function fetchWfTimeseriesThroughput(
+  _startTime: string,
+  _endTime: string,
+  groupBy: string,
+  _maxDataPoints?: number,
+) {
+  return wrap<NodeTimeSeries[]>(buildThroughputTimeseries(groupBy));
+}
+
+export async function fetchWfTimeseriesWindows(
+  _startTime: string,
+  _endTime: string,
+  metric: string,
+  _maxDataPoints?: number,
+) {
+  return wrap<NodeTimeSeries[]>(buildWindowsTimeseries(metric));
+}
+
+export async function fetchWfTimeseriesAlerts(
+  _startTime: string,
+  _endTime: string,
+  groupBy: string,
+  _maxDataPoints?: number,
+) {
+  return wrap<NodeTimeSeries[]>(buildAlertsTimeseries(groupBy));
 }

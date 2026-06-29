@@ -139,3 +139,75 @@ export class ApiError extends Error {
 export interface VersionInfo {
   version: string;
 }
+
+// ── wfusion engine monitoring ──
+
+export interface WfPipelineReceiver {
+  total_rows: number;
+  rate_rows_per_sec: number;
+  route_errors: number;
+  source_count: number;
+}
+
+export interface WfPipelineWindow {
+  window_count: number;
+  total_rows: number;
+  total_memory_bytes: number;
+  late_dropped: number;
+}
+
+export interface WfPipelineRule {
+  rule_count: number;
+  total_state_machines: number;
+  hit_rate_pct: number;
+  total_emitted: number;
+  send_failed: number;
+  e2e_p99_ms: number;
+}
+
+export interface WfPipelineResponse {
+  generated_at: string;
+  receiver: WfPipelineReceiver;
+  window: WfPipelineWindow;
+  rule: WfPipelineRule;
+}
+
+export interface WfSourceItem {
+  name: string;
+  type: string;
+  rows: number;
+  route_errors: number;
+  machines: string[];
+}
+
+export interface WfSourceMachineItem {
+  machine: string;
+  rows: number;
+  route_errors: number;
+  source_count: number;
+}
+
+export interface WfWindowItem {
+  name: string;
+  rows: number;
+  memory_bytes: number;
+  capacity_bytes: number;
+  late_dropped: number;
+}
+
+export interface WfRuleItem {
+  name: string;
+  emitted: number;
+  instances: number;
+}
+
+export interface WfStateMachineItem {
+  scope_key: string;
+  emitted: number;
+}
+
+export interface WfRuleMachineItem {
+  machine: string;
+  emitted: number;
+  rule_count: number;
+}

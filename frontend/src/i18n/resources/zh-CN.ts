@@ -81,6 +81,8 @@ export const zhCN = {
       hideSeries: '点击隐藏该曲线',
       noScopeData: '当前范围暂无节点时序数据',
       allSeriesHidden: '当前已隐藏全部曲线',
+      fullscreen: '全屏',
+      exitFullscreen: '退出全屏',
     },
     miss: {
       rawLogs: 'MISS 原始日志',

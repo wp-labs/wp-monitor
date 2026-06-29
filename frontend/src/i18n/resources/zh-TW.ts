@@ -83,6 +83,8 @@ export const zhTW = {
       hideSeries: '點擊隱藏此曲線',
       noScopeData: '目前範圍暫無節點時序資料',
       allSeriesHidden: '目前已隱藏全部曲線',
+      fullscreen: '全螢幕',
+      exitFullscreen: '退出全螢幕',
     },
     miss: {
       rawLogs: 'MISS 原始日誌',

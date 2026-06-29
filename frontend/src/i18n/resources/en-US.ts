@@ -83,6 +83,8 @@ export const enUS = {
       hideSeries: 'Click to hide this series',
       noScopeData: 'No node time-series data in this range',
       allSeriesHidden: 'All series are hidden',
+      fullscreen: 'Fullscreen',
+      exitFullscreen: 'Exit fullscreen',
     },
     miss: {
       rawLogs: 'MISS raw logs',

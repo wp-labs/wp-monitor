@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   App, Button, DatePicker, Divider, Input, InputNumber, Pagination, Space, Spin, Switch, Typography,
 } from "antd";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Maximize2, Minimize2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import dayjs, { type Dayjs } from "dayjs";
 
@@ -227,6 +227,7 @@ export default function WpMonitorPage() {
   const [drawerLoading, setDrawerLoading] = useState(false);
   const [drawerError, setDrawerError] = useState("");
   const [detailPanelHeight, setDetailPanelHeight] = useState(290);
+  const [detailFullscreen, setDetailFullscreen] = useState(false);
   const [missLogsLoading, setMissLogsLoading] = useState(false);
   const [missLogsError, setMissLogsError] = useState("");
   const [missLogs, setMissLogs] = useState<VlogRecord[]>([]);
@@ -797,6 +798,16 @@ export default function WpMonitorPage() {
     setDetailNodePill(resolveNodePillById(selectedNode));
   }, [detailNodePill, resolveNodePillById, selectedNode]);
 
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && detailFullscreen) {
+        setDetailFullscreen(false);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [detailFullscreen]);
+
   function nodeClass(
     base: string,
     nodeId: string,
@@ -1356,6 +1367,7 @@ export default function WpMonitorPage() {
                   }
                 >
                   {t("monitor.layer.source")}
+                  <span className="lane-count">{snapshot.sources.length}</span>
                 </div>
               </div>
               <div className="lane-scroll">
@@ -1704,8 +1716,8 @@ export default function WpMonitorPage() {
 
       <aside
         ref={detailPanelRef}
-        className={`detail-panel card ${selectedNode ? "open" : ""}`}
-        style={{ height: `${detailPanelHeight}px` }}
+        className={`detail-panel card ${selectedNode ? "open" : ""} ${detailFullscreen ? "fullscreen" : ""}`}
+        style={{ height: detailFullscreen ? undefined : `${detailPanelHeight}px` }}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="detail-resize-bar">
@@ -1795,8 +1807,16 @@ export default function WpMonitorPage() {
               </Space>
             )}
             <button
+              className="detail-fullscreen-btn"
+              title={detailFullscreen ? t("monitor.detail.exitFullscreen") : t("monitor.detail.fullscreen")}
+              onClick={() => setDetailFullscreen((v) => !v)}
+            >
+              {detailFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+            </button>
+            <button
               className="drawer-close"
               onClick={() => {
+                setDetailFullscreen(false);
                 setSelectedNode("");
                 setParseSeriesList(null);
                 setDetailNodePill("");
