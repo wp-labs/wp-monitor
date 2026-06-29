@@ -2,7 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   App, Button, DatePicker, Divider, Input, InputNumber, Pagination, Space, Spin, Switch, Typography,
 } from "antd";
-import { ChevronDown, Maximize2, Minimize2 } from "lucide-react";
+import {
+  Ban,
+  ChartLine,
+  ChevronDown,
+  CodeXml,
+  Database,
+  FileText,
+  Inbox,
+  Maximize2,
+  Minimize2,
+  RadioTower,
+  SendHorizontal,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import dayjs, { type Dayjs } from "dayjs";
 
@@ -48,6 +60,7 @@ const QUICK_RANGES = [
 ] as const;
 const MISS_PAGE_SIZE = 10;
 const REALTIME_END_LAG_MS = 5000;
+const PACKAGE_ICON_TONES = ["mint", "amber", "sky"] as const;
 
 function escapeSpecialChars(str: string): string {
   return str
@@ -1357,7 +1370,7 @@ export default function WpMonitorPage() {
             <section className="lane">
               <div className="lane-head">
                 <div
-                  className={`lane-title lane-title-clickable ${selectedNode === "__source__" ? "selected" : ""}`}
+                  className={`lane-title lane-title-clickable lane-title--with-icon ${selectedNode === "__source__" ? "selected" : ""}`}
                   onClick={() =>
                     void openParseTimeseries(
                       "source",
@@ -1366,7 +1379,10 @@ export default function WpMonitorPage() {
                     )
                   }
                 >
-                  {t("monitor.layer.source")}
+                  <span className="lane-title__label">
+                    <Database className="lane-title__icon" size={14} strokeWidth={2.1} aria-hidden="true" />
+                    <span>{t("monitor.layer.source")}</span>
+                  </span>
                   <span className="lane-count">{snapshot.sources.length}</span>
                 </div>
               </div>
@@ -1379,7 +1395,10 @@ export default function WpMonitorPage() {
                     onMouseLeave={() => { setHoveredNode(""); setSweepNode(""); }}
                     onClick={() => void openDetail(node.id)}
                   >
-                    <div className="node__title">{node.name}</div>
+                    <div className="node__title node__title--with-icon">
+                      <RadioTower className="node__title-icon" size={15} strokeWidth={2.1} aria-hidden="true" />
+                      <span>{node.name}</span>
+                    </div>
                     <div className="metric-badges">
                       <span className="metric-badge">{t("monitor.metric.rate")} {fmtRate(node.metrics.log_rate_eps)}</span>
                       <span className="metric-badge">{t("monitor.metric.count")} {fmtCount(node.metrics.log_count)}</span>
@@ -1393,10 +1412,13 @@ export default function WpMonitorPage() {
               <div className="lane-head">
                 <div className="filter-toggle" style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <div
-                    className={`lane-title lane-title-clickable ${selectedNode === "__parse__" ? "selected" : ""}`}
+                    className={`lane-title lane-title-clickable lane-title--with-icon lane-title--parse ${selectedNode === "__parse__" ? "selected" : ""}`}
                     onClick={() => void openParseScope()}
                   >
-                    Parse
+                    <span className="lane-title__label">
+                      <CodeXml className="lane-title__icon lane-title__icon--parse" size={16} strokeWidth={2.1} aria-hidden="true" />
+                      <span>Parse</span>
+                    </span>
                   </div>
                   <Button
                     size="small"
@@ -1481,13 +1503,14 @@ export default function WpMonitorPage() {
                 </div>
               </div>
               <div className="lane-scroll">
-                {parsePageItems.map((parseItem) => {
+                {parsePageItems.map((parseItem, index) => {
                   const isExpanded = expandedPackages.includes(parseItem.id);
                   const showLogs = parseFilter === "withData"
                     ? parseItem.logs.filter((l) => l.metrics.log_rate_eps > 0)
                     : parseFilter === "noData"
                       ? parseItem.logs.filter((l) => l.metrics.log_rate_eps === 0)
                       : parseItem.logs;
+                  const packageTone = PACKAGE_ICON_TONES[index % PACKAGE_ICON_TONES.length];
                   return (
                     <section
                       key={parseItem.id}
@@ -1514,8 +1537,11 @@ export default function WpMonitorPage() {
                             );
                           }}
                         >
-                          <div className="node__title">
-                            {parseItem.package_name}
+                          <div className="node__title node__title--with-icon">
+                            <span className={`node__package-icon-chip node__package-icon-chip--${packageTone}`} aria-hidden="true">
+                              <Database className="node__package-icon" size={16} strokeWidth={2.1} />
+                            </span>
+                            <span>{parseItem.package_name}</span>
                           </div>
                           <Typography.Text className="node__summary" type="secondary">
                             {t("monitor.parse.packageSummary", {
@@ -1526,6 +1552,7 @@ export default function WpMonitorPage() {
                           </Typography.Text>
                         </div>
                         <Button
+                          className="node__collapse-btn"
                           size="small"
                           type="text"
                           style={{ opacity: 0.45 }}
@@ -1554,7 +1581,10 @@ export default function WpMonitorPage() {
                               }}
                             >
                               <div className="node__leaf-head">
-                                <div className="node__title">{logItem.name}</div>
+                                <div className="node__title node__title--with-icon node__title--leaf">
+                                  <FileText className="node__leaf-title-icon" size={14} strokeWidth={2} aria-hidden="true" />
+                                  <span>{logItem.name}</span>
+                                </div>
                                 <div className="metric-inline-badges">
                                   <span className="metric-inline-badge">
                                     {t("monitor.metric.rate")} {fmtRate(logItem.metrics.log_rate_eps)}
@@ -1586,7 +1616,7 @@ export default function WpMonitorPage() {
             <section className="lane">
               <div className="lane-head">
                 <div
-                  className={`lane-title lane-title-clickable ${selectedNode === "__sink__" ? "selected" : ""}`}
+                  className={`lane-title lane-title-clickable lane-title--with-icon ${selectedNode === "__sink__" ? "selected" : ""}`}
                   onClick={() =>
                     void openParseTimeseries(
                       "sink",
@@ -1595,7 +1625,10 @@ export default function WpMonitorPage() {
                     )
                   }
                 >
-                  {t("monitor.layer.sink")}
+                  <span className="lane-title__label">
+                    <SendHorizontal className="lane-title__icon" size={14} strokeWidth={2.1} aria-hidden="true" />
+                    <span>{t("monitor.layer.sink")}</span>
+                  </span>
                 </div>
                 <div className="lane-actions">
                   <Button size="small" onClick={() => setExpandedGroups(snapshot.sinks.map((group) => group.id))}>
@@ -1618,7 +1651,10 @@ export default function WpMonitorPage() {
                   onClick={() => void openDetail(snapshot.miss.id)}
                 >
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                    <div className="node__title" style={{ marginBottom: 0 }}>{snapshot.miss.name}</div>
+                    <div className="node__title node__title--with-icon" style={{ marginBottom: 0 }}>
+                      <Ban className="node__miss-title-icon" size={15} strokeWidth={2} aria-hidden="true" />
+                      <span>{snapshot.miss.name}</span>
+                    </div>
                     <div className="metric-badges" style={{ marginTop: 0 }}>
                       <span className="metric-badge">
                         {t("monitor.metric.total")} {fmtCount(snapshot.miss.metrics.log_count)}
@@ -1653,16 +1689,22 @@ export default function WpMonitorPage() {
                       onClick={handleGroupClick}
                     >
                       <div className="node__header">
-                        <div>
-                          <div className="node__title">
-                            {group.sink_group}
+                        <div className="node__group-row">
+                          <span className="node__package-icon-chip node__package-icon-chip--amber" aria-hidden="true">
+                            <Inbox className="node__package-icon" size={16} strokeWidth={2.1} />
+                          </span>
+                          <div>
+                            <div className="node__title">
+                              {group.sink_group}
+                            </div>
+                            <Typography.Text className="node__summary" type="secondary">
+                              {fmtRate(group.metrics.log_rate_eps)} /{" "}
+                              {fmtCount(group.metrics.log_count)} · {t("monitor.sink.outputTargets", { count: group.sinks.length })}
+                            </Typography.Text>
                           </div>
-                          <Typography.Text className="node__summary" type="secondary">
-                            {fmtRate(group.metrics.log_rate_eps)} /{" "}
-                            {fmtCount(group.metrics.log_count)} · {t("monitor.sink.outputTargets", { count: group.sinks.length })}
-                          </Typography.Text>
                         </div>
                         <Button
+                          className="node__collapse-btn"
                           size="small"
                           type="text"
                           style={{ opacity: 0.45 }}
@@ -1729,7 +1771,10 @@ export default function WpMonitorPage() {
         </div>
         <div className="detail-panel-head">
           <div className="detail-panel-head-left">
-            <Typography.Text style={{ fontSize: 13, fontWeight: 600, fontFamily: "var(--font-mono)", color: "var(--detail-heading-color, var(--accent))" }}>{t("monitor.detail.nodeDetail")}</Typography.Text>
+            <span className="detail-heading-label">
+              <ChartLine className="detail-heading-icon" size={16} strokeWidth={2} aria-hidden="true" />
+              <Typography.Text style={{ fontSize: 13, fontWeight: 600, fontFamily: "var(--font-mono)", color: "var(--detail-heading-color, var(--accent))" }}>{t("monitor.detail.nodeDetail")}</Typography.Text>
+            </span>
             {detailNodePill && (
               <span className={`detail-node-pill detail-node-pill--${detailNodePillType}`}>
                 {detailNodePill}
