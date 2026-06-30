@@ -983,7 +983,7 @@ body::before {
   box-shadow: var(--chart-tooltip-shadow) !important;
 }
 /* Dark tooltip overrides */
-.apexcharts-tooltip { background: rgba(16, 17, 19, 0.96) !important; color: var(--text-main) !important; }
+.apexcharts-tooltip { background: rgba(16, 17, 19, 0.96) !important; color: var(--text-main) !important; pointer-events: auto !important; }
 .apexcharts-tooltip.apexcharts-theme-light,
 .apexcharts-tooltip.apexcharts-theme-dark {
   border: 1px solid var(--chart-tooltip-border) !important;
@@ -1037,6 +1037,67 @@ body::before {
   transform: none !important;
   width: 8px !important;
 }
+/* ===== Custom shared tooltip (multi-series) ===== */
+.custom-tooltip-box {
+  min-width: 190px;
+  max-width: 320px;
+  max-height: 360px;
+  overflow-y: auto;
+  pointer-events: auto;
+  background: var(--tooltip-bg, rgba(16, 17, 19, 0.98));
+  border: 1px solid var(--chart-tooltip-border, rgba(var(--accent-rgb), 0.22));
+  border-radius: 8px;
+  box-shadow: var(--chart-tooltip-shadow, 0 6px 18px rgba(0,0,0,0.4));
+  font-family: var(--font-main);
+  scrollbar-width: thin;
+}
+.custom-tooltip-box__title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-overlay, rgba(16, 17, 19, 0.98));
+  border-bottom: 1px solid rgba(var(--accent-rgb), 0.12);
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-sub);
+  font-family: var(--font-main);
+}
+.custom-tooltip-box__list {
+  padding: 4px 0;
+}
+.custom-tooltip-box__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  font-size: 11px;
+  line-height: 18px;
+}
+.custom-tooltip-box__row:hover {
+  background: rgba(var(--accent-rgb), 0.08);
+}
+.custom-tooltip-box__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.custom-tooltip-box__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+}
+.custom-tooltip-box__value {
+  flex-shrink: 0;
+  color: var(--text-sub);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
 /* detail-col 内图表撑满剩余空间 */
 .detail-col .spark {
   flex: 1;

@@ -264,6 +264,7 @@ export default function WpMonitorPage() {
   const [refreshSpin, setRefreshSpin] = useState(false);
   const [detailTrendAutoRefresh, setDetailTrendAutoRefresh] = useState(true);
   const [isRangePickerOpen, setIsRangePickerOpen] = useState(false);
+  const [isTimeDraftDirty, setIsTimeDraftDirty] = useState(false);
 
   const [parseFilter, setParseFilter] = useState<"withData" | "noData">("withData");
   const PARSE_PAGE_SIZE = 20;
@@ -287,6 +288,7 @@ export default function WpMonitorPage() {
   const scopeSeriesColorCursorRef = useRef(0);
   const detailRequestSeqRef = useRef(0);
   const isInitialMountRef = useRef(true);
+  const userTimeChangeRef = useRef(false);
 
   const clampDetailPanelHeight = useCallback((h: number) => {
     const isMobile = window.innerWidth <= 768;
@@ -306,6 +308,8 @@ export default function WpMonitorPage() {
       setRefreshSpin(false);
     }, 300);
   }, []);
+
+  const isTimeSelectionPending = isRangePickerOpen || isTimeDraftDirty;
 
   async function loadSnapshot(start = startTime, end = endTime) {
     try {
@@ -333,7 +337,6 @@ export default function WpMonitorPage() {
           ruleNames: filterLogsByMode(pkg.logs, parseFilterRef.current).map((log) => log.name),
         }))
         .filter((f) => f.ruleNames.length > 0);
-      // 自动刷新时保持窗口长度恒定，避免仅更新 end_time 导致时间范围持续漂移。
       const nowMs = nowWithLagMs();
       const startMs = new Date(startTime).getTime();
       const endMs = new Date(endTime).getTime();
@@ -387,7 +390,7 @@ export default function WpMonitorPage() {
   }, []);
 
   useEffect(() => {
-    if (!autoRefreshEnabled || isRangePickerOpen) return;
+    if (!autoRefreshEnabled || isTimeSelectionPending) return;
     const timer = setInterval(() => {
       void refreshMetricsOnly();
     }, refreshIntervalSec * 1000);
@@ -397,8 +400,14 @@ export default function WpMonitorPage() {
     startTime,
     autoRefreshEnabled,
     refreshIntervalSec,
-    isRangePickerOpen,
+    isTimeSelectionPending,
   ]);
+
+  useEffect(() => {
+    if (isTimeSelectionPending) return;
+    setDraftStart(toDateFromIso(startTime));
+    setDraftEnd(toDateFromIso(endTime));
+  }, [startTime, endTime, isTimeSelectionPending]);
 
   useEffect(() => {
     function onDocClick(event: MouseEvent) {
@@ -549,6 +558,8 @@ export default function WpMonitorPage() {
       isMissSelected ||
       Boolean(parseSeriesList) ||
       !detailTrendAutoRefresh ||
+      !autoRefreshEnabled ||
+      isTimeSelectionPending ||
       drawerLoading
     )
       return;
@@ -600,6 +611,8 @@ export default function WpMonitorPage() {
     selectedNode,
     isMissSelected,
     detailTrendAutoRefresh,
+    autoRefreshEnabled,
+    isTimeSelectionPending,
     drawerLoading,
     detailStartTime,
     detailEndTime,
@@ -615,6 +628,8 @@ export default function WpMonitorPage() {
       !scopeSeriesRequest ||
       parseSeriesList === null ||
       !detailTrendAutoRefresh ||
+      !autoRefreshEnabled ||
+      isTimeSelectionPending ||
       drawerLoading
     )
       return;
@@ -688,6 +703,8 @@ export default function WpMonitorPage() {
     scopeSeriesRequest,
     parseSeriesList,
     detailTrendAutoRefresh,
+    autoRefreshEnabled,
+    isTimeSelectionPending,
     drawerLoading,
     detailStartTime,
     detailEndTime,
@@ -743,12 +760,31 @@ export default function WpMonitorPage() {
     setParseSearchActiveIndex(0);
   }, [parseQuery, parseSearchOpen]);
 
-  // 过滤切换且 scope 已打开时自动刷新
+  // 过滤切换或 parse lane 可见节点变化时，scope 趋势图同步刷新
+  const filteredScopeSignature = useMemo(
+    () =>
+      filteredParses
+        .map((pkg) => {
+          const logs = filterLogsByMode(pkg.logs, parseFilter)
+            .map((log) => log.name)
+            .join(",");
+          return `${pkg.package_name}:${logs}`;
+        })
+        .join("|"),
+    [filteredParses, parseFilter],
+  );
+  const prevFilteredScopeSignature = useRef(filteredScopeSignature);
+
   useEffect(() => {
     if (!snapshot || !initialScopeOpened.current || detailViewMode !== "scope") return;
 
+    const scopeChanged = filteredScopeSignature !== prevFilteredScopeSignature.current;
+    prevFilteredScopeSignature.current = filteredScopeSignature;
+
     if (scopeModeRef.current === "package") {
-      void openParseScope();
+      if (scopeChanged) {
+        void openParseScope(false);
+      }
     } else if (scopeModeRef.current === "log" && scopeSeriesRequest) {
       const req = scopeSeriesRequest;
       let logNodeIds: string[] | undefined;
@@ -768,7 +804,7 @@ export default function WpMonitorPage() {
         setDrawerError((err as Error).message || t("monitor.error.parseTimeseriesFetchFailed"));
       });
     }
-  }, [parseFilter]);
+  }, [filteredScopeSignature]);
 
   useEffect(() => {
     scopeSeriesColorMapRef.current.clear();
@@ -833,14 +869,21 @@ export default function WpMonitorPage() {
     return classes.join(" ");
   }
 
-  async function loadMissedLogs() {
+  async function loadMissedLogs(resetPage = true) {
     try {
       setMissLogsLoading(true);
       setMissLogsError("");
       const data = await fetchMissedLogs();
       setMissLogs(data.items);
       setMissTotal(data.total ?? data.items.length);
-      setMissPage(1);
+      if (resetPage) {
+        setMissPage(1);
+      } else {
+        setMissPage((prev) => {
+          const maxPage = Math.max(1, Math.ceil(data.items.length / MISS_PAGE_SIZE));
+          return Math.min(prev, maxPage);
+        });
+      }
       return true;
     } catch (err) {
       setMissLogs([]);
@@ -942,6 +985,7 @@ export default function WpMonitorPage() {
       setDetailNodePill(normalizeNodePill(detailResp.data.name));
       setSeries(seriesResp.data);
     } catch (err) {
+      if (detailRequestSeqRef.current !== seq) return;
       if (isMissNode) {
         setMissLogs([]);
         setMissLogsError((err as Error).message || t("monitor.error.missedLogsFetchFailed"));
@@ -949,6 +993,7 @@ export default function WpMonitorPage() {
       }
       setDrawerError((err as Error).message || t("monitor.error.nodeDetailFetchFailed"));
     } finally {
+      if (detailRequestSeqRef.current !== seq) return;
       setDrawerLoading(false);
     }
   }
@@ -995,8 +1040,10 @@ export default function WpMonitorPage() {
       if (detailRequestSeqRef.current !== seq) return;
       setParseSeriesList(timeseriesResp.data ?? []);
     } catch (err) {
+      if (detailRequestSeqRef.current !== seq) return;
       setDrawerError((err as Error).message || t("monitor.error.parseTimeseriesFetchFailed"));
     } finally {
+      if (detailRequestSeqRef.current !== seq) return;
       setDrawerLoading(false);
     }
   }
@@ -1031,19 +1078,24 @@ export default function WpMonitorPage() {
         setParseSeriesList(timeseriesResp.data ?? []);
       }
     } catch (err) {
+      if (detailRequestSeqRef.current !== seq) return;
       setDrawerError((err as Error).message || t("monitor.error.parseTimeseriesFetchFailed"));
     } finally {
+      if (detailRequestSeqRef.current !== seq) return;
       setDrawerLoading(false);
     }
   }
 
-  // 全局时间范围变化时，同步刷新详情面板趋势图
+  // 用户主动修改时间范围时，同步刷新详情面板趋势图
   useEffect(() => {
     if (isInitialMountRef.current) {
       isInitialMountRef.current = false;
       return;
     }
     if (!selectedNode) return;
+    const isUserChange = userTimeChangeRef.current;
+    userTimeChangeRef.current = false;
+    if (!isUserChange) return;
     if (detailViewMode === "node") {
       void openDetail(selectedNode, false);
     } else if (detailViewMode === "scope") {
@@ -1088,6 +1140,8 @@ export default function WpMonitorPage() {
       return;
     }
     setError("");
+    userTimeChangeRef.current = true;
+    setIsTimeDraftDirty(false);
     setStartTime(nextStart);
     setEndTime(nextEnd);
     setAutoRefreshEnabled(enableAutoRefresh);
@@ -1101,8 +1155,10 @@ export default function WpMonitorPage() {
     if (!range) return;
     setDraftStart(new Date(range.start));
     setDraftEnd(new Date(range.end));
+    setIsTimeDraftDirty(false);
     setIsRangePickerOpen(false);
-    await applyTimeRange(range.start, range.end, true);
+    // 仅 5m 保持滑动窗口以支持实时监控，其余范围固定时间窗口
+    await applyTimeRange(range.start, range.end, key === "5m");
   }
 
   async function onApplyTime() {
@@ -1302,9 +1358,19 @@ export default function WpMonitorPage() {
                 draftEnd ? dayjs(draftEnd) : null,
               ]}
               onChange={(dates: null | [Dayjs | null, Dayjs | null]) => {
+                const nextStart = dates?.[0]?.toDate() ?? null;
+                const nextEnd = dates?.[1]?.toDate() ?? null;
+                const appliedStartMs = new Date(startTime).getTime();
+                const appliedEndMs = new Date(endTime).getTime();
                 setDraftRange("custom");
-                setDraftStart(dates?.[0]?.toDate() ?? null);
-                setDraftEnd(dates?.[1]?.toDate() ?? null);
+                setDraftStart(nextStart);
+                setDraftEnd(nextEnd);
+                setIsTimeDraftDirty(
+                  !nextStart ||
+                    !nextEnd ||
+                    nextStart.getTime() !== appliedStartMs ||
+                    nextEnd.getTime() !== appliedEndMs,
+                );
               }}
               onCalendarChange={() => {
                 setDraftRange("custom");
@@ -1848,6 +1914,7 @@ export default function WpMonitorPage() {
                   size="small"
                   checked={detailTrendAutoRefresh}
                   onChange={setDetailTrendAutoRefresh}
+                  disabled={!autoRefreshEnabled || isTimeSelectionPending}
                 />
               </Space>
             )}
@@ -1925,7 +1992,7 @@ export default function WpMonitorPage() {
                     <div className="miss-query-toolbar">
                       <Button
                         size="small"
-                        onClick={() => void loadMissedLogs()}
+                        onClick={() => void loadMissedLogs(false)}
                         disabled={missLogsLoading}
                       >
                         {t("monitor.miss.refreshCurrentPage")}

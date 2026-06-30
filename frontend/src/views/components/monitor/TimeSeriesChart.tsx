@@ -30,6 +30,14 @@ function removeApexNativeSvgTitles(root: HTMLDivElement | null) {
   });
 }
 
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 export default function TimeSeriesChart({
   title,
   points,
@@ -53,10 +61,32 @@ export default function TimeSeriesChart({
   const flatPoints = isMulti
     ? (multiSeries ?? []).flatMap((seriesItem) => seriesItem.points)
     : points;
-  const firstTs = flatPoints[0] ? new Date(flatPoints[0].ts).getTime() : undefined;
-  const lastTs = flatPoints[flatPoints.length - 1]
-    ? new Date(flatPoints[flatPoints.length - 1].ts).getTime()
-    : undefined;
+  const firstTs = useMemo(() => {
+    if (!isMulti) {
+      return flatPoints[0] ? new Date(flatPoints[0].ts).getTime() : undefined;
+    }
+    let minTs = Infinity;
+    for (const s of (multiSeries ?? [])) {
+      for (const p of s.points) {
+        const t = new Date(p.ts).getTime();
+        if (t < minTs) minTs = t;
+      }
+    }
+    return minTs === Infinity ? undefined : minTs;
+  }, [isMulti, multiSeries]);
+  const lastTs = useMemo(() => {
+    if (!isMulti) {
+      return flatPoints[flatPoints.length - 1] ? new Date(flatPoints[flatPoints.length - 1].ts).getTime() : undefined;
+    }
+    let maxTs = -Infinity;
+    for (const s of (multiSeries ?? [])) {
+      for (const p of s.points) {
+        const t = new Date(p.ts).getTime();
+        if (t > maxTs) maxTs = t;
+      }
+    }
+    return maxTs === -Infinity ? undefined : maxTs;
+  }, [isMulti, multiSeries]);
   const values = flatPoints.map((point) => point.value);
   const valueMin = values.length > 0 ? Math.min(...values) : undefined;
   const valueMax = values.length > 0 ? Math.max(...values) : undefined;
@@ -82,18 +112,55 @@ export default function TimeSeriesChart({
   }, [chartWidth, flatPoints.length]);
 
   const series = useMemo(
-    () =>
-      isMulti
-        ? (multiSeries ?? []).map((seriesItem) => ({
-          name: seriesItem.name,
-          data: seriesItem.points.map((point) => ({ x: new Date(point.ts).getTime(), y: point.value })),
-        }))
-        : [
+    () => {
+      if (!isMulti) {
+        return [
           {
             name: title,
             data: points.map((point) => ({ x: new Date(point.ts).getTime(), y: point.value })),
           },
-        ],
+        ];
+      }
+      // 收集所有 series 的时间戳并排序，构成统一的 x 轴网格。
+      const tsSet = new Set<string>();
+      for (const s of (multiSeries ?? [])) {
+        for (const p of s.points) tsSet.add(p.ts);
+      }
+      const sortedTs = Array.from(tsSet).sort();
+      const sortedTsMs = sortedTs.map((ts) => new Date(ts).getTime());
+
+      return (multiSeries ?? []).map((seriesItem) => {
+        const pts = seriesItem.points;
+        if (pts.length === 0) {
+          return { name: seriesItem.name, data: [] as { x: number; y: number | null }[] };
+        }
+        // 将本 series 的点转为 {x, y} 并按时间排序
+        const own = pts
+          .map((p) => ({ x: new Date(p.ts).getTime(), y: p.value }))
+          .sort((a, b) => a.x - b.x);
+        const firstX = own[0].x;
+        const lastX = own[own.length - 1].x;
+
+        let cursor = 0;
+        const data = sortedTsMs.map((x) => {
+          // 在 series 数据范围之外：留 null
+          if (x < firstX || x > lastX) return { x, y: null };
+          // 移动 cursor 使 x 落在 own[cursor] 和 own[cursor+1] 之间
+          while (cursor < own.length - 2 && own[cursor + 1].x < x) cursor++;
+          const a = own[cursor];
+          const b = own[cursor + 1];
+          if (a.x === x) return { x, y: a.y };
+          if (b.x === x) return { x, y: b.y };
+          // 线性插值
+          if (a.x <= x && x <= b.x && b.x > a.x) {
+            const t = (x - a.x) / (b.x - a.x);
+            return { x, y: a.y + (b.y - a.y) * t };
+          }
+          return { x, y: null };
+        });
+        return { name: seriesItem.name, data };
+      });
+    },
     [isMulti, multiSeries, points, title],
   );
 
@@ -170,29 +237,87 @@ export default function TimeSeriesChart({
           },
         },
       },
-      tooltip: {
-        theme: 'dark',
-        shared: isMulti,
-        intersect: false,
-        followCursor: true,
-        x: {
-          formatter: (value) => {
-            const date = new Date(value);
-            return new Intl.DateTimeFormat(intlLocale, {
-              hour12: false,
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit',
-            }).format(date);
+      tooltip: isMulti
+        ? {
+            followCursor: true,
+            intersect: false,
+            shared: false,
+            custom({ dataPointIndex, w }) {
+              const idx = dataPointIndex;
+              if (idx < 0) return '';
+              const names: string[] = w.globals.seriesNames ?? [];
+              const colors: string[] = w.globals.colors ?? [];
+              const allSeries: Array<Array<number | null>> = w.globals.series ?? [];
+              const fmt = valueFormatter ?? ((v: number) => v.toFixed(2));
+              const xVal = w.globals.seriesX?.[0]?.[idx];
+              let timeStr = '';
+              if (xVal != null) {
+                const date = new Date(xVal);
+                if (!Number.isNaN(date.getTime())) {
+                  timeStr = new Intl.DateTimeFormat(intlLocale, {
+                    hour12: false,
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                  }).format(date);
+                }
+              }
+
+              const rows: Array<{ name: string; color: string; y: number; label: string }> = [];
+              for (let i = 0; i < names.length; i++) {
+                const y = allSeries[i]?.[idx];
+                if (y == null) continue;
+                rows.push({
+                  name: names[i],
+                  color: colors[i] ?? palette[i % palette.length],
+                  y: Number(y),
+                  label: fmt(Number(y)),
+                });
+              }
+              rows.sort((a, b) => (b.y ?? -Infinity) - (a.y ?? -Infinity));
+
+              let html = '<div class="custom-tooltip-box">';
+              if (timeStr) {
+                html += `<div class="custom-tooltip-box__title">${timeStr}</div>`;
+              }
+              html += '<div class="custom-tooltip-box__list">';
+              for (const r of rows) {
+                html += `<div class="custom-tooltip-box__row">`;
+                html += `<span class="custom-tooltip-box__dot" style="background:${r.color}"></span>`;
+                html += `<span class="custom-tooltip-box__name">${escapeHtml(r.name)}</span>`;
+                html += `<span class="custom-tooltip-box__value">${r.label}</span>`;
+                html += '</div>';
+              }
+              html += '</div></div>';
+              return html;
+            },
+          }
+        : {
+            theme: 'dark',
+            shared: false,
+            intersect: false,
+            followCursor: true,
+            x: {
+              formatter: (value) => {
+                const date = new Date(value);
+                return new Intl.DateTimeFormat(intlLocale, {
+                  hour12: false,
+                  year: 'numeric',
+                  month: '2-digit',
+                  day: '2-digit',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit',
+                }).format(date);
+              },
+            },
+            y: {
+              formatter: (value) => (valueFormatter ? valueFormatter(Number(value)) : Number(value).toFixed(2)),
+            },
           },
-        },
-        y: {
-          formatter: (value) => (valueFormatter ? valueFormatter(Number(value)) : Number(value).toFixed(2)),
-        },
-      },
       legend: {
         show: isMulti && showLegend,
         position: legendPosition || "top",
@@ -262,6 +387,7 @@ export default function TimeSeriesChart({
         colors: options.colors,
         xaxis: options.xaxis,
         yaxis: options.yaxis,
+        tooltip: options.tooltip,
         series,
       },
       false,
@@ -269,6 +395,24 @@ export default function TimeSeriesChart({
       false,
     ).then(() => removeApexNativeSvgTitles(chartRef.current));
   }, [options, series]);
+
+  // 多 series 时 ApexCharts 给 tooltip 内联了 pointer-events:none，
+  // 滚轮事件穿透到 chart 容器。这里手动转发滚轮给 custom tooltip 列表。
+  useEffect(() => {
+    if (!isMulti) return;
+    const el = chartRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const box = el.querySelector<HTMLElement>('.custom-tooltip-box');
+      if (!box) return;
+      const tooltip = box.closest<HTMLElement>('.apexcharts-tooltip');
+      if (!tooltip || tooltip.style.display === 'none') return;
+      box.scrollTop += e.deltaY;
+      e.preventDefault();
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [isMulti]);
 
   return (
     <div className="spark">

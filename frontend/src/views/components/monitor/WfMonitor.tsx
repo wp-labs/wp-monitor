@@ -219,15 +219,24 @@ function SourceTable({ sources }: { sources: WfSourceItem[] }) {
   const [groupBy, setGroupBy] = useState<'source' | 'machine'>('source');
   const [machineData, setMachineData] = useState<WfSourceMachineItem[] | null>(null);
   const [machineLoading, setMachineLoading] = useState(false);
+  const [machineError, setMachineError] = useState('');
 
   // lazy-load machine data
   useEffect(() => {
     if (groupBy === 'machine' && machineData === null) {
       setMachineLoading(true);
-      fetchWfSourceMachines('', '').then((r) => {
-        setMachineData(r.data);
-        setMachineLoading(false);
-      });
+      setMachineError('');
+      void fetchWfSourceMachines('', '')
+        .then((r) => {
+          setMachineData(r.data);
+        })
+        .catch((err) => {
+          setMachineData([]);
+          setMachineError((err as Error).message || '设备数据加载失败');
+        })
+        .finally(() => {
+          setMachineLoading(false);
+        });
     }
   }, [groupBy, machineData]);
 
@@ -320,6 +329,8 @@ function SourceTable({ sources }: { sources: WfSourceItem[] }) {
       <div className="panel-body">
         {machineLoading ? (
           <div style={{ padding: 12, color: 'var(--text-dim)', fontSize: 12 }}>加载中...</div>
+        ) : machineError ? (
+          <div style={{ padding: 12, color: 'var(--warning)', fontSize: 12 }}>{machineError}</div>
         ) : (
           <table>
             <thead onClick={(e) => {
@@ -502,16 +513,30 @@ function SmPopover({
 }) {
   const [items, setItems] = useState<WfStateMachineItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const popRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
-    fetchWfStateMachines(ruleName).then((r) => {
-      if (!cancelled) {
-        setItems(r.data.slice(0, 4));
-        setLoading(false);
-      }
-    });
+    setLoading(true);
+    setError('');
+    void fetchWfStateMachines(ruleName)
+      .then((r) => {
+        if (!cancelled) {
+          setItems(r.data.slice(0, 4));
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setItems([]);
+          setError((err as Error).message || '状态机数据加载失败');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
     return () => { cancelled = true; };
   }, [ruleName]);
 
@@ -526,6 +551,8 @@ function SmPopover({
       <div className="pop-body">
         {loading
           ? <div className="pop-item" style={{ color: 'var(--text-dim)' }}>加载中...</div>
+          : error
+            ? <div className="pop-item" style={{ color: 'var(--warning)' }}>{error}</div>
           : items.map((si) => (
             <div className="pop-item" key={si.scope_key}>
               <span className="pop-name">{si.scope_key}</span>
@@ -559,12 +586,19 @@ function AlertTable({ rules }: { rules: WfRuleItem[] }) {
   const [mode, setMode] = useState<'active' | 'quiet'>('active');
   const [groupBy, setGroupBy] = useState<'rule' | 'machine'>('rule');
   const [machineData, setMachineData] = useState<WfRuleMachineItem[] | null>(null);
+  const [machineError, setMachineError] = useState('');
   const [hoverRule, setHoverRule] = useState<string | null>(null);
   const [hoverTrigger, setHoverTrigger] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     if (groupBy === 'machine' && machineData === null) {
-      fetchWfRuleMachines('', '').then((r) => setMachineData(r.data));
+      setMachineError('');
+      void fetchWfRuleMachines('', '')
+        .then((r) => setMachineData(r.data))
+        .catch((err) => {
+          setMachineData([]);
+          setMachineError((err as Error).message || '设备规则数据加载失败');
+        });
     }
   }, [groupBy, machineData]);
 
@@ -632,6 +666,9 @@ function AlertTable({ rules }: { rules: WfRuleItem[] }) {
         </span>
       </div>
       <div className="panel-body">
+        {machineError && groupBy === 'machine' ? (
+          <div style={{ padding: 12, color: 'var(--warning)', fontSize: 12 }}>{machineError}</div>
+        ) : (
         <table>
           <thead onClick={(e) => {
             const th = (e.target as HTMLElement).closest('th.sortable');
@@ -697,6 +734,7 @@ function AlertTable({ rules }: { rules: WfRuleItem[] }) {
             ))}
           </tbody>
         </table>
+        )}
       </div>
       <Pagination page={ps.page} total={total} onChange={(p) => setPs((prev) => ({ ...prev, page: p }))} />
 
@@ -817,6 +855,7 @@ export default function WfMonitor() {
   const [fsTitle, setFsTitle] = useState('');
   const [fsSeriesList, setFsSeriesList] = useState<Array<{ name: string; points: TimePoint[]; color: string }>>([]);
   const [fsPalette, setFsPalette] = useState<string[]>([]);
+  const [loadError, setLoadError] = useState('');
 
   const chartColors = useMemo(() => {
     const isLight = theme === 'light-modern';
@@ -828,36 +867,43 @@ export default function WfMonitor() {
 
   // initial load
   useEffect(() => {
-    loadAll();
+    void loadAll();
   }, []);
 
   // periodic refresh
   useEffect(() => {
-    const timer = setInterval(loadAll, REFRESH_MS);
+    const timer = setInterval(() => {
+      void loadAll();
+    }, REFRESH_MS);
     return () => clearInterval(timer);
   }, [throughputGroupBy, windowMetric, alertGroupBy]);
 
   async function loadAll() {
-    const [pipelineRes, sourcesRes, windowsRes, rulesRes] = await Promise.all([
-      fetchWfPipeline('', ''),
-      fetchWfSources('', ''),
-      fetchWfWindows('', ''),
-      fetchWfRules('', ''),
-    ]);
-    setPipeline(pipelineRes.data);
-    setSources(sourcesRes.data);
-    setWindows(windowsRes.data);
-    setRules(rulesRes.data);
+    try {
+      setLoadError('');
+      const [pipelineRes, sourcesRes, windowsRes, rulesRes] = await Promise.all([
+        fetchWfPipeline('', ''),
+        fetchWfSources('', ''),
+        fetchWfWindows('', ''),
+        fetchWfRules('', ''),
+      ]);
+      setPipeline(pipelineRes.data);
+      setSources(sourcesRes.data);
+      setWindows(windowsRes.data);
+      setRules(rulesRes.data);
 
-    // timeseries
-    const [tsRes, wsRes, asRes] = await Promise.all([
-      fetchWfTimeseriesThroughput('', '', throughputGroupBy),
-      fetchWfTimeseriesWindows('', '', windowMetric),
-      fetchWfTimeseriesAlerts('', '', alertGroupBy),
-    ]);
-    setThroughputSeries(tsRes.data);
-    setWindowSeries(wsRes.data);
-    setAlertSeries(asRes.data);
+      // timeseries
+      const [tsRes, wsRes, asRes] = await Promise.all([
+        fetchWfTimeseriesThroughput('', '', throughputGroupBy),
+        fetchWfTimeseriesWindows('', '', windowMetric),
+        fetchWfTimeseriesAlerts('', '', alertGroupBy),
+      ]);
+      setThroughputSeries(tsRes.data);
+      setWindowSeries(wsRes.data);
+      setAlertSeries(asRes.data);
+    } catch (err) {
+      setLoadError((err as Error).message || '监控数据加载失败');
+    }
   }
 
   // build chart series
@@ -886,7 +932,7 @@ export default function WfMonitor() {
   }, [alertSeries, palette]);
 
   if (!pipeline) {
-    return <div style={{ padding: 24, color: 'var(--text-dim)' }}>加载中...</div>;
+    return <div style={{ padding: 24, color: loadError ? 'var(--warning)' : 'var(--text-dim)' }}>{loadError || '加载中...'}</div>;
   }
 
   return (
