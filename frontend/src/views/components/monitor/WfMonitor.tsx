@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from '@/context/ThemeContext';
 import TimeSeriesChart from '@/views/components/monitor/TimeSeriesChart';
 import { getPalette } from '@/views/components/monitor/chartPalette';
@@ -212,7 +212,7 @@ function Pagination({
 
 // ── Source table ──
 
-function SourceTable({ sources }: { sources: WfSourceItem[] }) {
+function SourceTable({ sources, timeRange }: { sources: WfSourceItem[]; timeRange: { start: string; end: string } }) {
   const [ps, setPs] = useState<PageState>({ page: 1, sortBy: 'rows', sortDir: 'desc' });
   const [search, setSearch] = useState('');
   const [mode, setMode] = useState<'active' | 'quiet'>('active');
@@ -220,16 +220,16 @@ function SourceTable({ sources }: { sources: WfSourceItem[] }) {
   const [machineData, setMachineData] = useState<WfSourceMachineItem[] | null>(null);
   const [machineLoading, setMachineLoading] = useState(false);
 
-  // lazy-load machine data
+  // lazy-load machine data, re-fetch on time change; only show loading on initial fetch
   useEffect(() => {
-    if (groupBy === 'machine' && machineData === null) {
-      setMachineLoading(true);
-      fetchWfSourceMachines('', '').then((r) => {
+    if (groupBy === 'machine') {
+      if (!machineData) setMachineLoading(true);
+      fetchWfSourceMachines(timeRange.start, timeRange.end).then((r) => {
         setMachineData(r.data);
         setMachineLoading(false);
       });
     }
-  }, [groupBy, machineData]);
+  }, [groupBy, timeRange.start, timeRange.end]);
 
   // source mode
   const srcFiltered = useMemo(() => {
@@ -352,7 +352,7 @@ function SourceTable({ sources }: { sources: WfSourceItem[] }) {
                   ? (
                     <tr key={(item as WfSourceMachineItem).machine}>
                       <td className="name">{(item as WfSourceMachineItem).machine}</td>
-                      <td className="dim">{(item as WfSourceMachineItem).source_count} 个来源</td>
+                      <td className="num">{(item as WfSourceMachineItem).source_count}</td>
                       <td className="num">{fmtNum(item.rows)}</td>
                       <td className="num" style={{ color: (item as WfSourceMachineItem).route_errors > 0 ? 'var(--warning)' : 'var(--text-dim)' }}>
                         {(item as WfSourceMachineItem).route_errors}
@@ -494,66 +494,150 @@ function WindowTable({ windows }: { windows: WfWindowItem[] }) {
 function SmPopover({
   ruleName,
   totalEmitted,
+  startTime,
+  endTime,
+  triggerEl,
   onClose,
 }: {
   ruleName: string;
   totalEmitted: number;
+  startTime: string;
+  endTime: string;
+  triggerEl: HTMLElement;
   onClose: () => void;
 }) {
-  const [items, setItems] = useState<WfStateMachineItem[]>([]);
+  const [allItems, setAllItems] = useState<WfStateMachineItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pos, setPos] = useState<{ top: number; left: number; dir: 'above' | 'below'; arrowX: number }>({ top: 0, left: 0, dir: 'above', arrowX: 50 });
+  const [visible, setVisible] = useState(false);
+  const [fsOpen, setFsOpen] = useState(false);
   const popRef = useRef<HTMLDivElement>(null);
+  const showTimer = useRef<ReturnType<typeof setTimeout>>();
+  const hideTimer = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
     let cancelled = false;
-    fetchWfStateMachines(ruleName).then((r) => {
+    fetchWfStateMachines(ruleName, startTime, endTime).then((r) => {
       if (!cancelled) {
-        setItems(r.data.slice(0, 4));
+        setAllItems(r.data);
         setLoading(false);
       }
     });
     return () => { cancelled = true; };
-  }, [ruleName]);
+  }, [ruleName, startTime, endTime]);
+
+  // position popover relative to trigger
+  useEffect(() => {
+    if (loading) return;
+    const rect = triggerEl.getBoundingClientRect();
+    const popW = popRef.current?.offsetWidth || 200;
+    const popH = popRef.current?.offsetHeight || 140;
+    const spaceAbove = rect.top;
+    const dir = spaceAbove > popH + 12 ? 'above' : 'below' as const;
+
+    // right-align if trigger is on right half, left-align otherwise
+    const triggerCenter = rect.left + rect.width / 2;
+    let left: number;
+    if (triggerCenter > window.innerWidth / 2) {
+      left = Math.min(rect.right - popW, window.innerWidth - popW - 8);
+      left = Math.max(left, 8);
+    } else {
+      left = Math.max(rect.left, 8);
+      left = Math.min(left, window.innerWidth - popW - 8);
+    }
+
+    const top = dir === 'above' ? rect.top - popH - 8 : rect.bottom + 8;
+    const arrowX = Math.max(12, Math.min(popW - 12, rect.left + rect.width / 2 - left));
+    setPos({ top, left, dir, arrowX });
+    setVisible(true);
+  }, [triggerEl, loading, allItems]);
+
+  // delayed show
+  useEffect(() => {
+    clearTimeout(showTimer.current);
+    showTimer.current = setTimeout(() => setVisible(true), 200);
+    return () => clearTimeout(showTimer.current);
+  }, [triggerEl]);
+
+  const handleMouseEnter = () => {
+    clearTimeout(hideTimer.current);
+  };
+
+  const handleMouseLeave = () => {
+    hideTimer.current = setTimeout(onClose, 150);
+  };
+
+  const shown = allItems.slice(0, 4);
+  const totalItems = allItems.length;
 
   return (
-    <div
-      ref={popRef}
-      className="sm-popover-global show"
-      onMouseLeave={onClose}
-      onMouseEnter={() => {}}
-    >
-      <span className="pop-arrow" />
-      <div className="pop-body">
-        {loading
-          ? <div className="pop-item" style={{ color: 'var(--text-dim)' }}>加载中...</div>
-          : items.map((si) => (
-            <div className="pop-item" key={si.scope_key}>
-              <span className="pop-name">{si.scope_key}</span>
-              <span className="pop-bar-wrap">
-                <span
-                  className="pop-bar"
-                  style={{ width: `${totalEmitted > 0 ? Math.max(2, (si.emitted / totalEmitted) * 100).toFixed(0) : 0}%` }}
-                />
-              </span>
-              <span className="pop-val">{fmtNum(si.emitted)}</span>
+    <>
+      <div
+        ref={popRef}
+        className={`sm-popover-global ${pos.dir}${visible ? ' show' : ''}`}
+        style={{ top: pos.top, left: pos.left, '--arrow-x': pos.arrowX + 'px' } as React.CSSProperties}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+      >
+        <span className="pop-arrow" />
+        <div className="pop-body">
+          {loading
+            ? <div className="pop-item" style={{ color: 'var(--text-dim)' }}>加载中...</div>
+            : shown.map((si) => (
+              <div className="pop-item" key={si.scope_key}>
+                <span className="pop-name">{si.scope_key}</span>
+                <span className="pop-bar-wrap">
+                  <span
+                    className="pop-bar"
+                    style={{ width: `${totalEmitted > 0 ? Math.max(2, (si.emitted / totalEmitted) * 100).toFixed(0) : 0}%` }}
+                  />
+                </span>
+                <span className="pop-val">{fmtNum(si.emitted)}</span>
+              </div>
+            ))}
+          {totalItems > 4 && (
+            <div
+              className="pop-item"
+              style={{ justifyContent: 'center', color: 'var(--text-dim)', borderTop: '1px solid var(--border-light)', marginTop: 2, paddingTop: 3, fontSize: 10, cursor: 'pointer' }}
+              onClick={() => setFsOpen(true)}
+            >
+              点击查看全部
             </div>
-          ))}
-        {items.length > 0 && (
-          <div
-            className="pop-item"
-            style={{ justifyContent: 'center', color: 'var(--text-dim)', borderTop: '1px solid var(--border-light)', marginTop: 2, paddingTop: 3, fontSize: 10 }}
-          >
-            点击查看全部
-          </div>
-        )}
+          )}
+        </div>
       </div>
-    </div>
+
+      {fsOpen && (
+        <div className="fullscreen-overlay show" style={{ background: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFsOpen(false)}>
+          <div style={{ maxWidth: 480, width: '100%', background: 'var(--surface-solid)', borderRadius: '8px 8px 0 0', margin: '0 auto', borderBottom: '1px solid var(--border-light)', padding: '12px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{ruleName} · {totalItems} 个实例</span>
+            <span style={{ fontSize: 14, width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', cursor: 'pointer' }} onClick={() => setFsOpen(false)}>✕</span>
+          </div>
+          <div style={{ maxWidth: 480, width: '100%', background: 'var(--surface-solid)', borderRadius: '0 0 8px 8px', margin: '0 auto', display: 'flex', flexDirection: 'column', maxHeight: '55vh', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
+            <div style={{ padding: '4px 0', overflowY: 'auto' }}>
+              {allItems.map((si) => (
+                <div className="pop-item" key={si.scope_key}>
+                  <span className="pop-name">{si.scope_key}</span>
+                  <span className="pop-bar-wrap">
+                    <span
+                      className="pop-bar"
+                      style={{ width: `${totalEmitted > 0 ? Math.max(2, (si.emitted / totalEmitted) * 100).toFixed(0) : 0}%` }}
+                    />
+                  </span>
+                  <span className="pop-val">{fmtNum(si.emitted)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
 // ── Alert table ──
 
-function AlertTable({ rules }: { rules: WfRuleItem[] }) {
+function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { start: string; end: string } }) {
   const [ps, setPs] = useState<PageState>({ page: 1, sortBy: 'emitted', sortDir: 'desc' });
   const [search, setSearch] = useState('');
   const [mode, setMode] = useState<'active' | 'quiet'>('active');
@@ -563,10 +647,10 @@ function AlertTable({ rules }: { rules: WfRuleItem[] }) {
   const [hoverTrigger, setHoverTrigger] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
-    if (groupBy === 'machine' && machineData === null) {
-      fetchWfRuleMachines('', '').then((r) => setMachineData(r.data));
+    if (groupBy === 'machine') {
+      fetchWfRuleMachines(timeRange.start, timeRange.end).then((r) => setMachineData(r.data));
     }
-  }, [groupBy, machineData]);
+  }, [groupBy, timeRange.start, timeRange.end]);
 
   // rule mode
   const ruleFiltered = useMemo(() => {
@@ -656,13 +740,13 @@ function AlertTable({ rules }: { rules: WfRuleItem[] }) {
             </tr>
           </thead>
           <tbody>
-            {pageItems.map((item, idx) => {
+            {pageItems.map((item) => {
               if (groupBy === 'machine') {
                 const m = item as WfRuleMachineItem;
                 return (
                   <tr key={m.machine}>
                     <td className="name">{m.machine}</td>
-                    <td className="dim">{m.rule_count} 条规则</td>
+                    <td className="num">{m.rule_count}</td>
                     <td className="num" style={{ color: m.emitted > 0 ? 'var(--orange)' : 'var(--text-dim)' }}>{fmtNum(m.emitted)}</td>
                   </tr>
                 );
@@ -705,6 +789,9 @@ function AlertTable({ rules }: { rules: WfRuleItem[] }) {
         <SmPopover
           ruleName={hoverRule}
           totalEmitted={rules.find((r) => r.name === hoverRule)?.emitted || 0}
+          startTime={timeRange.start}
+          endTime={timeRange.end}
+          triggerEl={hoverTrigger}
           onClose={() => setHoverRule(null)}
         />
       )}
@@ -724,6 +811,9 @@ function TrendChart({
   gridColor,
   labelColor,
   onExpand,
+  yAxisUnit,
+  valueFormatter: vfProp,
+  axisValueFormatter: avfProp,
 }: {
   title: string;
   seriesList: Array<{ name: string; points: TimePoint[]; color: string }>;
@@ -734,10 +824,15 @@ function TrendChart({
   gridColor: string;
   labelColor: string;
   onExpand?: () => void;
+  yAxisUnit?: string;
+  valueFormatter?: (v: number) => string;
+  axisValueFormatter?: (v: number) => string;
 }) {
   const multiSeries = seriesList.length > 1 ? seriesList : undefined;
   const singlePoints = seriesList.length === 1 ? seriesList[0].points : [];
   const color = seriesList.length === 1 ? seriesList[0].color : palette[0];
+  const vf = vfProp ?? ((v: number) => fmtNum(v));
+  const avf = avfProp ?? ((v: number) => fmtNum(v));
 
   return (
     <div className="panel">
@@ -773,13 +868,14 @@ function TrendChart({
               multiSeries={multiSeries}
               color={color}
               showLegend={multiSeries !== undefined}
-              valueFormatter={(v) => fmtNum(v)}
-              axisValueFormatter={(v) => fmtNum(v)}
+              valueFormatter={vf}
+              axisValueFormatter={avf}
               minY={0}
               yTickAmount={5}
               gridColor={gridColor}
               labelColor={labelColor}
               hideXAxis
+              yAxisUnit={yAxisUnit}
               legendPosition="bottom"
               legendAlign="center"
               legendFontSize="10px"
@@ -796,7 +892,7 @@ function TrendChart({
 
 // ── Main WfMonitor ──
 
-export default function WfMonitor() {
+export default function WfMonitor({ startTime, endTime }: { startTime: string; endTime: string }) {
   const { theme } = useTheme();
   const palette = useMemo(() => getPalette(theme), [theme]);
 
@@ -805,18 +901,21 @@ export default function WfMonitor() {
   const [windows, setWindows] = useState<WfWindowItem[]>([]);
   const [rules, setRules] = useState<WfRuleItem[]>([]);
 
-  const [throughputGroupBy, setThroughputGroupBy] = useState<'source' | 'machine'>('source');
+  const [throughputGroupBy] = useState<'source' | 'machine'>('source');
   const [throughputSeries, setThroughputSeries] = useState<NodeTimeSeries[]>([]);
 
   const [windowMetric, setWindowMetric] = useState('rows');
   const [windowSeries, setWindowSeries] = useState<NodeTimeSeries[]>([]);
 
-  const [alertGroupBy, setAlertGroupBy] = useState<'rule' | 'machine'>('rule');
+  const [alertGroupBy] = useState<'rule' | 'machine'>('rule');
   const [alertSeries, setAlertSeries] = useState<NodeTimeSeries[]>([]);
   const [fsOpen, setFsOpen] = useState(false);
   const [fsTitle, setFsTitle] = useState('');
   const [fsSeriesList, setFsSeriesList] = useState<Array<{ name: string; points: TimePoint[]; color: string }>>([]);
   const [fsPalette, setFsPalette] = useState<string[]>([]);
+  const [fsYAxisUnit, setFsYAxisUnit] = useState<string | undefined>(undefined);
+  const [fsValueFormatter, setFsValueFormatter] = useState<((v: number) => string) | undefined>(undefined);
+  const [fsAxisValueFormatter, setFsAxisValueFormatter] = useState<((v: number) => string) | undefined>(undefined);
 
   const chartColors = useMemo(() => {
     const isLight = theme === 'light-modern';
@@ -826,23 +925,35 @@ export default function WfMonitor() {
     };
   }, [theme]);
 
-  // initial load
+  const timeRange = useMemo(() => ({ start: startTime, end: endTime }), [startTime, endTime]);
+  const timeRangeRef = useRef(timeRange);
+  timeRangeRef.current = timeRange;
+
+  // initial load + reload on time range change
   useEffect(() => {
     loadAll();
-  }, []);
+  }, [startTime, endTime]);
 
   // periodic refresh
   useEffect(() => {
     const timer = setInterval(loadAll, REFRESH_MS);
     return () => clearInterval(timer);
-  }, [throughputGroupBy, windowMetric, alertGroupBy]);
+  }, []);
 
   async function loadAll() {
+    const tr = timeRangeRef.current;
+    const startMs = new Date(tr.start).getTime();
+    const endMs = new Date(tr.end).getTime();
+    const durationMs = endMs - startMs;
+    const now = Date.now();
+    const e = new Date(now).toISOString();
+    const s = new Date(now - (durationMs > 0 ? durationMs : 5 * 60 * 1000)).toISOString();
+
     const [pipelineRes, sourcesRes, windowsRes, rulesRes] = await Promise.all([
-      fetchWfPipeline('', ''),
-      fetchWfSources('', ''),
-      fetchWfWindows('', ''),
-      fetchWfRules('', ''),
+      fetchWfPipeline(s, e),
+      fetchWfSources(s, e),
+      fetchWfWindows(s, e),
+      fetchWfRules(s, e),
     ]);
     setPipeline(pipelineRes.data);
     setSources(sourcesRes.data);
@@ -851,9 +962,9 @@ export default function WfMonitor() {
 
     // timeseries
     const [tsRes, wsRes, asRes] = await Promise.all([
-      fetchWfTimeseriesThroughput('', '', throughputGroupBy),
-      fetchWfTimeseriesWindows('', '', windowMetric),
-      fetchWfTimeseriesAlerts('', '', alertGroupBy),
+      fetchWfTimeseriesThroughput(s, e, throughputGroupBy),
+      fetchWfTimeseriesWindows(s, e, windowMetric),
+      fetchWfTimeseriesAlerts(s, e, alertGroupBy),
     ]);
     setThroughputSeries(tsRes.data);
     setWindowSeries(wsRes.data);
@@ -885,6 +996,13 @@ export default function WfMonitor() {
     }));
   }, [alertSeries, palette]);
 
+  const winFormatter = useMemo(() => {
+    if (windowMetric === 'memory') {
+      return { vf: (v: number) => fmtBytes(v), avf: (v: number) => fmtBytes(v), unit: undefined };
+    }
+    return { vf: (v: number) => fmtNum(v), avf: (v: number) => fmtNum(v), unit: '条' as string | undefined };
+  }, [windowMetric]);
+
   if (!pipeline) {
     return <div style={{ padding: 24, color: 'var(--text-dim)' }}>加载中...</div>;
   }
@@ -894,9 +1012,9 @@ export default function WfMonitor() {
       <PipelineStages pipeline={pipeline} />
 
       <div className="grid-3">
-        <SourceTable sources={sources} />
+        <SourceTable sources={sources} timeRange={timeRange} />
         <WindowTable windows={windows} />
-        <AlertTable rules={rules} />
+        <AlertTable rules={rules} timeRange={timeRange} />
       </div>
 
       <div className="grid-3">
@@ -904,14 +1022,18 @@ export default function WfMonitor() {
           title="数据流入"
           seriesList={throughputChartSeries}
           palette={palette}
+          yAxisUnit="eps"
           gridColor={chartColors.grid}
           labelColor={chartColors.label}
-          onExpand={() => { setFsTitle('数据流入'); setFsSeriesList(throughputChartSeries); setFsPalette(palette); setFsOpen(true); }}
+          onExpand={() => { setFsTitle('数据流入'); setFsSeriesList(throughputChartSeries); setFsPalette(palette); setFsYAxisUnit('eps'); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsOpen(true); }}
         />
         <TrendChart
           title="窗口曲线"
           seriesList={windowChartSeries}
           palette={palette}
+          yAxisUnit={winFormatter.unit}
+          valueFormatter={winFormatter.vf}
+          axisValueFormatter={winFormatter.avf}
           gridColor={chartColors.grid}
           labelColor={chartColors.label}
           metricTabs={[
@@ -921,15 +1043,16 @@ export default function WfMonitor() {
           ]}
           activeMetric={windowMetric}
           onMetricChange={setWindowMetric}
-          onExpand={() => { setFsTitle('窗口曲线'); setFsSeriesList(windowChartSeries); setFsPalette(palette); setFsOpen(true); }}
+          onExpand={() => { setFsTitle('窗口曲线'); setFsSeriesList(windowChartSeries); setFsPalette(palette); setFsYAxisUnit(winFormatter.unit); setFsValueFormatter(winFormatter.vf); setFsAxisValueFormatter(winFormatter.avf); setFsOpen(true); }}
         />
         <TrendChart
           title="告警趋势"
           seriesList={alertChartSeries}
           palette={palette}
+          yAxisUnit="次"
           gridColor={chartColors.grid}
           labelColor={chartColors.label}
-          onExpand={() => { setFsTitle('告警趋势'); setFsSeriesList(alertChartSeries); setFsPalette(palette); setFsOpen(true); }}
+          onExpand={() => { setFsTitle('告警趋势'); setFsSeriesList(alertChartSeries); setFsPalette(palette); setFsYAxisUnit('次'); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsOpen(true); }}
         />
       </div>
 
@@ -948,10 +1071,11 @@ export default function WfMonitor() {
                   multiSeries={fsSeriesList.length > 1 ? fsSeriesList : undefined}
                   color={fsSeriesList.length === 1 ? fsSeriesList[0].color : fsPalette[0]}
                   showLegend={fsSeriesList.length > 1}
-                  valueFormatter={(v) => fmtNum(v)}
-                  axisValueFormatter={(v) => fmtNum(v)}
+                  valueFormatter={fsValueFormatter ?? ((v: number) => fmtNum(v))}
+                  axisValueFormatter={fsAxisValueFormatter ?? ((v: number) => fmtNum(v))}
                   minY={0}
                   yTickAmount={6}
+                  yAxisUnit={fsYAxisUnit}
                   gridColor={chartColors.grid}
                   labelColor={chartColors.label}
                   legendPosition="bottom"

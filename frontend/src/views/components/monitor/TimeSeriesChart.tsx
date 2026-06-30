@@ -18,6 +18,7 @@ interface Props {
   gridColor?: string;
   labelColor?: string;
   hideXAxis?: boolean;
+  yAxisUnit?: string;
   legendPosition?: 'top' | 'bottom';
   legendAlign?: 'left' | 'center' | 'right';
   legendFontSize?: string;
@@ -43,6 +44,7 @@ export default function TimeSeriesChart({
   gridColor,
   labelColor,
   hideXAxis = false,
+  yAxisUnit,
   legendPosition,
   legendAlign,
   legendFontSize,
@@ -165,8 +167,13 @@ export default function TimeSeriesChart({
           offsetX: -2,
           style: { colors: labelColor || '#6b84a8', fontSize: '10px' },
           formatter: (value) => {
-            if (axisValueFormatter) return axisValueFormatter(Number(value));
-            return valueFormatter ? valueFormatter(Number(value)) : Number(value).toFixed(1);
+            const num = Number(value);
+            const formatted = axisValueFormatter
+              ? axisValueFormatter(num)
+              : valueFormatter
+                ? valueFormatter(num)
+                : num.toFixed(1);
+            return yAxisUnit ? `${formatted} ${yAxisUnit}` : formatted;
           },
         },
       },
@@ -226,6 +233,7 @@ export default function TimeSeriesChart({
       showLegend,
       xTickAmount,
       valueFormatter,
+      yAxisUnit,
       yTickAmount,
     ],
   );

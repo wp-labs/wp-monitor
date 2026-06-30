@@ -1301,7 +1301,7 @@ export default function WpMonitorPage() {
       {activeTab === 'engine' ? (
         <Suspense fallback={<div style={{ padding: 24, color: 'var(--text-dim)' }}>加载中...</div>}>
           <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-            <WfMonitor />
+            <WfMonitor startTime={startTime} endTime={endTime} />
           </div>
         </Suspense>
       ) : (

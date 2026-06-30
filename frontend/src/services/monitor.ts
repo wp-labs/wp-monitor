@@ -16,20 +16,6 @@ import type {
   WfRuleMachineItem,
 } from "@/types/monitor";
 import { ApiError } from "@/types/monitor";
-import {
-  buildPipelineResponse,
-  buildSourcesResponse,
-  buildSourceMachinesResponse,
-  buildWindowsResponse,
-  buildRulesResponse,
-  buildStateMachinesResponse,
-  buildRuleMachinesResponse,
-  buildThroughputTimeseries,
-  buildWindowsTimeseries,
-  buildAlertsTimeseries,
-  tickMockState,
-} from '@/views/components/monitor/wfMock';
-
 function normalizeIsoToSecondBoundary(iso: string) {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
@@ -300,64 +286,85 @@ export async function exportMissedLogs() {
   return resp;
 }
 
-// ── wfusion engine monitoring (mock) ──
+// ── wfusion engine monitoring ──
 
-function wrap<T>(data: T): ApiResp<T> {
-  return { code: 0, message: 'ok', data };
+const WF_BASE = '/api/v1/wp-monitor/wf';
+
+export async function fetchWfPipeline(startTime: string, endTime: string) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  return requestJson<WfPipelineResponse>(
+    `${WF_BASE}/pipeline?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`,
+  );
 }
 
-export async function fetchWfPipeline(_startTime: string, _endTime: string) {
-  tickMockState();
-  return wrap<WfPipelineResponse>(buildPipelineResponse());
+export async function fetchWfSources(startTime: string, endTime: string) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  return requestJson<WfSourceItem[]>(
+    `${WF_BASE}/sources?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`,
+  );
 }
 
-export async function fetchWfSources(_startTime: string, _endTime: string) {
-  return wrap<WfSourceItem[]>(buildSourcesResponse());
+export async function fetchWfSourceMachines(startTime: string, endTime: string) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  return requestJson<WfSourceMachineItem[]>(
+    `${WF_BASE}/sources/machines?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`,
+  );
 }
 
-export async function fetchWfSourceMachines(_startTime: string, _endTime: string) {
-  return wrap<WfSourceMachineItem[]>(buildSourceMachinesResponse());
+export async function fetchWfWindows(startTime: string, endTime: string) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  return requestJson<WfWindowItem[]>(
+    `${WF_BASE}/windows?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`,
+  );
 }
 
-export async function fetchWfWindows(_startTime: string, _endTime: string) {
-  return wrap<WfWindowItem[]>(buildWindowsResponse());
+export async function fetchWfRules(startTime: string, endTime: string) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  return requestJson<WfRuleItem[]>(
+    `${WF_BASE}/rules?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`,
+  );
 }
 
-export async function fetchWfRules(_startTime: string, _endTime: string) {
-  return wrap<WfRuleItem[]>(buildRulesResponse());
+export async function fetchWfStateMachines(ruleName: string, startTime: string, endTime: string) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  return requestJson<WfStateMachineItem[]>(
+    `${WF_BASE}/rules/${encodeURIComponent(ruleName)}/state-machines?start_time=${start}&end_time=${end}`,
+  );
 }
 
-export async function fetchWfStateMachines(ruleName: string) {
-  return wrap<WfStateMachineItem[]>(buildStateMachinesResponse(ruleName));
-}
-
-export async function fetchWfRuleMachines(_startTime: string, _endTime: string) {
-  return wrap<WfRuleMachineItem[]>(buildRuleMachinesResponse());
+export async function fetchWfRuleMachines(startTime: string, endTime: string) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  return requestJson<WfRuleMachineItem[]>(
+    `${WF_BASE}/rules/machines?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`,
+  );
 }
 
 export async function fetchWfTimeseriesThroughput(
-  _startTime: string,
-  _endTime: string,
-  groupBy: string,
-  _maxDataPoints?: number,
+  startTime: string, endTime: string, groupBy: string, maxDataPoints?: number,
 ) {
-  return wrap<NodeTimeSeries[]>(buildThroughputTimeseries(groupBy));
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  const dp = maxDataPoints ? `&max_data_points=${maxDataPoints}` : '';
+  return requestJson<NodeTimeSeries[]>(
+    `${WF_BASE}/timeseries/throughput?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}&group_by=${encodeURIComponent(groupBy)}${dp}`,
+  );
 }
 
 export async function fetchWfTimeseriesWindows(
-  _startTime: string,
-  _endTime: string,
-  metric: string,
-  _maxDataPoints?: number,
+  startTime: string, endTime: string, metric: string, maxDataPoints?: number,
 ) {
-  return wrap<NodeTimeSeries[]>(buildWindowsTimeseries(metric));
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  const dp = maxDataPoints ? `&max_data_points=${maxDataPoints}` : '';
+  return requestJson<NodeTimeSeries[]>(
+    `${WF_BASE}/timeseries/windows?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}&metric=${encodeURIComponent(metric)}${dp}`,
+  );
 }
 
 export async function fetchWfTimeseriesAlerts(
-  _startTime: string,
-  _endTime: string,
-  groupBy: string,
-  _maxDataPoints?: number,
+  startTime: string, endTime: string, groupBy: string, maxDataPoints?: number,
 ) {
-  return wrap<NodeTimeSeries[]>(buildAlertsTimeseries(groupBy));
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  const dp = maxDataPoints ? `&max_data_points=${maxDataPoints}` : '';
+  return requestJson<NodeTimeSeries[]>(
+    `${WF_BASE}/timeseries/alerts?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}&group_by=${encodeURIComponent(groupBy)}${dp}`,
+  );
 }

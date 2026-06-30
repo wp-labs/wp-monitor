@@ -310,37 +310,44 @@ td.dim { color: var(--wf-text-dim); font-size: 10px; }
 .sm-popover-global {
   position: fixed;
   z-index: 999;
-  pointer-events: auto;
+  pointer-events: none;
   background: var(--tooltip-bg);
   border: 1px solid var(--wf-tooltip-border);
   border-radius: 6px;
-  padding: 6px 0;
+  padding: 8px 0;
   min-width: 200px;
   max-width: 360px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
 }
+
+.sm-popover-global.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
 
 .sm-popover-global .pop-arrow {
   position: absolute;
-  left: 50%;
+  left: var(--arrow-x, 50%);
   margin-left: -5px;
-  top: -5px;
   width: 0;
   height: 0;
   border-left: 5px solid transparent;
   border-right: 5px solid transparent;
-  border-bottom: 5px solid var(--wf-tooltip-border);
 }
+
+.sm-popover-global.above .pop-arrow { bottom: -5px; border-top: 5px solid var(--wf-tooltip-border); }
+.sm-popover-global.below .pop-arrow { top: -5px; border-bottom: 5px solid var(--wf-tooltip-border); }
 
 .sm-popover-global .pop-arrow::after {
   content: '';
   position: absolute;
   left: -4px;
-  top: 1px;
   border-left: 4px solid transparent;
   border-right: 4px solid transparent;
-  border-bottom: 4px solid var(--tooltip-bg);
 }
+
+.sm-popover-global.above .pop-arrow::after { top: -6px; border-top: 4px solid var(--tooltip-bg); }
+.sm-popover-global.below .pop-arrow::after { top: 1px; border-bottom: 4px solid var(--tooltip-bg); }
 
 .pop-item {
   display: flex;
