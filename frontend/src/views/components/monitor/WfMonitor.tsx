@@ -512,8 +512,8 @@ function SmPopover({
   const [visible, setVisible] = useState(false);
   const [fsOpen, setFsOpen] = useState(false);
   const popRef = useRef<HTMLDivElement>(null);
-  const showTimer = useRef<ReturnType<typeof setTimeout>>();
-  const hideTimer = useRef<ReturnType<typeof setTimeout>>();
+  const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -554,13 +554,23 @@ function SmPopover({
 
   // delayed show
   useEffect(() => {
-    clearTimeout(showTimer.current);
+    if (showTimer.current !== null) {
+      clearTimeout(showTimer.current);
+    }
     showTimer.current = setTimeout(() => setVisible(true), 200);
-    return () => clearTimeout(showTimer.current);
+    return () => {
+      if (showTimer.current !== null) {
+        clearTimeout(showTimer.current);
+        showTimer.current = null;
+      }
+    };
   }, [triggerEl]);
 
   const handleMouseEnter = () => {
-    clearTimeout(hideTimer.current);
+    if (hideTimer.current !== null) {
+      clearTimeout(hideTimer.current);
+      hideTimer.current = null;
+    }
   };
 
   const handleMouseLeave = () => {
