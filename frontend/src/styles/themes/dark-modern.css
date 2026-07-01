@@ -76,3 +76,19 @@
   --leaf-bg: rgba(250, 169, 24, 0.04);
   --leaf-border: rgba(250, 169, 24, 0.45);
 }
+
+[data-theme="dark-modern"] .metric-badges > .metric-badge:first-child:not(:last-child),
+[data-theme="dark-modern"] .metric-inline-badges > .metric-inline-badge:first-child:not(:last-child),
+[data-theme="dark-modern"] .detail-metric-badges > .detail-metric-badge:first-child:not(:last-child) {
+  border-color: rgba(79, 193, 255, 0.42);
+  background: rgba(24, 56, 92, 0.42);
+  color: #8ecfff;
+}
+
+[data-theme="dark-modern"] .metric-badges > .metric-badge:last-child:not(:first-child),
+[data-theme="dark-modern"] .metric-inline-badges > .metric-inline-badge:last-child:not(:first-child),
+[data-theme="dark-modern"] .detail-metric-badges > .detail-metric-badge:last-child:not(:first-child) {
+  border-color: rgba(196, 143, 255, 0.38);
+  background: rgba(72, 34, 86, 0.4);
+  color: #d9b2ff;
+}
