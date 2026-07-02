@@ -30,7 +30,7 @@ export const zhTW = {
       '1h': '最近 1 小時',
       '6h': '最近 6 小時',
       '24h': '最近 24 小時',
-      week: '本週',
+      week: '近 7 天',
     },
     toolbar: {
       timeRange: '時間範圍',

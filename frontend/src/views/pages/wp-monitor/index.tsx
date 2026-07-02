@@ -188,12 +188,7 @@ function buildQuickRange(key: string) {
     return { start: start.toISOString(), end: end.toISOString() };
   }
   if (key === "week") {
-    const weekday = now.getDay() === 0 ? 7 : now.getDay();
-    const start = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate() - (weekday - 1),
-    );
+    const start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     return { start: start.toISOString(), end: now.toISOString() };
   }
   const selected = QUICK_RANGES.find((item) => item.key === key && "minutes" in item);

@@ -30,7 +30,7 @@ export const enUS = {
       '1h': 'Last 1h',
       '6h': 'Last 6h',
       '24h': 'Last 24h',
-      week: 'This week',
+      week: 'Last 7d',
     },
     toolbar: {
       timeRange: 'Time range',

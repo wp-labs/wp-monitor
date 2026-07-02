@@ -28,7 +28,7 @@ export const zhCN = {
       '1h': '最近 1 小时',
       '6h': '最近 6 小时',
       '24h': '最近 24 小时',
-      week: '本周',
+      week: '近 7 天',
     },
     toolbar: {
       timeRange: '时间范围',
