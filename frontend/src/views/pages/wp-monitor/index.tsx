@@ -57,7 +57,6 @@ const QUICK_RANGES = [
   { key: "30m", minutes: 30 },
   { key: "1h", minutes: 60 },
   { key: "6h", minutes: 360 },
-  { key: "24h", minutes: 1440 },
   { key: "today" },
   { key: "week" },
 ] as const;
@@ -608,9 +607,16 @@ export default function WpMonitorPage() {
 
     const refreshSelectedNodeDetail = async () => {
       try {
-        const nextEndMs = nowWithLagMs();
-        const nextStart = new Date(nextEndMs - durationMs).toISOString();
-        const nextEnd = new Date(nextEndMs).toISOString();
+        let nextStart: string;
+        let nextEnd: string;
+        if (activeRangeKey === "custom") {
+          nextStart = detailStartTime;
+          nextEnd = detailEndTime;
+        } else {
+          const nextEndMs = nowWithLagMs();
+          nextStart = new Date(nextEndMs - durationMs).toISOString();
+          nextEnd = new Date(nextEndMs).toISOString();
+        }
         const [detailResp, seriesResp] = await Promise.all([
           fetchNodeDetail(selectedNode, nextStart, nextEnd),
           fetchNodeTimeSeries(
@@ -651,6 +657,7 @@ export default function WpMonitorPage() {
     refreshIntervalSec,
     detailTrendMetricMode,
     parseSeriesList,
+    activeRangeKey,
     t,
   ]);
 
@@ -680,9 +687,16 @@ export default function WpMonitorPage() {
     const refreshScopeTimeseries = async () => {
       try {
         const filter = parseFilterRef.current;
-        const nextEndMs = nowWithLagMs();
-        const nextStart = new Date(nextEndMs - durationMs).toISOString();
-        const nextEnd = new Date(nextEndMs).toISOString();
+        let nextStart: string;
+        let nextEnd: string;
+        if (activeRangeKey === "custom") {
+          nextStart = detailStartTime;
+          nextEnd = detailEndTime;
+        } else {
+          const nextEndMs = nowWithLagMs();
+          nextStart = new Date(nextEndMs - durationMs).toISOString();
+          nextEnd = new Date(nextEndMs).toISOString();
+        }
         let timeseriesResp;
         if (scopeModeRef.current === "package") {
           const pkgFilters = filteredParses.map((pkg) => ({
@@ -749,6 +763,7 @@ export default function WpMonitorPage() {
     detailEndTime,
     refreshIntervalSec,
     detailTrendMetricMode,
+    activeRangeKey,
     t,
   ]);
 
@@ -1980,7 +1995,7 @@ export default function WpMonitorPage() {
                     </span>
                     <span className="detail-head-meta">
                       <span className="detail-head-meta-label">{t("monitor.metric.statWindow")}</span>
-                      <span className="detail-head-meta-value">{series.rate_window_secs}s</span>
+                      <span className="detail-head-meta-value">{detailTrendMetricMode === "count" ? series.step_secs : series.rate_window_secs}s</span>
                     </span>
                   </>
                 )}
@@ -1995,7 +2010,7 @@ export default function WpMonitorPage() {
                 </span>
                 <span className="detail-head-meta">
                   <span className="detail-head-meta-label">{t("monitor.metric.statWindow")}</span>
-                  <span className="detail-head-meta-value">{series.rate_window_secs}s</span>
+                  <span className="detail-head-meta-value">{detailTrendMetricMode === "count" ? series.step_secs : series.rate_window_secs}s</span>
                 </span>
               </>
             )}
@@ -2008,7 +2023,7 @@ export default function WpMonitorPage() {
                 </span>
                 <span className="detail-head-meta">
                   <span className="detail-head-meta-label">{t("monitor.metric.statWindow")}</span>
-                  <span className="detail-head-meta-value">{parseSeriesList[0].rate_window_secs ?? 0}s</span>
+                  <span className="detail-head-meta-value">{detailTrendMetricMode === "count" ? (parseSeriesList[0].step_secs ?? 0) : (parseSeriesList[0].rate_window_secs ?? 0)}s</span>
                 </span>
               </>
             )}

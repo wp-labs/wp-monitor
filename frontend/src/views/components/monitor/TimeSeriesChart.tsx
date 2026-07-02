@@ -214,6 +214,9 @@ export default function TimeSeriesChart({
         symbolSize: 4,
         connectNulls: false,
         smooth: 0.25,
+        sampling: 'lttb',
+        large: true,
+        largeThreshold: 0,
         lineStyle: {
           width: 2,
           color,
@@ -238,6 +241,9 @@ export default function TimeSeriesChart({
         symbolSize: 4,
         connectNulls: false,
         smooth: 0.2,
+        sampling: 'lttb',
+        large: true,
+        largeThreshold: 0,
         lineStyle: {
           width: 1.6,
           color: lineColor,
