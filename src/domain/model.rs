@@ -128,7 +128,8 @@ pub struct NodeDetail {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TimePoint {
     pub ts: String,
-    pub value: f64,
+    /// `None` 表示该步点在存储中没有样本，用于在前端保留完整时间轴但断开折线。
+    pub value: Option<f64>,
 }
 
 /// 节点时间序列响应。
@@ -136,6 +137,7 @@ pub struct TimePoint {
 pub struct NodeTimeSeries {
     pub node_id: String,
     pub log_rate_eps: Vec<TimePoint>,
+    pub log_count: Vec<TimePoint>,
     pub step_secs: i64,
     pub rate_window_secs: i64,
 }

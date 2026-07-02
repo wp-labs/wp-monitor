@@ -1,6 +1,8 @@
 export const zhCN = {
   common: {
     query: '查询',
+    apply: '应用',
+    cancel: '取消',
     custom: '自定义',
     expandAll: '全部展开',
     collapseAll: '全部收起',
@@ -22,6 +24,7 @@ export const zhCN = {
     quickRanges: {
       today: '今天',
       '5m': '最近 5 分钟',
+      '30m': '最近 30 分钟',
       '1h': '最近 1 小时',
       '6h': '最近 6 小时',
       '24h': '最近 24 小时',
@@ -29,9 +32,12 @@ export const zhCN = {
     },
     toolbar: {
       timeRange: '时间范围',
+      absoluteTime: '绝对时间',
       startTime: '开始时间',
       endTime: '结束时间',
       autoRefresh: '自动刷新',
+      refreshOff: '关闭',
+      refreshEvery: '{{value}}',
       secondsShort: 's',
     },
     layer: {
@@ -75,6 +81,7 @@ export const zhCN = {
       nodeDetail: '节点详情',
       realtimeRefresh: '实时刷新',
       rateTrend: '速率趋势',
+      countTrend: '数量趋势',
       clickNodeForDetail: '点击节点查看详情',
       selectScopeForTimeseries: '请选择范围以查看时序',
       showSeries: '点击显示该曲线',

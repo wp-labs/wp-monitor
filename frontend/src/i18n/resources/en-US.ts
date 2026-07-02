@@ -3,6 +3,8 @@ import type { LocaleResource } from './zh-CN';
 export const enUS = {
   common: {
     query: 'Query',
+    apply: 'Apply',
+    cancel: 'Cancel',
     custom: 'Custom',
     expandAll: 'Expand all',
     collapseAll: 'Collapse all',
@@ -24,6 +26,7 @@ export const enUS = {
     quickRanges: {
       today: 'Today',
       '5m': 'Last 5m',
+      '30m': 'Last 30m',
       '1h': 'Last 1h',
       '6h': 'Last 6h',
       '24h': 'Last 24h',
@@ -31,9 +34,12 @@ export const enUS = {
     },
     toolbar: {
       timeRange: 'Time range',
+      absoluteTime: 'Absolute time',
       startTime: 'Start time',
       endTime: 'End time',
       autoRefresh: 'Auto refresh',
+      refreshOff: 'Off',
+      refreshEvery: '{{value}}',
       secondsShort: 's',
     },
     layer: {
@@ -77,6 +83,7 @@ export const enUS = {
       nodeDetail: 'Node detail',
       realtimeRefresh: 'Live refresh',
       rateTrend: 'Rate trend',
+      countTrend: 'Count trend',
       clickNodeForDetail: 'Click a node to view details',
       selectScopeForTimeseries: 'Select a scope to view time series',
       showSeries: 'Click to show this series',

@@ -201,6 +201,50 @@ body::before {
   font-weight: 700;
   cursor: pointer;
 }
+.wd-time-trigger {
+  min-width: 260px;
+  max-width: min(42vw, 360px);
+  justify-content: flex-start;
+  gap: 8px;
+  text-align: left;
+  color: var(--text-main);
+  cursor: pointer;
+}
+.wd-time-trigger.active {
+  border-color: rgba(var(--accent-rgb), 0.35);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.12) inset;
+}
+.wd-time-range-direct {
+  min-width: 260px;
+  max-width: min(42vw, 360px);
+}
+.wd-time-range-direct.ant-picker {
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--ctrl-bg);
+  box-shadow: none;
+  padding-inline: 10px;
+}
+.wd-time-range-direct.ant-picker:hover,
+.wd-time-range-direct.ant-picker-focused,
+.wd-time-range-direct.ant-picker.active {
+  border-color: rgba(var(--accent-rgb), 0.35);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.12) inset;
+}
+.wd-time-range-direct .ant-picker-input > input {
+  font-size: 12px;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+}
+.wd-time-range-direct .ant-picker-input > input::placeholder {
+  color: var(--text-muted);
+  font-family: var(--font-main);
+}
+.wd-time-range-direct .ant-picker-range-separator,
+.wd-time-range-direct .ant-picker-suffix {
+  color: var(--text-sub);
+}
 .btn-wow-primary {
   background: var(--accent-gradient);
   border: 1px solid rgba(var(--accent-rgb), 0.4);
@@ -250,16 +294,14 @@ body::before {
 .refresh-live-dot.off { background: var(--text-muted); animation: none; }
 .refresh-live-dot.spin { animation: pulse-dot .3s ease-in-out infinite; }
 .refresh-interval-input {
-  width: 38px;
-  height: 20px;
+  height: 22px;
   border: 1px solid rgba(var(--accent-rgb), 0.25);
   border-radius: 999px;
   background: var(--surface-header);
   color: var(--accent);
-  padding: 0 5px;
+  padding: 0 8px;
   font-size: 11px;
   font-family: var(--font-mono);
-  text-align: center;
 }
 .wd-refresh-unit { font-size: 11px; color: var(--text-sub); }
 
@@ -788,6 +830,20 @@ body::before {
   display: flex;
   flex-direction: column;
 }
+.detail-miss-col {
+  min-height: 0;
+}
+.detail-miss-col .miss-shell {
+  flex: 1;
+}
+.detail-miss-col .miss-log-viewer {
+  flex: 1;
+  min-height: 0;
+}
+.detail-miss-col .miss-scroll {
+  height: 100%;
+  min-height: 0;
+}
 .detail-name-type-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .detail-kv-label { font-size: 12px; color: var(--text-muted); flex: 0 0 auto; }
 .detail-kv-value {
@@ -974,69 +1030,6 @@ body::before {
 }
 .spark__title { font-size: 11px; color: var(--text-sub); margin-bottom: 2px; font-family: var(--font-mono); }
 .spark__chart { width: 100%; height: 132px; position: relative; }
-.spark .apexcharts-canvas, .spark .apexcharts-svg { overflow: visible !important; }
-.spark .apexcharts-gridline { stroke: var(--chart-gridline); stroke-dasharray: 4; }
-.spark .apexcharts-xaxis line, .spark .apexcharts-yaxis line { stroke: var(--chart-axis-line); }
-.spark .apexcharts-tooltip {
-  border-radius: 8px;
-  border: 1px solid var(--chart-tooltip-border) !important;
-  box-shadow: var(--chart-tooltip-shadow) !important;
-}
-/* Dark tooltip overrides */
-.apexcharts-tooltip { background: rgba(16, 17, 19, 0.96) !important; color: var(--text-main) !important; pointer-events: auto !important; }
-.apexcharts-tooltip.apexcharts-theme-light,
-.apexcharts-tooltip.apexcharts-theme-dark {
-  border: 1px solid var(--chart-tooltip-border) !important;
-  background: var(--tooltip-bg) !important;
-}
-.apexcharts-tooltip .apexcharts-tooltip-title {
-  background: var(--surface-overlay) !important;
-  border-bottom: 1px solid rgba(var(--accent-rgb), 0.12) !important;
-  color: var(--text-sub) !important;
-  font-family: var(--font-main) !important;
-  font-size: 11px !important;
-  padding: 6px 10px !important;
-}
-.apexcharts-tooltip .apexcharts-tooltip-series-group {
-  line-height: 16px !important;
-  min-height: 0 !important;
-  padding: 1px 10px !important;
-}
-.apexcharts-tooltip .apexcharts-tooltip-y-group {
-  line-height: 16px !important;
-  padding: 1px 0 !important;
-}
-.apexcharts-tooltip .apexcharts-tooltip-text-y-label,
-.apexcharts-tooltip .apexcharts-tooltip-text-y-value {
-  color: var(--text-main) !important;
-  font-family: var(--font-mono) !important;
-  font-size: 12px !important;
-  line-height: 16px !important;
-}
-.apexcharts-tooltip .apexcharts-tooltip-text-goals-value,
-.apexcharts-tooltip .apexcharts-tooltip-text-z-value { color: var(--text-sub) !important; }
-.apexcharts-tooltip .apexcharts-tooltip-marker {
-  align-items: center !important;
-  display: inline-flex !important;
-  flex: 0 0 10px !important;
-  justify-content: center !important;
-  width: 10px !important;
-  height: 16px !important;
-  line-height: 16px !important;
-  margin-right: 6px !important;
-  vertical-align: middle !important;
-}
-.apexcharts-tooltip .apexcharts-tooltip-marker::before {
-  background: currentColor !important;
-  border-radius: 50% !important;
-  content: "" !important;
-  display: block !important;
-  font-size: 0 !important;
-  height: 8px !important;
-  line-height: 1 !important;
-  transform: none !important;
-  width: 8px !important;
-}
 /* ===== Custom shared tooltip (multi-series) ===== */
 .custom-tooltip-box {
   min-width: 190px;
@@ -1110,7 +1103,6 @@ body::before {
   flex: 1;
   min-height: 0;
 }
-
 /* Spin wrapper 传递 flex 布局 */
 .detail-col .ant-spin-nested-loading,
 .detail-col .ant-spin-container,
@@ -1122,39 +1114,100 @@ body::before {
 }
 
 /* ===== MISS Records ===== */
-.miss-query-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
-.miss-page-meta { color: var(--text-muted); font-size: 12px; }
-.miss-scroll { max-height: 420px; overflow-y: auto; padding-right: 4px; }
-.miss-list { display: flex; flex-direction: column; gap: 10px; }
-.miss-record {
+.miss-shell {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+.miss-panel-head {
   display: flex;
   align-items: flex-start;
-  border: 1px solid rgba(var(--miss-rgb), 0.18);
-  border-radius: 8px;
-  background: rgba(var(--miss-rgb), 0.05);
-  padding: 10px;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
+.miss-panel-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.miss-query-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 0;
+}
+.miss-page-meta { color: var(--text-muted); font-size: 12px; }
+.miss-log-viewer {
+  border: 1px solid rgba(var(--accent-rgb), 0.14);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.015), rgba(255, 255, 255, 0)),
+    rgba(0, 0, 0, 0.16);
+  overflow: hidden;
+}
+.miss-scroll {
+  overflow-y: auto;
+  padding: 8px 10px;
+}
+.detail-miss-col--fullscreen {
+  flex: 0 0 auto;
+  min-height: auto;
+  overflow: visible;
+}
+.detail-miss-col--fullscreen .miss-shell {
+  flex: 0 0 auto;
+}
+.detail-miss-col--fullscreen .miss-log-viewer {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+.detail-miss-col--fullscreen .miss-scroll {
+  height: auto;
+  max-height: min(56vh, 560px);
+}
+.miss-list { display: flex; flex-direction: column; gap: 1px; }
+.miss-record {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: flex-start;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.018);
+  padding: 2px 6px;
+  transition: background .16s ease;
+}
+.miss-record:hover { background: rgba(var(--accent-rgb), 0.08); }
 .miss-record-lineno {
-  min-width: 2.5rem;
-  padding-right: 0.75rem;
+  min-width: 0;
+  padding-right: 8px;
   text-align: right;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 0.75rem;
-  line-height: 1.45;
+  line-height: 1.35;
   user-select: none;
   flex-shrink: 0;
+  opacity: 0.82;
 }
 .miss-record-raw {
   margin: 0;
   font-size: 12px;
   color: var(--text-main);
-  line-height: 1.45;
+  line-height: 1.35;
   white-space: pre-wrap;
   word-break: break-word;
   font-family: var(--font-mono);
 }
-.miss-pager { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.miss-pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 0;
+}
 
 /* ===== Mini Button ===== */
 .mini-btn {

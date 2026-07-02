@@ -3,7 +3,9 @@ use crate::domain::model::{
     LayerSnapshot, LayerVersions, LayersMetricsResponse, MetricsSnapshot, MissNode, NodeDetail,
     NodeMetricsItem, NodeTimeSeries, SnapshotMeta, TimeRangeQuery,
 };
-use crate::domain::vm_repository::{PackageFilter, VmRepository, VmSnapshotData};
+use crate::domain::vm_repository::{
+    PackageFilter, TimeSeriesMetricMode, VmRepository, VmSnapshotData,
+};
 use crate::shared::config::AppConfig;
 use crate::shared::error::AppError;
 use crate::shared::hash::stable_hash_json;
@@ -541,12 +543,14 @@ impl LayerService {
         node_id: &str,
         query: TimeRangeQuery,
         max_data_points: Option<usize>,
+        metric_mode: TimeSeriesMetricMode,
     ) -> Result<NodeTimeSeries, AppError> {
         if node_id == "miss" {
             debug!(node_id = %node_id, "layer_service.node_timeseries.miss_empty");
             return Ok(NodeTimeSeries {
                 node_id: "miss".to_string(),
                 log_rate_eps: Vec::new(),
+                log_count: Vec::new(),
                 step_secs: 0,
                 rate_window_secs: 0,
             });
@@ -556,7 +560,7 @@ impl LayerService {
             "layer_service.node_timeseries.start"
         );
         self.vm_repo
-            .fetch_node_timeseries(node_id, &query, max_data_points)
+            .fetch_node_timeseries(node_id, &query, max_data_points, metric_mode)
             .await
     }
 
@@ -565,6 +569,7 @@ impl LayerService {
         query: TimeRangeQuery,
         max_data_points: Option<usize>,
         filters: Vec<PackageFilter>,
+        metric_mode: TimeSeriesMetricMode,
     ) -> Result<Vec<NodeTimeSeries>, AppError> {
         // 传递原始值，PromQL 转义由基础设施层负责。
         let pairs: Vec<(String, String)> = filters
@@ -584,7 +589,7 @@ impl LayerService {
 
         let timeseries = self
             .vm_repo
-            .fetch_packages_timeseries(&query, &pairs, max_data_points)
+            .fetch_packages_timeseries(&query, &pairs, max_data_points, metric_mode)
             .await?;
 
         Ok(timeseries)
@@ -597,13 +602,20 @@ impl LayerService {
         package_name: Vec<String>,
         rule_name: Vec<String>,
         max_data_points: Option<usize>,
+        metric_mode: TimeSeriesMetricMode,
     ) -> Result<Vec<NodeTimeSeries>, AppError> {
         // 传递原始值，PromQL 转义由基础设施层负责。
         let package_name = package_name.join("|");
         let rule_name = rule_name.join("|");
         let timeseries = self
             .vm_repo
-            .fetch_parse_timeseries(&query, &package_name, &rule_name, max_data_points)
+            .fetch_parse_timeseries(
+                &query,
+                &package_name,
+                &rule_name,
+                max_data_points,
+                metric_mode,
+            )
             .await?;
         Ok(timeseries)
     }
@@ -613,9 +625,10 @@ impl LayerService {
         &self,
         query: TimeRangeQuery,
         max_data_points: Option<usize>,
+        metric_mode: TimeSeriesMetricMode,
     ) -> Result<Vec<NodeTimeSeries>, AppError> {
         self.vm_repo
-            .fetch_source_timeseries(&query, max_data_points)
+            .fetch_source_timeseries(&query, max_data_points, metric_mode)
             .await
     }
 
@@ -625,9 +638,10 @@ impl LayerService {
         query: TimeRangeQuery,
         sink_group: Option<String>,
         max_data_points: Option<usize>,
+        metric_mode: TimeSeriesMetricMode,
     ) -> Result<Vec<NodeTimeSeries>, AppError> {
         self.vm_repo
-            .fetch_sink_timeseries(&query, sink_group.as_deref(), max_data_points)
+            .fetch_sink_timeseries(&query, sink_group.as_deref(), max_data_points, metric_mode)
             .await
     }
 

@@ -312,6 +312,10 @@ function buildTimeSeries(
         ts: new Date(now.getTime() - (histLen - 1 - i) * 5000).toISOString(),
         value: v,
       })),
+      log_count: data.map((v, i) => ({
+        ts: new Date(now.getTime() - (histLen - 1 - i) * 5000).toISOString(),
+        value: Math.max(0, Math.round(v * 5)),
+      })),
       step_secs: 5,
       rate_window_secs: 60,
     };

@@ -16,7 +16,11 @@ interface ScopeTrendPanelProps {
   accentColor: string;
   onToggleSeries: (name: string) => void;
   formatRate2: (value: number) => string;
+  formatCount2: (value: number) => string;
+  metricMode: "rate" | "count";
   loading?: boolean;
+  xMin?: number;
+  xMax?: number;
 }
 
 export default function ScopeTrendPanel({
@@ -26,7 +30,11 @@ export default function ScopeTrendPanel({
   accentColor,
   onToggleSeries,
   formatRate2,
+  formatCount2,
+  metricMode,
   loading = false,
+  xMin,
+  xMax,
 }: ScopeTrendPanelProps) {
   const { t } = useTranslation();
 
@@ -79,16 +87,22 @@ export default function ScopeTrendPanel({
       )}
       <Spin spinning={loading}>
         <TimeSeriesChart
-          title={t("monitor.detail.rateTrend")}
+          key={`scope-${metricMode}`}
+          title={
+            metricMode === "count"
+              ? t("monitor.detail.countTrend")
+              : t("monitor.detail.rateTrend")
+          }
           points={[]}
           multiSeries={visibleParseMultiSeries}
           showLegend={false}
           color={accentColor}
-          showTitleValue={false}
-          valueFormatter={formatRate2}
-          axisValueFormatter={formatRate2}
+          valueFormatter={metricMode === "count" ? formatCount2 : formatRate2}
+          axisValueFormatter={metricMode === "count" ? formatCount2 : formatRate2}
           minY={0}
           yTickAmount={6}
+          xMin={xMin}
+          xMax={xMax}
         />
       </Spin>
       {parseMultiSeries.length === 0 && (

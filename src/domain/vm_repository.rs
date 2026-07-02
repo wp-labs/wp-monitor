@@ -4,6 +4,14 @@ use crate::domain::model::{
 use crate::shared::error::AppError;
 use async_trait::async_trait;
 
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+pub enum TimeSeriesMetricMode {
+    #[serde(rename = "rate")]
+    Rate,
+    #[serde(rename = "count")]
+    Count,
+}
+
 /// 查询过滤条件（领域概念，非 HTTP DTO）。
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct PackageFilter {
@@ -36,6 +44,7 @@ pub trait VmRepository: Send + Sync {
         node_id: &str,
         query: &TimeRangeQuery,
         max_data_points: Option<usize>,
+        metric_mode: TimeSeriesMetricMode,
     ) -> Result<NodeTimeSeries, AppError>;
 
     async fn fetch_parse_timeseries(
@@ -44,6 +53,7 @@ pub trait VmRepository: Send + Sync {
         package_name: &str,
         rule_names: &str,
         max_data_points: Option<usize>,
+        metric_mode: TimeSeriesMetricMode,
     ) -> Result<Vec<NodeTimeSeries>, AppError>;
 
     async fn fetch_packages_timeseries(
@@ -51,12 +61,14 @@ pub trait VmRepository: Send + Sync {
         query: &TimeRangeQuery,
         filters: &[(String, String)],
         max_data_points: Option<usize>,
+        metric_mode: TimeSeriesMetricMode,
     ) -> Result<Vec<NodeTimeSeries>, AppError>;
 
     async fn fetch_source_timeseries(
         &self,
         query: &TimeRangeQuery,
         max_data_points: Option<usize>,
+        metric_mode: TimeSeriesMetricMode,
     ) -> Result<Vec<NodeTimeSeries>, AppError>;
 
     async fn fetch_sink_timeseries(
@@ -64,5 +76,6 @@ pub trait VmRepository: Send + Sync {
         query: &TimeRangeQuery,
         sink_group: Option<&str>,
         max_data_points: Option<usize>,
+        metric_mode: TimeSeriesMetricMode,
     ) -> Result<Vec<NodeTimeSeries>, AppError>;
 }

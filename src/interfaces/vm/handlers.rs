@@ -1,5 +1,5 @@
 use crate::domain::model::TimeRangeQuery;
-use crate::domain::vm_repository::PackageFilter;
+use crate::domain::vm_repository::{PackageFilter, TimeSeriesMetricMode};
 use crate::shared::api::{ApiResponse, ReadyResponse, VersionResponse};
 use crate::shared::error::AppErrorResponse;
 use crate::state::AppState;
@@ -33,6 +33,7 @@ pub struct TimeSeriesRequest {
     #[allow(dead_code)]
     pub step: Option<String>,
     pub max_data_points: Option<usize>,
+    pub metric_mode: Option<TimeSeriesMetricMode>,
 }
 
 /// 获取全量分层快照。
@@ -167,7 +168,12 @@ pub async fn get_node_timeseries(
     })?;
     let data = state
         .layer
-        .get_node_timeseries(node_id, query, req.max_data_points)
+        .get_node_timeseries(
+            node_id,
+            query,
+            req.max_data_points,
+            req.metric_mode.unwrap_or(TimeSeriesMetricMode::Rate),
+        )
         .await
         .map_err(|e| {
             error!(
@@ -200,6 +206,7 @@ pub struct NodesTimeSeriesRequest {
     pub start_time: String,
     pub end_time: String,
     pub max_data_points: Option<usize>,
+    pub metric_mode: Option<TimeSeriesMetricMode>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -208,6 +215,7 @@ pub struct PackagesTimeSeriesRequest {
     pub end_time: String,
     pub max_data_points: Option<usize>,
     pub filters: Vec<PackageFilter>,
+    pub metric_mode: Option<TimeSeriesMetricMode>,
 }
 
 #[post("/packages/timeseries")]
@@ -227,7 +235,12 @@ pub async fn get_packages_timeseries(
     let req = req.into_inner();
     let data = state
         .layer
-        .get_packages_timeseries(query, req.max_data_points, req.filters)
+        .get_packages_timeseries(
+            query,
+            req.max_data_points,
+            req.filters,
+            req.metric_mode.unwrap_or(TimeSeriesMetricMode::Rate),
+        )
         .await
         .map_err(|e| {
             error!(
@@ -260,10 +273,11 @@ pub async fn get_nodes_timeseries(
         AppErrorResponse::from(e)
     })?;
     let scope = req.scope.as_ref().unwrap_or(&TimeSeriesScope::Parse);
+    let metric_mode = req.metric_mode.unwrap_or(TimeSeriesMetricMode::Rate);
     let data = match scope {
         TimeSeriesScope::Source => state
             .layer
-            .get_source_timeseries(query, req.max_data_points)
+            .get_source_timeseries(query, req.max_data_points, metric_mode)
             .await
             .map_err(|e| {
                 error!(error = %e, "vm.handlers.source_timeseries.failed");
@@ -271,7 +285,12 @@ pub async fn get_nodes_timeseries(
             })?,
         TimeSeriesScope::Sink => state
             .layer
-            .get_sink_timeseries(query, req.sink_group.clone(), req.max_data_points)
+            .get_sink_timeseries(
+                query,
+                req.sink_group.clone(),
+                req.max_data_points,
+                metric_mode,
+            )
             .await
             .map_err(|e| {
                 error!(error = %e, "vm.handlers.sink_timeseries.failed");
@@ -284,6 +303,7 @@ pub async fn get_nodes_timeseries(
                 req.package_name.clone(),
                 req.rule_name.clone(),
                 req.max_data_points,
+                metric_mode,
             )
             .await
             .map_err(|e| {

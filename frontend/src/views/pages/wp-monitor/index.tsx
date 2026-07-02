@@ -4,6 +4,7 @@ import {
 } from "antd";
 import {
   Ban,
+  CalendarRange,
   ChartLine,
   ChevronDown,
   CodeXml,
@@ -40,6 +41,7 @@ import {
   fetchSnapshot,
   fetchVersion,
 } from "@/services/monitor";
+import type { TimeSeriesMetricMode } from "@/services/monitor";
 import type {
   LayerSnapshot,
   NodeDetail,
@@ -52,6 +54,7 @@ import logoLightUrl from "@/assets/logo-light.png";
 
 const QUICK_RANGES = [
   { key: "5m", minutes: 5 },
+  { key: "30m", minutes: 30 },
   { key: "1h", minutes: 60 },
   { key: "6h", minutes: 360 },
   { key: "24h", minutes: 1440 },
@@ -59,6 +62,7 @@ const QUICK_RANGES = [
   { key: "week" },
 ] as const;
 const MISS_PAGE_SIZE = 10;
+const MISS_FULLSCREEN_PAGE_SIZE = 24;
 const REALTIME_END_LAG_MS = 5000;
 const PACKAGE_ICON_TONES = ["mint", "amber", "sky"] as const;
 
@@ -71,6 +75,8 @@ function escapeSpecialChars(str: string): string {
 }
 
 const { RangePicker } = DatePicker;
+type QuickRangeKey = (typeof QUICK_RANGES)[number]["key"];
+type TimeRangeKey = QuickRangeKey | "custom";
 
 type LegendType =
   | "source"
@@ -102,6 +108,8 @@ type ScopeSeriesRequest = {
   packageName?: string;
   sinkGroup?: string;
 };
+type DetailTrendMetricMode = TimeSeriesMetricMode;
+type RefreshRange = { start: string; end: string };
 
 function toIsoByMinutesAgo(minutes: number) {
   return new Date(Date.now() - REALTIME_END_LAG_MS - minutes * 60 * 1000).toISOString();
@@ -113,12 +121,6 @@ function nowWithLagMs() {
 
 function nowWithLagIso() {
   return new Date(nowWithLagMs()).toISOString();
-}
-
-function estimateMaxDataPoints() {
-  if (typeof window === "undefined") return 720;
-  const panelWidth = Math.max(360, Math.floor(window.innerWidth * 0.58));
-  return Math.max(120, Math.min(1600, panelWidth));
 }
 
 function toDateFromIso(v: string) {
@@ -148,6 +150,15 @@ function resolveTimeRange(currentStart: string, currentEnd: string) {
     return { start, end };
   }
   return { start: currentStart, end: currentEnd };
+}
+
+function toChartRangeMs(startIso: string, endIso: string) {
+  const startMs = new Date(startIso).getTime();
+  const endMs = new Date(endIso).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs >= endMs) {
+    return { xMin: undefined, xMax: undefined };
+  }
+  return { xMin: startMs, xMax: endMs };
 }
 
 function filterLogsByMode(
@@ -192,11 +203,23 @@ function buildQuickRange(key: string) {
   return { start: start.toISOString(), end: end.toISOString() };
 }
 
+function resolveAutoRefreshRange(
+  rangeKey: TimeRangeKey,
+  currentStart: string,
+  currentEnd: string,
+): RefreshRange {
+  if (rangeKey === "custom") {
+    return resolveTimeRange(currentStart, currentEnd);
+  }
+  return buildQuickRange(rangeKey) ?? resolveTimeRange(currentStart, currentEnd);
+}
+
 export default function WpMonitorPage() {
   const { t } = useTranslation();
   const { theme, accentColor } = useTheme();
   const logoUrl = theme === 'light-modern' ? logoLightUrl : logoDarkUrl;
   const formatRate2 = useCallback((v: number) => `${v.toFixed(2)} e/s`, []);
+  const formatCount2 = useCallback((v: number) => `${Math.max(0, Math.round(v))}`, []);
   const layerLabels = useMemo(
     () => ({
       source: t("monitor.layer.source"),
@@ -214,7 +237,6 @@ export default function WpMonitorPage() {
   const [snapshot, setSnapshot] = useState<LayerSnapshot | null>(null);
   const [startTime, setStartTime] = useState(() => toIsoByMinutesAgo(5));
   const [endTime, setEndTime] = useState(() => nowWithLagIso());
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const { message } = App.useApp();
 
@@ -251,18 +273,19 @@ export default function WpMonitorPage() {
   const [expandedPackages, setExpandedPackages] = useState<string[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
 
-  const [draftRange, setDraftRange] = useState("5m");
+  const [activeRangeKey, setActiveRangeKey] = useState<TimeRangeKey>("5m");
   const [draftStart, setDraftStart] = useState<Date | null>(() =>
     toDateFromIso(toIsoByMinutesAgo(5)),
   );
   const [draftEnd, setDraftEnd] = useState<Date | null>(() =>
     toDateFromIso(nowWithLagIso()),
   );
-  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [refreshIntervalSec, setRefreshIntervalSec] = useState(5);
   const [refreshIntervalInput, setRefreshIntervalInput] = useState("5");
   const [refreshSpin, setRefreshSpin] = useState(false);
   const [detailTrendAutoRefresh, setDetailTrendAutoRefresh] = useState(true);
+  const [detailTrendMetricMode, setDetailTrendMetricMode] =
+    useState<DetailTrendMetricMode>("rate");
   const [isRangePickerOpen, setIsRangePickerOpen] = useState(false);
   const [isTimeDraftDirty, setIsTimeDraftDirty] = useState(false);
 
@@ -287,9 +310,11 @@ export default function WpMonitorPage() {
   const scopeSeriesColorMapRef = useRef<Map<string, string>>(new Map());
   const scopeSeriesColorCursorRef = useRef(0);
   const detailRequestSeqRef = useRef(0);
+  const missScrollRef = useRef<HTMLDivElement | null>(null);
   const isInitialMountRef = useRef(true);
   const userTimeChangeRef = useRef(false);
-
+  const autoRefreshEnabled = refreshIntervalSec > 0;
+  const missPageSize = detailFullscreen ? MISS_FULLSCREEN_PAGE_SIZE : MISS_PAGE_SIZE;
   const clampDetailPanelHeight = useCallback((h: number) => {
     const isMobile = window.innerWidth <= 768;
     const minHeight = isMobile ? Math.floor(window.innerHeight * 0.56) : 220;
@@ -310,10 +335,14 @@ export default function WpMonitorPage() {
   }, []);
 
   const isTimeSelectionPending = isRangePickerOpen || isTimeDraftDirty;
+  const resetTimeDraft = useCallback(() => {
+    setDraftStart(toDateFromIso(startTime));
+    setDraftEnd(toDateFromIso(endTime));
+    setIsTimeDraftDirty(false);
+  }, [startTime, endTime]);
 
   async function loadSnapshot(start = startTime, end = endTime) {
     try {
-      setLoading(true);
       setError("");
       const data = await fetchSnapshot(start, end);
       setSnapshot(data);
@@ -322,7 +351,6 @@ export default function WpMonitorPage() {
     } catch (err) {
       setError((err as Error).message);
     } finally {
-      setLoading(false);
     }
   }
 
@@ -337,15 +365,9 @@ export default function WpMonitorPage() {
           ruleNames: filterLogsByMode(pkg.logs, parseFilterRef.current).map((log) => log.name),
         }))
         .filter((f) => f.ruleNames.length > 0);
-      const nowMs = nowWithLagMs();
-      const startMs = new Date(startTime).getTime();
-      const endMs = new Date(endTime).getTime();
-      const durationMs =
-        Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs
-          ? endMs - startMs
-          : 5 * 60 * 1000;
-      const nextEnd = new Date(nowMs).toISOString();
-      const nextStart = new Date(nowMs - durationMs).toISOString();
+      const nextRange = resolveAutoRefreshRange(activeRangeKey, startTime, endTime);
+      const nextStart = nextRange.start;
+      const nextEnd = nextRange.end;
       const data = await fetchMetrics(nextStart, nextEnd, ids, pkgFilters);
       setSnapshot((prev) =>
         prev ? applyMetricsToSnapshot(prev, data.items) : prev,
@@ -398,16 +420,17 @@ export default function WpMonitorPage() {
   }, [
     snapshot,
     startTime,
+    endTime,
     autoRefreshEnabled,
+    activeRangeKey,
     refreshIntervalSec,
     isTimeSelectionPending,
   ]);
 
   useEffect(() => {
     if (isTimeSelectionPending) return;
-    setDraftStart(toDateFromIso(startTime));
-    setDraftEnd(toDateFromIso(endTime));
-  }, [startTime, endTime, isTimeSelectionPending]);
+    resetTimeDraft();
+  }, [resetTimeDraft, isTimeSelectionPending]);
 
   useEffect(() => {
     function onDocClick(event: MouseEvent) {
@@ -448,15 +471,25 @@ export default function WpMonitorPage() {
     };
   }, []);
 
-  const rateChartPoints = useMemo(
-    () => series?.log_rate_eps ?? [],
-    [series?.log_rate_eps],
+  const detailChartPoints = useMemo(
+    () =>
+      detailTrendMetricMode === "count"
+        ? (series?.log_count ?? [])
+        : (series?.log_rate_eps ?? []),
+    [detailTrendMetricMode, series?.log_count, series?.log_rate_eps],
+  );
+  const detailChartRange = useMemo(
+    () => toChartRangeMs(detailStartTime, detailEndTime),
+    [detailEndTime, detailStartTime],
   );
   const parseMultiSeries = useMemo(
     () =>
       (parseSeriesList ?? []).map((seriesItem) => ({
         name: seriesItem.node_id,
-        points: seriesItem.log_rate_eps ?? [],
+        points:
+          detailTrendMetricMode === "count"
+            ? (seriesItem.log_count ?? [])
+            : (seriesItem.log_rate_eps ?? []),
         color: (() => {
           const cached = scopeSeriesColorMapRef.current.get(seriesItem.node_id);
           if (cached) return cached;
@@ -470,7 +503,7 @@ export default function WpMonitorPage() {
           return color;
         })(),
       })),
-    [parseSeriesList, theme],
+    [detailTrendMetricMode, parseSeriesList, theme],
   );
   const visibleParseMultiSeries = useMemo(
     () =>
@@ -478,6 +511,10 @@ export default function WpMonitorPage() {
         (line) => !hiddenScopeSeriesNames.includes(line.name),
       ),
     [parseMultiSeries, hiddenScopeSeriesNames],
+  );
+  const scopeChartRange = useMemo(
+    () => toChartRangeMs(detailStartTime, detailEndTime),
+    [detailEndTime, detailStartTime],
   );
   const isMissSelected = useMemo(
     () =>
@@ -522,9 +559,9 @@ export default function WpMonitorPage() {
   const parsePageItems = parsePages[Math.min(parsePage - 1, parseTotalPages - 1)] || [];
 
   const missPageItems = useMemo(() => {
-    const offset = (missPage - 1) * MISS_PAGE_SIZE;
-    return missLogs.slice(offset, offset + MISS_PAGE_SIZE);
-  }, [missLogs, missPage]);
+    const offset = (missPage - 1) * missPageSize;
+    return missLogs.slice(offset, offset + missPageSize);
+  }, [missLogs, missPage, missPageSize]);
   const detailNodePillType = useMemo(() => {
     if (!selectedNode) return "generic";
     if (snapshot?.miss.id === selectedNode) return "miss";
@@ -585,7 +622,7 @@ export default function WpMonitorPage() {
             selectedNode,
             nextStart,
             nextEnd,
-            estimateMaxDataPoints(),
+            detailTrendMetricMode,
           ),
         ]);
         if (cancelled) return;
@@ -617,6 +654,7 @@ export default function WpMonitorPage() {
     detailStartTime,
     detailEndTime,
     refreshIntervalSec,
+    detailTrendMetricMode,
     parseSeriesList,
     t,
   ]);
@@ -657,7 +695,10 @@ export default function WpMonitorPage() {
             ruleNames: filterLogsByMode(pkg.logs, filter).map((log) => log.name),
           }));
           timeseriesResp = await fetchPackagesTimeSeries(
-            nextStart, nextEnd, estimateMaxDataPoints(),
+            nextStart,
+            nextEnd,
+            detailTrendMetricMode,
+            undefined,
             pkgFilters,
           );
         } else {
@@ -673,7 +714,10 @@ export default function WpMonitorPage() {
           }
           timeseriesResp = await fetchParseTimeSeries(
             scopeSeriesRequest.scope,
-            nextStart, nextEnd, estimateMaxDataPoints(),
+            nextStart,
+            nextEnd,
+            detailTrendMetricMode,
+            undefined,
             scopeSeriesRequest.packageName,
             scopeSeriesRequest.sinkGroup,
             logNodeIds,
@@ -709,6 +753,7 @@ export default function WpMonitorPage() {
     detailStartTime,
     detailEndTime,
     refreshIntervalSec,
+    detailTrendMetricMode,
     t,
   ]);
 
@@ -796,7 +841,11 @@ export default function WpMonitorPage() {
         }
       }
       void fetchParseTimeSeries(
-        req.scope, detailStartTime, detailEndTime, estimateMaxDataPoints(),
+        req.scope,
+        detailStartTime,
+        detailEndTime,
+        detailTrendMetricMode,
+        undefined,
         req.packageName, req.sinkGroup, logNodeIds,
       ).then((resp) => {
         setParseSeriesList(resp.data ?? []);
@@ -804,7 +853,7 @@ export default function WpMonitorPage() {
         setDrawerError((err as Error).message || t("monitor.error.parseTimeseriesFetchFailed"));
       });
     }
-  }, [filteredScopeSignature]);
+  }, [detailTrendMetricMode, filteredScopeSignature]);
 
   useEffect(() => {
     scopeSeriesColorMapRef.current.clear();
@@ -857,6 +906,13 @@ export default function WpMonitorPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [detailFullscreen]);
 
+  useEffect(() => {
+    setMissPage((prev) => {
+      const maxPage = Math.max(1, Math.ceil(missLogs.length / missPageSize));
+      return Math.min(prev, maxPage);
+    });
+  }, [missLogs.length, missPageSize]);
+
   function nodeClass(
     base: string,
     nodeId: string,
@@ -880,7 +936,7 @@ export default function WpMonitorPage() {
         setMissPage(1);
       } else {
         setMissPage((prev) => {
-          const maxPage = Math.max(1, Math.ceil(data.items.length / MISS_PAGE_SIZE));
+          const maxPage = Math.max(1, Math.ceil(data.items.length / missPageSize));
           return Math.min(prev, maxPage);
         });
       }
@@ -925,9 +981,18 @@ export default function WpMonitorPage() {
 
   function onMissPageChange(page: number) {
     setMissPage(page);
+    missScrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
   }
 
   async function openDetail(nodeId: string, showLoading = true) {
+    return openDetailWithMetricMode(nodeId, detailTrendMetricMode, showLoading);
+  }
+
+  async function openDetailWithMetricMode(
+    nodeId: string,
+    metricMode: DetailTrendMetricMode,
+    showLoading = true,
+  ): Promise<boolean> {
     const seq = ++detailRequestSeqRef.current;
     setDetailViewMode("node");
     setDetailNodePill(resolveNodePillById(nodeId));
@@ -956,7 +1021,7 @@ export default function WpMonitorPage() {
         nodeId,
         detailRange.start,
         detailRange.end,
-        estimateMaxDataPoints(),
+        metricMode,
       );
       if (isMissNode) {
         setMissLogsLoading(true);
@@ -965,7 +1030,7 @@ export default function WpMonitorPage() {
           seriesPromise,
           fetchMissedLogs(),
         ]);
-        if (detailRequestSeqRef.current !== seq) return;
+        if (detailRequestSeqRef.current !== seq) return false;
         setMissLogs(missedResp.items);
         setMissTotal(missedResp.total ?? missedResp.items.length);
         setMissPage(1);
@@ -974,26 +1039,28 @@ export default function WpMonitorPage() {
         setDetail(detailResp.data);
         setDetailNodePill(normalizeNodePill(detailResp.data.name));
         setSeries(seriesResp.data);
-        return;
+        return true;
       }
       const [detailResp, seriesResp] = await Promise.all([
         detailPromise,
         seriesPromise,
       ]);
-      if (detailRequestSeqRef.current !== seq) return;
+      if (detailRequestSeqRef.current !== seq) return false;
       setDetail(detailResp.data);
       setDetailNodePill(normalizeNodePill(detailResp.data.name));
       setSeries(seriesResp.data);
+      return true;
     } catch (err) {
-      if (detailRequestSeqRef.current !== seq) return;
+      if (detailRequestSeqRef.current !== seq) return false;
       if (isMissNode) {
         setMissLogs([]);
         setMissLogsError((err as Error).message || t("monitor.error.missedLogsFetchFailed"));
         setMissLogsLoading(false);
       }
       setDrawerError((err as Error).message || t("monitor.error.nodeDetailFetchFailed"));
+      return false;
     } finally {
-      if (detailRequestSeqRef.current !== seq) return;
+      if (detailRequestSeqRef.current !== seq) return false;
       setDrawerLoading(false);
     }
   }
@@ -1006,6 +1073,26 @@ export default function WpMonitorPage() {
     sinkGroup?: string,
     showLoading = true,
   ) {
+    return openParseTimeseriesWithMetricMode(
+      detailTrendMetricMode,
+      scope,
+      selectedId,
+      pillName,
+      packageName,
+      sinkGroup,
+      showLoading,
+    );
+  }
+
+  async function openParseTimeseriesWithMetricMode(
+    metricMode: DetailTrendMetricMode,
+    scope: "parse" | "source" | "sink",
+    selectedId: string,
+    pillName: string,
+    packageName?: string,
+    sinkGroup?: string,
+    showLoading = true,
+  ): Promise<boolean> {
     const seq = ++detailRequestSeqRef.current;
     scopeModeRef.current = "log";
     setDetailViewMode("scope");
@@ -1032,23 +1119,33 @@ export default function WpMonitorPage() {
         scope,
         range.start,
         range.end,
-        estimateMaxDataPoints(),
+        metricMode,
+        undefined,
         packageName,
         sinkGroup,
         logNodeIds,
       );
-      if (detailRequestSeqRef.current !== seq) return;
+      if (detailRequestSeqRef.current !== seq) return false;
       setParseSeriesList(timeseriesResp.data ?? []);
+      return true;
     } catch (err) {
-      if (detailRequestSeqRef.current !== seq) return;
+      if (detailRequestSeqRef.current !== seq) return false;
       setDrawerError((err as Error).message || t("monitor.error.parseTimeseriesFetchFailed"));
+      return false;
     } finally {
-      if (detailRequestSeqRef.current !== seq) return;
+      if (detailRequestSeqRef.current !== seq) return false;
       setDrawerLoading(false);
     }
   }
 
   async function openParseScope(showLoading = true) {
+    return openParseScopeWithMetricMode(detailTrendMetricMode, showLoading);
+  }
+
+  async function openParseScopeWithMetricMode(
+    metricMode: DetailTrendMetricMode,
+    showLoading = true,
+  ): Promise<boolean> {
     const seq = ++detailRequestSeqRef.current;
     scopeModeRef.current = "package";
     setDetailViewMode("scope");
@@ -1063,26 +1160,62 @@ export default function WpMonitorPage() {
     setDrawerError("");
     try {
       if (filteredParses.length === 0) {
-        if (detailRequestSeqRef.current !== seq) return;
+        if (detailRequestSeqRef.current !== seq) return false;
         setParseSeriesList([]);
+        return true;
       } else {
         const pkgFilters = filteredParses.map((pkg) => ({
           packageName: pkg.package_name,
           ruleNames: filterLogsByMode(pkg.logs, parseFilter).map((log) => log.name),
         }));
         const timeseriesResp = await fetchPackagesTimeSeries(
-          range.start, range.end, estimateMaxDataPoints(),
+          range.start,
+          range.end,
+          metricMode,
+          undefined,
           pkgFilters,
         );
-        if (detailRequestSeqRef.current !== seq) return;
+        if (detailRequestSeqRef.current !== seq) return false;
         setParseSeriesList(timeseriesResp.data ?? []);
+        return true;
       }
     } catch (err) {
-      if (detailRequestSeqRef.current !== seq) return;
+      if (detailRequestSeqRef.current !== seq) return false;
       setDrawerError((err as Error).message || t("monitor.error.parseTimeseriesFetchFailed"));
+      return false;
     } finally {
-      if (detailRequestSeqRef.current !== seq) return;
+      if (detailRequestSeqRef.current !== seq) return false;
       setDrawerLoading(false);
+    }
+  }
+
+  async function switchDetailTrendMetricMode(nextMode: DetailTrendMetricMode) {
+    if (nextMode === detailTrendMetricMode) return;
+    if (!selectedNode) {
+      setDetailTrendMetricMode(nextMode);
+      return;
+    }
+    if (detailViewMode === "node") {
+      const ok = await openDetailWithMetricMode(selectedNode, nextMode, false);
+      if (ok) setDetailTrendMetricMode(nextMode);
+      return;
+    }
+    if (detailViewMode === "scope" && scopeSeriesRequest) {
+      if (scopeModeRef.current === "package") {
+        const ok = await openParseScopeWithMetricMode(nextMode, false);
+        if (ok) setDetailTrendMetricMode(nextMode);
+        return;
+      }
+      const ok = await openParseTimeseriesWithMetricMode(
+        nextMode,
+        scopeSeriesRequest.scope,
+        selectedNode,
+        detailNodePill || selectedNode,
+        scopeSeriesRequest.packageName,
+        scopeSeriesRequest.sinkGroup,
+        false,
+      );
+      if (ok) setDetailTrendMetricMode(nextMode);
     }
   }
 
@@ -1130,35 +1263,30 @@ export default function WpMonitorPage() {
     );
   }
 
-  async function applyTimeRange(
-    nextStart: string,
-    nextEnd: string,
-    enableAutoRefresh: boolean,
-  ) {
+  async function applyTimeRange(nextStart: string, nextEnd: string) {
     if (new Date(nextStart).getTime() >= new Date(nextEnd).getTime()) {
       setError(t("monitor.error.invalidTimeRange"));
-      return;
+      return false;
     }
     setError("");
     userTimeChangeRef.current = true;
     setIsTimeDraftDirty(false);
     setStartTime(nextStart);
     setEndTime(nextEnd);
-    setAutoRefreshEnabled(enableAutoRefresh);
     setIsRangePickerOpen(false);
     await loadSnapshot(nextStart, nextEnd);
+    return true;
   }
 
-  async function onPickRange(key: string) {
-    setDraftRange(key);
+  async function onPickRange(key: QuickRangeKey) {
     const range = buildQuickRange(key);
     if (!range) return;
+    setActiveRangeKey(key);
     setDraftStart(new Date(range.start));
     setDraftEnd(new Date(range.end));
     setIsTimeDraftDirty(false);
     setIsRangePickerOpen(false);
-    // 仅 5m 保持滑动窗口以支持实时监控，其余范围固定时间窗口
-    await applyTimeRange(range.start, range.end, key === "5m");
+    await applyTimeRange(range.start, range.end);
   }
 
   async function onApplyTime() {
@@ -1168,9 +1296,19 @@ export default function WpMonitorPage() {
     }
     const nextStart = draftStart.toISOString();
     const nextEnd = draftEnd.toISOString();
+    const ok = await applyTimeRange(nextStart, nextEnd);
+    if (!ok) return;
+    setActiveRangeKey("custom");
     setIsRangePickerOpen(false);
-    // 手动点击“查询”视为自定义时间查询，固定关闭自动刷新，避免选定窗口被改写。
-    await applyTimeRange(nextStart, nextEnd, false);
+  }
+
+  function onAbsoluteRangeOpenChange(open: boolean) {
+    setIsRangePickerOpen(open);
+    if (open) {
+      resetTimeDraft();
+      return;
+    }
+    resetTimeDraft();
   }
 
   function onRefreshIntervalChange(raw: string) {
@@ -1182,13 +1320,13 @@ export default function WpMonitorPage() {
     setRefreshIntervalInput(raw);
     const parsed = Number.parseInt(raw, 10);
     if (!Number.isNaN(parsed)) {
-      setRefreshIntervalSec(Math.max(1, parsed));
+      setRefreshIntervalSec(Math.max(0, parsed));
     }
   }
 
   function commitRefreshIntervalInput() {
     const parsed = Number.parseInt(refreshIntervalInput, 10);
-    const normalized = Number.isNaN(parsed) ? 1 : Math.max(1, parsed);
+    const normalized = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
     setRefreshIntervalSec(normalized);
     setRefreshIntervalInput(String(normalized));
   }
@@ -1333,68 +1471,45 @@ export default function WpMonitorPage() {
               <Button
                 key={range.key}
                 size="small"
-                type={draftRange === range.key ? "primary" : "default"}
+                type={activeRangeKey === range.key ? "primary" : "default"}
                 onClick={() => void onPickRange(range.key)}
               >
                 {t(`monitor.quickRanges.${range.key}`)}
               </Button>
             ))}
-            <Button
-              size="small"
-              type={draftRange === "custom" ? "primary" : "default"}
-              onClick={() => setDraftRange("custom")}
-            >
-              {t("common.custom")}
-            </Button>
           </div>
-          <div className="wd-chip wd-time-field wd-time-range-field">
-            <span className="wd-time-field-label">{t("monitor.toolbar.timeRange")}</span>
-            <RangePicker
-              className="wd-ant-range"
-              classNames={{ popup: { root: "wd-ant-range-popup" } }}
-              style={{ width: "336px", maxWidth: "100%" }}
-              value={[
-                draftStart ? dayjs(draftStart) : null,
-                draftEnd ? dayjs(draftEnd) : null,
-              ]}
-              onChange={(dates: null | [Dayjs | null, Dayjs | null]) => {
-                const nextStart = dates?.[0]?.toDate() ?? null;
-                const nextEnd = dates?.[1]?.toDate() ?? null;
-                const appliedStartMs = new Date(startTime).getTime();
-                const appliedEndMs = new Date(endTime).getTime();
-                setDraftRange("custom");
-                setDraftStart(nextStart);
-                setDraftEnd(nextEnd);
-                setIsTimeDraftDirty(
-                  !nextStart ||
-                    !nextEnd ||
-                    nextStart.getTime() !== appliedStartMs ||
-                    nextEnd.getTime() !== appliedEndMs,
-                );
-              }}
-              onCalendarChange={() => {
-                setDraftRange("custom");
-              }}
-              onOpenChange={(open) => {
-                setIsRangePickerOpen(open);
-                if (open) setDraftRange("custom");
-              }}
-              showTime={{ format: "HH:mm:ss", minuteStep: 1, secondStep: 1 }}
-              format="YYYY-MM-DD HH:mm:ss"
-              allowClear={false}
-              separator="→"
-              suffixIcon={null}
-              placeholder={[t("monitor.toolbar.startTime"), t("monitor.toolbar.endTime")]}
-            />
-          </div>
-          <Button
-            type="primary"
-            size="small"
-            onClick={() => void onApplyTime()}
-            loading={loading}
-          >
-            {t("common.query")}
-          </Button>
+          <RangePicker
+            className={`wd-ant-range wd-time-range-direct ${activeRangeKey === "custom" ? "active" : ""}`}
+            classNames={{ popup: { root: "wd-ant-range-popup" } }}
+            getPopupContainer={(node) => node.parentElement ?? document.body}
+            open={isRangePickerOpen}
+            onOpenChange={onAbsoluteRangeOpenChange}
+            value={[
+              draftStart ? dayjs(draftStart) : null,
+              draftEnd ? dayjs(draftEnd) : null,
+            ]}
+            onChange={(dates: null | [Dayjs | null, Dayjs | null]) => {
+              const nextStart = dates?.[0]?.toDate() ?? null;
+              const nextEnd = dates?.[1]?.toDate() ?? null;
+              const appliedStartMs = new Date(startTime).getTime();
+              const appliedEndMs = new Date(endTime).getTime();
+              setDraftStart(nextStart);
+              setDraftEnd(nextEnd);
+              setIsTimeDraftDirty(
+                !nextStart ||
+                  !nextEnd ||
+                  nextStart.getTime() !== appliedStartMs ||
+                  nextEnd.getTime() !== appliedEndMs,
+              );
+            }}
+            showTime={{ format: "HH:mm:ss", minuteStep: 1, secondStep: 1 }}
+            format="YYYY-MM-DD HH:mm:ss"
+            allowClear={false}
+            separator="→"
+            suffixIcon={<CalendarRange size={14} />}
+            placeholder={[t("monitor.toolbar.startTime"), t("monitor.toolbar.endTime")]}
+            onOk={() => void onApplyTime()}
+          />
           <span className="wd-chip wd-refresh-chip">
             <span className="wd-time-field-label">{t("monitor.toolbar.autoRefresh")}</span>
             <span
@@ -1404,12 +1519,12 @@ export default function WpMonitorPage() {
             <InputNumber
               size="small"
               className="refresh-interval-input"
-              min={1}
+              min={0}
               value={Number(refreshIntervalInput)}
-              onChange={(value) => onRefreshIntervalChange(String(value ?? 1))}
+              onChange={(value) => onRefreshIntervalChange(String(value ?? 0))}
               onBlur={commitRefreshIntervalInput}
               onKeyDown={onRefreshIntervalKeyDown}
-              style={{ width: 56 }}
+              style={{ width: 72 }}
             />
             <span className="wd-refresh-unit">{t("monitor.toolbar.secondsShort")}</span>
           </span>
@@ -1909,6 +2024,25 @@ export default function WpMonitorPage() {
           <div className="detail-panel-head-right">
             {(detail || parseSeriesList) && (
               <Space>
+                {((detailViewMode === "node" && !isMissSelected) ||
+                  detailViewMode === "scope") && (
+                  <div style={{ display: "inline-flex", gap: 6 }}>
+                    <Button
+                      size="small"
+                      type={detailTrendMetricMode === "rate" ? "primary" : "default"}
+                      onClick={() => void switchDetailTrendMetricMode("rate")}
+                    >
+                      {t("monitor.metric.rate")}
+                    </Button>
+                    <Button
+                      size="small"
+                      type={detailTrendMetricMode === "count" ? "primary" : "default"}
+                      onClick={() => void switchDetailTrendMetricMode("count")}
+                    >
+                      {t("monitor.metric.count")}
+                    </Button>
+                  </div>
+                )}
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t("monitor.detail.realtimeRefresh")}</Typography.Text>
                 <Switch
                   size="small"
@@ -1963,6 +2097,10 @@ export default function WpMonitorPage() {
                   )
                 }
                 formatRate2={formatRate2}
+                formatCount2={formatCount2}
+                metricMode={detailTrendMetricMode}
+                xMin={scopeChartRange.xMin}
+                xMax={scopeChartRange.xMax}
               />
             )}
           {!drawerError &&
@@ -1973,82 +2111,100 @@ export default function WpMonitorPage() {
                   <section className="detail-col">
                     <Spin spinning={drawerLoading}>
                       <TimeSeriesChart
-                        title={t("monitor.detail.rateTrend")}
-                        points={rateChartPoints}
+                        key={`node-${detailTrendMetricMode}`}
+                        title={
+                          detailTrendMetricMode === "count"
+                            ? t("monitor.detail.countTrend")
+                            : t("monitor.detail.rateTrend")
+                        }
+                        points={detailChartPoints}
                         color={accentColor}
-                        showTitleValue={false}
-                        valueFormatter={formatRate2}
-                        axisValueFormatter={formatRate2}
+                        valueFormatter={
+                          detailTrendMetricMode === "count" ? formatCount2 : formatRate2
+                        }
+                        axisValueFormatter={
+                          detailTrendMetricMode === "count" ? formatCount2 : formatRate2
+                        }
                         minY={0}
                         yTickAmount={6}
+                        xMin={detailChartRange.xMin}
+                        xMax={detailChartRange.xMax}
                       />
                     </Spin>
                   </section>
                 )}
 
                 {isMissSelected && (
-                  <section className="detail-col detail-miss-col">
-                    <div className="panel-title">{t("monitor.miss.rawLogs")}</div>
-                    <div className="miss-query-toolbar">
-                      <Button
-                        size="small"
-                        onClick={() => void loadMissedLogs(false)}
-                        disabled={missLogsLoading}
-                      >
-                        {t("monitor.miss.refreshCurrentPage")}
-                      </Button>
-                      <Button size="small" onClick={() => void onExportMissed()} disabled={missExporting}>
-                        {missExporting ? t("monitor.miss.exporting") : t("monitor.miss.exportData")}
-                      </Button>
-                    </div>
-                    {missLogsLoading && <p>{t("monitor.miss.loading")}</p>}
-                    {!missLogsLoading && missLogsError && (
-                      <p className="error">{t("common.errorWithMessage", { message: missLogsError })}</p>
-                    )}
-                    {!missLogsLoading &&
-                      !missLogsError &&
-                      missLogs.length === 0 && <p>{t("monitor.miss.empty")}</p>}
-                    {!missLogsLoading &&
-                      !missLogsError &&
-                      missLogs.length > 0 && (
-                        <>
-                          {missTotal > missLogs.length && (
-                            <p className="miss-latest-hint">
-                              {t("monitor.miss.latestHint", { total: missTotal })}
-                            </p>
-                          )}
-                          <div className="miss-scroll">
-                            <div className="miss-list">
-                              {missPageItems.map((item, index) => {
-                                const offset = (missPage - 1) * MISS_PAGE_SIZE;
-                                const rowNo = offset + index + 1;
-                                return (
-                                  <article
-                                    key={rowNo}
-                                    className="miss-record"
-                                  >
-                                    <span className="miss-record-lineno">{rowNo}</span>
-                                    <pre className="miss-record-raw">
-                                      {escapeSpecialChars(item.content)}
-                                    </pre>
-                                  </article>
-                                );
-                              })}
-                            </div>
+                  <section className={`detail-col detail-miss-col ${detailFullscreen ? "detail-miss-col--fullscreen" : ""}`}>
+                    <div className="miss-shell">
+                      <div className="miss-panel-head">
+                        <div className="miss-panel-meta">
+                          <div className="panel-title">{t("monitor.miss.rawLogs")}</div>
+                          <div className="miss-page-meta">
+                            {missTotal > missLogs.length
+                              ? t("monitor.miss.latestHint", { total: missTotal })
+                              : `${t("monitor.metric.total")} ${fmtCount(missLogs.length)}`}
                           </div>
-                          <div className="miss-pager">
-                            <Pagination
-                              size="small"
-                              current={missPage}
-                              total={missLogs.length}
-                              pageSize={MISS_PAGE_SIZE}
-                              showSizeChanger={false}
-                              showQuickJumper
-                              onChange={onMissPageChange}
-                            />
-                          </div>
-                        </>
+                        </div>
+                        <div className="miss-query-toolbar">
+                          <Button
+                            size="small"
+                            onClick={() => void loadMissedLogs(false)}
+                            disabled={missLogsLoading}
+                          >
+                            {t("monitor.miss.refreshCurrentPage")}
+                          </Button>
+                          <Button size="small" onClick={() => void onExportMissed()} disabled={missExporting}>
+                            {missExporting ? t("monitor.miss.exporting") : t("monitor.miss.exportData")}
+                          </Button>
+                        </div>
+                      </div>
+                      {missLogsLoading && <p>{t("monitor.miss.loading")}</p>}
+                      {!missLogsLoading && missLogsError && (
+                        <p className="error">{t("common.errorWithMessage", { message: missLogsError })}</p>
                       )}
+                      {!missLogsLoading &&
+                        !missLogsError &&
+                        missLogs.length === 0 && <p>{t("monitor.miss.empty")}</p>}
+                      {!missLogsLoading &&
+                        !missLogsError &&
+                        missLogs.length > 0 && (
+                          <>
+                            <div className="miss-log-viewer">
+                              <div ref={missScrollRef} className="miss-scroll">
+                                <div className="miss-list">
+                                  {missPageItems.map((item, index) => {
+                                    const offset = (missPage - 1) * missPageSize;
+                                    const rowNo = offset + index + 1;
+                                    return (
+                                      <article
+                                        key={rowNo}
+                                        className="miss-record"
+                                      >
+                                        <span className="miss-record-lineno">{rowNo}</span>
+                                        <pre className="miss-record-raw">
+                                          {escapeSpecialChars(item.content)}
+                                        </pre>
+                                      </article>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="miss-pager">
+                              <Pagination
+                                size="small"
+                                current={missPage}
+                                total={missLogs.length}
+                                pageSize={missPageSize}
+                                showSizeChanger={false}
+                                showQuickJumper
+                                onChange={onMissPageChange}
+                              />
+                            </div>
+                          </>
+                        )}
+                    </div>
                   </section>
                 )}
               </>

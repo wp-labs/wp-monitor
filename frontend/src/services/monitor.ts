@@ -30,6 +30,8 @@ import {
   tickMockState,
 } from '@/views/components/monitor/wfMock';
 
+export type TimeSeriesMetricMode = "rate" | "count";
+
 function normalizeIsoToSecondBoundary(iso: string) {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
@@ -46,7 +48,7 @@ function normalizeTimeRange(startTime: string, endTime: string) {
 
 function normalizeMaxDataPoints(maxDataPoints?: number) {
   if (!maxDataPoints || !Number.isFinite(maxDataPoints)) return undefined;
-  return Math.max(60, Math.min(2000, Math.floor(maxDataPoints)));
+  return Math.max(60, Math.min(20000, Math.floor(maxDataPoints)));
 }
 
 /** 统一请求：成功返回 ApiResp<T>，失败抛出 ApiError（含 code/message/hints） */
@@ -64,16 +66,21 @@ function isoMinutesAgo(min: number) {
   return new Date(Date.now() - min * 60 * 1000).toISOString();
 }
 
-function mergeTimePoints(groups: Array<{ ts: string; value: number }[]>) {
-  const merged: Array<{ ts: string; value: number }> = [];
-  const seen = new Set<string>();
+function mergeTimePoints(groups: Array<{ ts: string; value: number | null }[]>) {
+  const mergedMap = new Map<string, { ts: string; value: number | null }>();
   groups.forEach((points) => {
     points.forEach((point) => {
-      if (seen.has(point.ts)) return;
-      seen.add(point.ts);
-      merged.push(point);
+      const existing = mergedMap.get(point.ts);
+      if (!existing) {
+        mergedMap.set(point.ts, point);
+        return;
+      }
+      if (existing.value == null && point.value != null) {
+        mergedMap.set(point.ts, point);
+      }
     });
   });
+  const merged = Array.from(mergedMap.values());
   merged.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
   return merged;
 }
@@ -97,6 +104,7 @@ async function requestNodeTimeSeriesOnce(
   nodeId: string,
   startTime: string,
   endTime: string,
+  metricMode: TimeSeriesMetricMode,
   maxDataPoints?: number,
 ) {
   const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(
@@ -104,7 +112,7 @@ async function requestNodeTimeSeriesOnce(
     endTime,
   );
   const safeMaxDataPoints = normalizeMaxDataPoints(maxDataPoints);
-  const url = `/api/v1/wp-monitor/nodes/${encodeURIComponent(nodeId)}/timeseries?start_time=${encodeURIComponent(normalizedStart)}&end_time=${encodeURIComponent(normalizedEnd)}${safeMaxDataPoints ? `&max_data_points=${safeMaxDataPoints}` : ""}`;
+  const url = `/api/v1/wp-monitor/nodes/${encodeURIComponent(nodeId)}/timeseries?start_time=${encodeURIComponent(normalizedStart)}&end_time=${encodeURIComponent(normalizedEnd)}&metric_mode=${encodeURIComponent(metricMode)}${safeMaxDataPoints ? `&max_data_points=${safeMaxDataPoints}` : ""}`;
   return requestJson<NodeTimeSeries>(url);
 }
 
@@ -112,6 +120,7 @@ export async function fetchParseTimeSeries(
   scope: "parse" | "source" | "sink",
   startTime: string,
   endTime: string,
+  metricMode: TimeSeriesMetricMode,
   maxDataPoints?: number,
   packageName?: string,
   sinkGroup?: string,
@@ -126,6 +135,7 @@ export async function fetchParseTimeSeries(
     scope,
     start_time: normalizedStart,
     end_time: normalizedEnd,
+    metric_mode: metricMode,
     package_name: packageName ? [packageName] : [],
     rule_name: ruleNames ?? [],
   };
@@ -138,6 +148,7 @@ export async function fetchParseTimeSeries(
 export async function fetchPackagesTimeSeries(
   startTime: string,
   endTime: string,
+  metricMode: TimeSeriesMetricMode,
   maxDataPoints?: number,
   filters?: Array<{ packageName: string; ruleNames: string[] }>,
 ) {
@@ -146,6 +157,7 @@ export async function fetchPackagesTimeSeries(
   const body: Record<string, unknown> = {
     start_time: normalizedStart,
     end_time: normalizedEnd,
+    metric_mode: metricMode,
     filters: (filters ?? []).map((f) => ({
       package_name: f.packageName,
       rule_names: f.ruleNames,
@@ -214,8 +226,10 @@ export async function fetchNodeTimeSeries(
   nodeId: string,
   startTime: string,
   endTime: string,
+  metricMode: TimeSeriesMetricMode,
   maxDataPoints?: number,
 ) {
+  // 详情趋势必须保留用户选择的精确起止时间，避免前端私自截断分钟边界。
   const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(
     startTime,
     endTime,
@@ -226,6 +240,7 @@ export async function fetchNodeTimeSeries(
       nodeId,
       normalizedStart,
       normalizedEnd,
+      metricMode,
       safeMaxDataPoints,
     );
   } catch (err) {
@@ -256,6 +271,7 @@ export async function fetchNodeTimeSeries(
         nodeId,
         new Date(chunkStartMs).toISOString(),
         new Date(chunkEndMs).toISOString(),
+        metricMode,
         perChunkPoints,
       );
       chunks.push(chunkResp.data);
@@ -263,7 +279,14 @@ export async function fetchNodeTimeSeries(
 
     const merged: NodeTimeSeries = {
       node_id: chunks[0]?.node_id ?? nodeId,
-      log_rate_eps: mergeTimePoints(chunks.map((chunk) => chunk.log_rate_eps ?? [])),
+      log_rate_eps:
+        metricMode === "rate"
+          ? mergeTimePoints(chunks.map((chunk) => chunk.log_rate_eps ?? []))
+          : [],
+      log_count:
+        metricMode === "count"
+          ? mergeTimePoints(chunks.map((chunk) => chunk.log_count ?? []))
+          : [],
     };
     const step = chunks.find((chunk) => typeof chunk.step_secs === "number")?.step_secs;
     if (typeof step === "number") merged.step_secs = step;

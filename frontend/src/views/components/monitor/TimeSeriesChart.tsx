@@ -1,8 +1,36 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import ApexCharts, { type ApexOptions } from 'apexcharts';
+import { useEffect, useMemo, useRef } from 'react';
+import * as echarts from 'echarts/core';
+import {
+  CanvasRenderer,
+} from 'echarts/renderers';
+import {
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+  type GridComponentOption,
+  type LegendComponentOption,
+  type TooltipComponentOption,
+} from 'echarts/components';
+import {
+  LineChart,
+  type LineSeriesOption,
+} from 'echarts/charts';
+import type { ComposeOption } from 'echarts/core';
 import type { TimePoint } from '@/types/monitor';
 import { useLocale } from '@/context/LocaleContext';
 import { MONITOR_SERIES_PALETTE } from '@/views/components/monitor/chartPalette';
+
+echarts.use([
+  CanvasRenderer,
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+  LineChart,
+]);
+
+type EChartsOption = ComposeOption<
+  GridComponentOption | LegendComponentOption | TooltipComponentOption | LineSeriesOption
+>;
 
 interface Props {
   title: string;
@@ -10,7 +38,6 @@ interface Props {
   multiSeries?: Array<{ name: string; points: TimePoint[]; color?: string }>;
   color: string;
   showLegend?: boolean;
-  showTitleValue?: boolean;
   valueFormatter?: (v: number) => string;
   axisValueFormatter?: (v: number) => string;
   minY?: number;
@@ -22,20 +49,52 @@ interface Props {
   legendAlign?: 'left' | 'center' | 'right';
   legendFontSize?: string;
   legendMarkerSize?: number;
+  xMin?: number;
+  xMax?: number;
 }
 
-function removeApexNativeSvgTitles(root: HTMLDivElement | null) {
-  root?.querySelectorAll('.apexcharts-svg > title').forEach((titleEl) => {
-    titleEl.remove();
-  });
+function trimBoundaryNullPoints(points: TimePoint[]) {
+  let start = 0;
+  let end = points.length;
+  while (start < end && points[start]?.value == null) {
+    start += 1;
+  }
+  while (end > start && points[end - 1]?.value == null) {
+    end -= 1;
+  }
+  return points.slice(start, end);
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+function formatAxisTime(ts: number, intlLocale: string) {
+  return new Intl.DateTimeFormat(intlLocale, {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(new Date(ts));
+}
+
+function formatAxisDateTime(ts: number, intlLocale: string) {
+  return new Intl.DateTimeFormat(intlLocale, {
+    hour12: false,
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(new Date(ts));
+}
+
+function formatTooltipTime(ts: number, intlLocale: string) {
+  return new Intl.DateTimeFormat(intlLocale, {
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(new Date(ts));
 }
 
 export default function TimeSeriesChart({
@@ -55,364 +114,310 @@ export default function TimeSeriesChart({
   legendAlign,
   legendFontSize,
   legendMarkerSize,
+  xMin,
+  xMax,
 }: Props) {
   const { intlLocale } = useLocale();
-  const isMulti = Boolean(multiSeries && multiSeries.length > 0);
-  const flatPoints = isMulti
-    ? (multiSeries ?? []).flatMap((seriesItem) => seriesItem.points)
-    : points;
-  const firstTs = useMemo(() => {
-    if (!isMulti) {
-      return flatPoints[0] ? new Date(flatPoints[0].ts).getTime() : undefined;
-    }
-    let minTs = Infinity;
-    for (const s of (multiSeries ?? [])) {
-      for (const p of s.points) {
-        const t = new Date(p.ts).getTime();
-        if (t < minTs) minTs = t;
-      }
-    }
-    return minTs === Infinity ? undefined : minTs;
-  }, [isMulti, multiSeries]);
-  const lastTs = useMemo(() => {
-    if (!isMulti) {
-      return flatPoints[flatPoints.length - 1] ? new Date(flatPoints[flatPoints.length - 1].ts).getTime() : undefined;
-    }
-    let maxTs = -Infinity;
-    for (const s of (multiSeries ?? [])) {
-      for (const p of s.points) {
-        const t = new Date(p.ts).getTime();
-        if (t > maxTs) maxTs = t;
-      }
-    }
-    return maxTs === -Infinity ? undefined : maxTs;
-  }, [isMulti, multiSeries]);
-  const values = flatPoints.map((point) => point.value);
-  const valueMin = values.length > 0 ? Math.min(...values) : undefined;
-  const valueMax = values.length > 0 ? Math.max(...values) : undefined;
-  const computedMinY =
-    typeof minY === 'number'
-      ? minY
-      : typeof valueMin === 'number'
-        ? Math.max(0, valueMin * 0.95)
-        : undefined;
-  const computedMaxY =
-    typeof valueMax === 'number'
-      ? Math.max(valueMax * 1.05, (computedMinY ?? 0) + 1)
-      : undefined;
   const chartRef = useRef<HTMLDivElement | null>(null);
-  const instanceRef = useRef<ApexCharts | null>(null);
-  const [chartWidth, setChartWidth] = useState(0);
-  const xTickAmount = useMemo(() => {
-    const baseWidth = chartWidth > 0 ? chartWidth : 560;
-    const ticksByWidth = Math.max(4, Math.min(12, Math.floor(baseWidth / 88)));
-    const maxTicksByPoints =
-      flatPoints.length > 0 ? Math.max(2, flatPoints.length) : 4;
-    return Math.min(ticksByWidth, maxTicksByPoints);
-  }, [chartWidth, flatPoints.length]);
+  const instanceRef = useRef<echarts.EChartsType | null>(null);
+  const isMulti = Boolean(multiSeries && multiSeries.length > 0);
 
-  const series = useMemo(
-    () => {
-      if (!isMulti) {
-        return [
-          {
-            name: title,
-            data: points.map((point) => ({ x: new Date(point.ts).getTime(), y: point.value })),
-          },
-        ];
-      }
-      // 收集所有 series 的时间戳并排序，构成统一的 x 轴网格。
-      const tsSet = new Set<string>();
-      for (const s of (multiSeries ?? [])) {
-        for (const p of s.points) tsSet.add(p.ts);
-      }
-      const sortedTs = Array.from(tsSet).sort();
-      const sortedTsMs = sortedTs.map((ts) => new Date(ts).getTime());
-
-      return (multiSeries ?? []).map((seriesItem) => {
-        const pts = seriesItem.points;
-        if (pts.length === 0) {
-          return { name: seriesItem.name, data: [] as { x: number; y: number | null }[] };
-        }
-        // 将本 series 的点转为 {x, y} 并按时间排序
-        const own = pts
-          .map((p) => ({ x: new Date(p.ts).getTime(), y: p.value }))
-          .sort((a, b) => a.x - b.x);
-        const firstX = own[0].x;
-        const lastX = own[own.length - 1].x;
-
-        let cursor = 0;
-        const data = sortedTsMs.map((x) => {
-          // 在 series 数据范围之外：留 null
-          if (x < firstX || x > lastX) return { x, y: null };
-          // 移动 cursor 使 x 落在 own[cursor] 和 own[cursor+1] 之间
-          while (cursor < own.length - 2 && own[cursor + 1].x < x) cursor++;
-          const a = own[cursor];
-          const b = own[cursor + 1];
-          if (a.x === x) return { x, y: a.y };
-          if (b.x === x) return { x, y: b.y };
-          // 线性插值
-          if (a.x <= x && x <= b.x && b.x > a.x) {
-            const t = (x - a.x) / (b.x - a.x);
-            return { x, y: a.y + (b.y - a.y) * t };
-          }
-          return { x, y: null };
-        });
-        return { name: seriesItem.name, data };
-      });
-    },
-    [isMulti, multiSeries, points, title],
+  const normalizedPoints = useMemo(
+    () => trimBoundaryNullPoints(points),
+    [points],
+  );
+  const normalizedMultiSeries = useMemo(
+    () =>
+      (multiSeries ?? []).map((seriesItem) => ({
+        ...seriesItem,
+        points: trimBoundaryNullPoints(seriesItem.points),
+      })),
+    [multiSeries],
   );
 
   const palette = useMemo(() => {
     if (!isMulti) return [color];
-    return (multiSeries ?? []).map(
+    return normalizedMultiSeries.map(
       (seriesItem, index) => seriesItem.color ?? MONITOR_SERIES_PALETTE[index % MONITOR_SERIES_PALETTE.length],
     );
-  }, [color, isMulti, multiSeries]);
+  }, [color, isMulti, normalizedMultiSeries]);
 
-  const options = useMemo<ApexOptions>(
-    () => ({
-      chart: {
-        type: 'line',
-        height: '100%',
-        parentHeightOffset: 0,
-        toolbar: { show: false },
-        zoom: { enabled: false },
-        animations: { enabled: true, speed: 320 },
-        fontFamily: '"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif',
-      },
-      colors: palette,
-      stroke: {
-        curve: 'monotoneCubic',
-        width: isMulti ? 1.6 : 2,
-        lineCap: 'round',
-      },
-      dataLabels: { enabled: false },
-      markers: {
-        size: 0,
-        hover: { size: 5, sizeOffset: 2 },
-      },
-      grid: {
-        borderColor: gridColor || '#d2ddf0',
-        strokeDashArray: 4,
-        padding: { left: 16, right: 10, top: -12, bottom: 2 },
-      },
-      xaxis: {
-        type: 'datetime',
-        min: firstTs,
-        max: lastTs,
-        tickAmount: xTickAmount,
-        labels: {
-          show: !hideXAxis,
-          style: { colors: labelColor || '#7f94b4', fontSize: '10px' },
-          offsetY: 0,
-          datetimeUTC: false,
-          datetimeFormatter: {
-            year: 'yyyy',
-            month: 'MM/dd',
-            day: 'MM/dd',
-            hour: 'HH:mm',
-            minute: 'HH:mm',
-            second: 'HH:mm:ss',
-          },
-        },
-        tooltip: { enabled: false },
-        axisBorder: { color: gridColor || '#cfdcf1' },
-        axisTicks: { color: gridColor || '#cfdcf1' },
-      },
-      yaxis: {
-        min: computedMinY,
-        max: computedMaxY,
-        tickAmount: yTickAmount,
-        forceNiceScale: true,
-        labels: {
-          show: true,
-          minWidth: 64,
-          offsetX: -2,
-          style: { colors: labelColor || '#6b84a8', fontSize: '10px' },
-          formatter: (value) => {
-            if (axisValueFormatter) return axisValueFormatter(Number(value));
-            return valueFormatter ? valueFormatter(Number(value)) : Number(value).toFixed(1);
-          },
-        },
-      },
-      tooltip: isMulti
-        ? {
-            followCursor: true,
-            intersect: false,
-            shared: false,
-            custom({ dataPointIndex, w }) {
-              const idx = dataPointIndex;
-              if (idx < 0) return '';
-              const names: string[] = w.globals.seriesNames ?? [];
-              const colors: string[] = w.globals.colors ?? [];
-              const allSeries: Array<Array<number | null>> = w.globals.series ?? [];
-              const fmt = valueFormatter ?? ((v: number) => v.toFixed(2));
-              const xVal = w.globals.seriesX?.[0]?.[idx];
-              let timeStr = '';
-              if (xVal != null) {
-                const date = new Date(xVal);
-                if (!Number.isNaN(date.getTime())) {
-                  timeStr = new Intl.DateTimeFormat(intlLocale, {
-                    hour12: false,
-                    year: 'numeric',
-                    month: '2-digit',
-                    day: '2-digit',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                  }).format(date);
-                }
-              }
-
-              const rows: Array<{ name: string; color: string; y: number; label: string }> = [];
-              for (let i = 0; i < names.length; i++) {
-                const y = allSeries[i]?.[idx];
-                if (y == null) continue;
-                rows.push({
-                  name: names[i],
-                  color: colors[i] ?? palette[i % palette.length],
-                  y: Number(y),
-                  label: fmt(Number(y)),
-                });
-              }
-              rows.sort((a, b) => (b.y ?? -Infinity) - (a.y ?? -Infinity));
-
-              let html = '<div class="custom-tooltip-box">';
-              if (timeStr) {
-                html += `<div class="custom-tooltip-box__title">${timeStr}</div>`;
-              }
-              html += '<div class="custom-tooltip-box__list">';
-              for (const r of rows) {
-                html += `<div class="custom-tooltip-box__row">`;
-                html += `<span class="custom-tooltip-box__dot" style="background:${r.color}"></span>`;
-                html += `<span class="custom-tooltip-box__name">${escapeHtml(r.name)}</span>`;
-                html += `<span class="custom-tooltip-box__value">${r.label}</span>`;
-                html += '</div>';
-              }
-              html += '</div></div>';
-              return html;
-            },
-          }
-        : {
-            theme: 'dark',
-            shared: false,
-            intersect: false,
-            followCursor: true,
-            x: {
-              formatter: (value) => {
-                const date = new Date(value);
-                return new Intl.DateTimeFormat(intlLocale, {
-                  hour12: false,
-                  year: 'numeric',
-                  month: '2-digit',
-                  day: '2-digit',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit',
-                }).format(date);
-              },
-            },
-            y: {
-              formatter: (value) => (valueFormatter ? valueFormatter(Number(value)) : Number(value).toFixed(2)),
-            },
-          },
-      legend: {
-        show: isMulti && showLegend,
-        position: legendPosition || "top",
-        horizontalAlign: legendAlign || "left",
-        fontSize: legendFontSize || '12px',
-        fontFamily: 'var(--font-mono)',
-        labels: { colors: labelColor || '#7f94b4' },
-        markers: {
-          size: legendMarkerSize ?? 6,
-          strokeWidth: 0,
-        },
-        itemMargin: { horizontal: 4, vertical: 2 },
-      },
-    }),
-    [
-      axisValueFormatter,
-      computedMaxY,
-      computedMinY,
-      firstTs,
-      gridColor,
-      hideXAxis,
-      intlLocale,
-      isMulti,
-      labelColor,
-      lastTs,
-      legendAlign,
-      legendFontSize,
-      legendMarkerSize,
-      legendPosition,
-      palette,
-      showLegend,
-      xTickAmount,
-      valueFormatter,
-      yTickAmount,
-    ],
+  const flatPoints = useMemo(
+    () => (isMulti
+      ? normalizedMultiSeries.flatMap((seriesItem) => seriesItem.points)
+      : normalizedPoints),
+    [isMulti, normalizedMultiSeries, normalizedPoints],
   );
+
+  const firstTs = useMemo(() => {
+    const first = flatPoints[0];
+    return first ? new Date(first.ts).getTime() : undefined;
+  }, [flatPoints]);
+
+  const lastTs = useMemo(() => {
+    const last = flatPoints[flatPoints.length - 1];
+    return last ? new Date(last.ts).getTime() : undefined;
+  }, [flatPoints]);
+
+  const values = useMemo(
+    () => flatPoints
+      .map((point) => point.value)
+      .filter((value): value is number => typeof value === 'number'),
+    [flatPoints],
+  );
+
+  const computedMinY = useMemo(() => {
+    if (typeof minY === 'number') return minY;
+    if (values.length === 0) return undefined;
+    return Math.max(0, Math.min(...values) * 0.95);
+  }, [minY, values]);
+
+  const computedMaxY = useMemo(() => {
+    if (values.length === 0) return undefined;
+    return Math.max(Math.max(...values) * 1.05, (computedMinY ?? 0) + 1);
+  }, [computedMinY, values]);
+
+  const xAxisMin = typeof xMin === 'number' ? xMin : firstTs;
+  const xAxisMax = typeof xMax === 'number' ? xMax : lastTs;
+  const xAxisRangeMs = (
+    Number.isFinite(xAxisMin) && Number.isFinite(xAxisMax)
+      ? Math.max(0, (xAxisMax as number) - (xAxisMin as number))
+      : 0
+  );
+  const axisTimeFormatter = useMemo(() => {
+    if (xAxisRangeMs > 24 * 60 * 60 * 1000) {
+      return (value: number) => formatAxisDateTime(value, intlLocale);
+    }
+    return (value: number) => formatAxisTime(value, intlLocale);
+  }, [intlLocale, xAxisRangeMs]);
+  const xAxisSplitNumber = hideXAxis
+    ? 0
+    : xAxisRangeMs <= 60 * 60 * 1000
+      ? 8
+      : xAxisRangeMs <= 6 * 60 * 60 * 1000
+        ? 10
+        : xAxisRangeMs <= 24 * 60 * 60 * 1000
+          ? 12
+          : 8;
+
+  const seriesOption = useMemo<LineSeriesOption[]>(() => {
+    if (!isMulti) {
+      return [{
+        type: 'line',
+        name: title,
+        data: normalizedPoints.map((point) => [
+          new Date(point.ts).getTime(),
+          typeof point.value === 'number' ? point.value : null,
+        ]),
+        showSymbol: false,
+        symbol: 'circle',
+        symbolSize: 4,
+        connectNulls: false,
+        smooth: 0.25,
+        lineStyle: {
+          width: 2,
+          color,
+          cap: 'round',
+        },
+        itemStyle: {
+          color,
+        },
+      }];
+    }
+    return normalizedMultiSeries.map((seriesItem, index) => {
+      const lineColor = seriesItem.color ?? palette[index % palette.length];
+      return {
+        type: 'line',
+        name: seriesItem.name,
+        data: seriesItem.points.map((point) => [
+          new Date(point.ts).getTime(),
+          typeof point.value === 'number' ? point.value : null,
+        ]),
+        showSymbol: false,
+        symbol: 'circle',
+        symbolSize: 4,
+        connectNulls: false,
+        smooth: 0.2,
+        lineStyle: {
+          width: 1.6,
+          color: lineColor,
+          cap: 'round',
+        },
+        itemStyle: {
+          color: lineColor,
+        },
+      };
+    });
+  }, [color, isMulti, normalizedMultiSeries, normalizedPoints, palette, title]);
+
+  const options = useMemo<EChartsOption>(() => ({
+    animationDuration: 320,
+    animationDurationUpdate: 220,
+    grid: {
+      left: 68,
+      right: 18,
+      top: isMulti && showLegend && legendPosition === 'top' ? 34 : 14,
+      bottom: hideXAxis
+        ? (isMulti && showLegend && legendPosition === 'bottom' ? 28 : 12)
+        : (isMulti && showLegend && legendPosition === 'bottom' ? 48 : 32),
+      containLabel: false,
+    },
+    color: palette,
+    legend: {
+      show: isMulti && showLegend,
+      type: 'plain',
+      top: legendPosition === 'top' ? 4 : undefined,
+      bottom: legendPosition === 'bottom' ? 0 : undefined,
+      left: legendAlign === 'center' ? 'center' : legendAlign === 'right' ? 'right' : 'left',
+      itemWidth: legendMarkerSize ?? 6,
+      itemHeight: legendMarkerSize ?? 6,
+      icon: 'circle',
+      textStyle: {
+        color: labelColor || '#7f94b4',
+        fontSize: Number.parseInt(legendFontSize || '12', 10),
+        fontFamily: 'var(--font-mono)',
+      },
+    },
+    tooltip: {
+      trigger: 'axis',
+      appendToBody: true,
+      backgroundColor: 'var(--tooltip-bg)',
+      borderColor: 'var(--chart-tooltip-border)',
+      textStyle: {
+        color: 'var(--text-main)',
+        fontFamily: 'var(--font-mono)',
+      },
+      formatter: (params) => {
+        const list = Array.isArray(params) ? params : [params];
+        if (list.length === 0) return '';
+        const axisValue = Array.isArray(list[0].value)
+          ? Number(list[0].value[0])
+          : Number(list[0].value);
+        const header = formatTooltipTime(axisValue, intlLocale);
+        const rows = list.map((item) => {
+          const seriesName = item.seriesName ?? '';
+          const rawValue = Array.isArray(item.value) ? item.value[1] : item.value;
+          const value = rawValue == null || Number.isNaN(Number(rawValue))
+            ? '-'
+            : (valueFormatter ? valueFormatter(Number(rawValue)) : Number(rawValue).toFixed(2));
+          return `${item.marker}${seriesName} ${value}`;
+        });
+        return [header, ...rows].join('<br/>');
+      },
+    },
+    xAxis: {
+      type: 'time',
+      min: xAxisMin,
+      max: xAxisMax,
+      boundaryGap: [0, 0],
+      splitNumber: xAxisSplitNumber,
+      axisLabel: {
+        show: !hideXAxis,
+        color: labelColor || '#7f94b4',
+        fontSize: 10,
+        hideOverlap: false,
+        showMinLabel: true,
+        showMaxLabel: true,
+        formatter: (value: number) => axisTimeFormatter(value),
+      },
+      axisTick: {
+        show: !hideXAxis,
+        alignWithLabel: true,
+        lineStyle: {
+          color: gridColor || '#cfdcf1',
+        },
+      },
+      axisLine: {
+        show: !hideXAxis,
+        lineStyle: {
+          color: gridColor || '#cfdcf1',
+        },
+      },
+      splitLine: {
+        show: false,
+      },
+      minInterval: 1000,
+      maxInterval: 24 * 60 * 60 * 1000,
+    },
+    yAxis: {
+      type: 'value',
+      min: computedMinY,
+      max: computedMaxY,
+      splitNumber: yTickAmount,
+      axisLabel: {
+        color: labelColor || '#6b84a8',
+        fontSize: 10,
+        formatter: (value: number) => {
+          if (axisValueFormatter) return axisValueFormatter(Number(value));
+          return valueFormatter ? valueFormatter(Number(value)) : Number(value).toFixed(1);
+        },
+      },
+      axisLine: {
+        show: false,
+      },
+      axisTick: {
+        show: false,
+      },
+      splitLine: {
+        show: false,
+      },
+    },
+    series: seriesOption,
+  }), [
+    axisValueFormatter,
+    color,
+    computedMaxY,
+    computedMinY,
+    gridColor,
+    hideXAxis,
+    intlLocale,
+    isMulti,
+    labelColor,
+    legendAlign,
+    legendFontSize,
+    legendMarkerSize,
+    legendPosition,
+    palette,
+    seriesOption,
+    showLegend,
+    title,
+    valueFormatter,
+    xAxisMax,
+    xAxisMin,
+    xAxisSplitNumber,
+    xAxisRangeMs,
+    yTickAmount,
+    axisTimeFormatter,
+  ]);
 
   useEffect(() => {
     if (!chartRef.current) return;
-    const chart = new ApexCharts(chartRef.current, { ...options, series });
-    instanceRef.current = chart;
-    void chart.render().then(() => removeApexNativeSvgTitles(chartRef.current));
-
+    const instance = echarts.init(chartRef.current, undefined, {
+      renderer: 'canvas',
+    });
+    instanceRef.current = instance;
     return () => {
-      instanceRef.current?.destroy();
+      instance.dispose();
       instanceRef.current = null;
     };
   }, []);
 
   useEffect(() => {
-    if (!chartRef.current) return;
-    setChartWidth(chartRef.current.clientWidth || 0);
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      setChartWidth(entry.contentRect.width || 0);
-    });
-    observer.observe(chartRef.current);
-    return () => observer.disconnect();
-  }, []);
+    if (!instanceRef.current) return;
+    instanceRef.current.setOption(options, true);
+  }, [options]);
 
   useEffect(() => {
     if (!instanceRef.current) return;
-    // 实时刷新时避免整图重绘与动画闪烁，仅增量更新坐标轴与序列。
-    void instanceRef.current.updateOptions(
-      {
-        colors: options.colors,
-        xaxis: options.xaxis,
-        yaxis: options.yaxis,
-        tooltip: options.tooltip,
-        series,
-      },
-      false,
-      false,
-      false,
-    ).then(() => removeApexNativeSvgTitles(chartRef.current));
-  }, [options, series]);
-
-  // 多 series 时 ApexCharts 给 tooltip 内联了 pointer-events:none，
-  // 滚轮事件穿透到 chart 容器。这里手动转发滚轮给 custom tooltip 列表。
-  useEffect(() => {
-    if (!isMulti) return;
-    const el = chartRef.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      const box = el.querySelector<HTMLElement>('.custom-tooltip-box');
-      if (!box) return;
-      const tooltip = box.closest<HTMLElement>('.apexcharts-tooltip');
-      if (!tooltip || tooltip.style.display === 'none') return;
-      box.scrollTop += e.deltaY;
-      e.preventDefault();
+    const handleResize = () => instanceRef.current?.resize();
+    const observer = new ResizeObserver(() => handleResize());
+    if (chartRef.current) observer.observe(chartRef.current);
+    window.addEventListener('resize', handleResize);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', handleResize);
     };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, [isMulti]);
+  }, []);
 
   return (
     <div className="spark">

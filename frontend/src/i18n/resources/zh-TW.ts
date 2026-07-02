@@ -3,6 +3,8 @@ import type { LocaleResource } from './zh-CN';
 export const zhTW = {
   common: {
     query: '查詢',
+    apply: '套用',
+    cancel: '取消',
     custom: '自訂',
     expandAll: '全部展開',
     collapseAll: '全部收合',
@@ -24,6 +26,7 @@ export const zhTW = {
     quickRanges: {
       today: '今天',
       '5m': '最近 5 分鐘',
+      '30m': '最近 30 分鐘',
       '1h': '最近 1 小時',
       '6h': '最近 6 小時',
       '24h': '最近 24 小時',
@@ -31,9 +34,12 @@ export const zhTW = {
     },
     toolbar: {
       timeRange: '時間範圍',
+      absoluteTime: '絕對時間',
       startTime: '開始時間',
       endTime: '結束時間',
       autoRefresh: '自動重新整理',
+      refreshOff: '關閉',
+      refreshEvery: '{{value}}',
       secondsShort: 's',
     },
     layer: {
@@ -77,6 +83,7 @@ export const zhTW = {
       nodeDetail: '節點詳情',
       realtimeRefresh: '即時重新整理',
       rateTrend: '速率趨勢',
+      countTrend: '數量趨勢',
       clickNodeForDetail: '點擊節點查看詳情',
       selectScopeForTimeseries: '請選擇範圍以查看時序',
       showSeries: '點擊顯示此曲線',
