@@ -36,10 +36,12 @@ impl MissRepository for FileMissRepository {
                     .to_err()
                     .with_detail(format!("spawn_blocking failed: {e}"))
             })??;
-            
+
         Ok(records
             .into_iter()
-            .map(|r| MissRecord { content: r.lines().nth(1).unwrap_or("").to_string()})
+            .map(|r| MissRecord {
+                content: r.lines().nth(1).unwrap_or("").to_string(),
+            })
             .collect())
     }
 
