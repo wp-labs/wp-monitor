@@ -93,13 +93,12 @@ export interface MissedLogsPage {
 
 export interface TimePoint {
   ts: string;
-  value: number | null;
+  value: number;
 }
 
 export interface NodeTimeSeries {
   node_id: string;
   log_rate_eps: TimePoint[];
-  log_count: TimePoint[];
   step_secs?: number;
   rate_window_secs?: number;
 }
@@ -178,6 +177,7 @@ export interface WfSourceItem {
   type: string;
   rows: number;
   route_errors: number;
+  consumer_lag: number;
   machines: string[];
 }
 

@@ -56,7 +56,7 @@ function rng(min: number, max: number) {
 interface MockState {
   receiverRows: number;
   receiverDelta: number;
-  sourceData: Record<string, { rows: number; errors: number }>;
+  sourceData: Record<string, { rows: number; errors: number; lag: number }>;
   winData: Record<string, { rows: number; mem: number; late: number }>;
   ruleData: Record<string, { emitted: number; instances: number; hitRate: number }>;
   smAlerts: Record<string, number>;
@@ -76,7 +76,7 @@ interface MockState {
 const state: MockState = {
   receiverRows: 0,
   receiverDelta: 0,
-  sourceData: Object.fromEntries(SOURCES.map((s) => [s.name, { rows: 0, errors: 0 }])),
+  sourceData: Object.fromEntries(SOURCES.map((s) => [s.name, { rows: 0, errors: 0, lag: 0 }])),
   winData: Object.fromEntries(
     WINDOWS.map((w) => [w, { rows: 0, mem: 1024, late: 0 }]),
   ),
@@ -115,6 +115,7 @@ export function tickMockState() {
     const delta = rng(30, 500);
     d.rows += delta;
     if (Math.random() < 0.04) d.errors += 1;
+    d.lag = Math.max(0, d.lag + rng(-50, 80));
     pushHist(s.history.sourceThroughput[src.name], delta);
   }
 
@@ -228,6 +229,7 @@ export function buildSourcesResponse(): WfSourceItem[] {
     type: src.type,
     rows: state.sourceData[src.name].rows,
     route_errors: state.sourceData[src.name].errors,
+    consumer_lag: state.sourceData[src.name].lag ?? 0,
     machines: src.machines,
   }));
 }
@@ -311,10 +313,6 @@ function buildTimeSeries(
       log_rate_eps: data.map((v, i) => ({
         ts: new Date(now.getTime() - (histLen - 1 - i) * 5000).toISOString(),
         value: v,
-      })),
-      log_count: data.map((v, i) => ({
-        ts: new Date(now.getTime() - (histLen - 1 - i) * 5000).toISOString(),
-        value: Math.max(0, Math.round(v * 5)),
       })),
       step_secs: 5,
       rate_window_secs: 60,

@@ -1,10 +1,13 @@
 use crate::application::layer_service::LayerService;
 use crate::application::miss_service::{MissService, MissSource};
+use crate::application::wf_service::WfService;
 use crate::domain::miss_repository::MissRepository;
 use crate::domain::vm_repository::VmRepository;
+use crate::domain::wf_repository::WfRepository;
 use crate::infrastructure::miss_repository_impl::{FileMissRepository, VlogMissRepository};
 use crate::infrastructure::vlog_repository::VlogHttpRepository;
 use crate::infrastructure::vm_repository::VmHttpRepository;
+use crate::infrastructure::wf_repository::WfVmRepository;
 use crate::shared::config::AppConfig;
 use crate::shared::error::AppError;
 use std::path::Path;
@@ -17,6 +20,7 @@ use tracing::info;
 pub struct AppState {
     pub layer: LayerService,
     pub miss: MissService,
+    pub wf: WfService,
 }
 
 impl AppState {
@@ -50,11 +54,15 @@ impl AppState {
                 }
             };
 
+        // ── wfusion 仓储 ──
+        let wf_repo: Arc<dyn WfRepository> = Arc::new(WfVmRepository::new(&cfg.vm_base_url));
+
         // ── 应用层 ──
 
         Ok(Self {
             layer: LayerService::new(vm_repo, miss_repo.clone(), cfg.clone()),
             miss: MissService::new(miss_repo, miss_source),
+            wf: WfService::new(wf_repo),
         })
     }
 }

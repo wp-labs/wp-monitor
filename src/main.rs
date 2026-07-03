@@ -8,6 +8,7 @@ mod state;
 use actix_web::{App, HttpServer, web};
 use interfaces::vm::routes::register_vm_routes;
 use interfaces::vm::static_assets::register_static_assets;
+use interfaces::wf::routes::register_wf_routes;
 use shared::config::AppConfig;
 use shared::logging::init_tracing;
 use state::AppState;
@@ -45,7 +46,8 @@ async fn main() -> std::io::Result<()> {
             .service(
                 web::scope("/api/v1/wp-monitor")
                     .configure(register_vm_routes)
-                    .configure(register_vlog_routes),
+                    .configure(register_vlog_routes)
+                    .configure(register_wf_routes),
             )
             .configure(register_static_assets)
     })

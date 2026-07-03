@@ -58,6 +58,26 @@ body::before {
   --font-main: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', 'Consolas', monospace;
   --success: #4dab6a;
+  --warning: #faa918;
+  --danger: #e04848;
+  --purple: #722ed1;
+  --orange: #e44d26;
+
+  /* wf table/chart shared tokens */
+  --wf-surface: var(--surface-raised);
+  --wf-border: var(--border-subtle);
+  --wf-border-light: rgba(255,255,255,0.04);
+  --wf-text: var(--text-main);
+  --wf-text-dim: var(--text-muted);
+  --wf-text-sub: var(--text-sub);
+  --wf-radius: var(--radius-sm);
+  --wf-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  --wf-bg-hover: rgba(var(--accent-rgb), 0.04);
+  --wf-bg-row-hover: rgba(var(--accent-rgb), 0.06);
+  --wf-bg-stripe: rgba(255,255,255,0.015);
+  --wf-bg-th: rgba(255,255,255,0.02);
+  --wf-bar-bg: rgba(255,255,255,0.06);
+  --wf-tooltip-border: rgba(255,255,255,0.08);
 }
 
 /* ===== Keyframes ===== */
