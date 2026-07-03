@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useTheme } from '@/context/ThemeContext';
 import TimeSeriesChart from '@/views/components/monitor/TimeSeriesChart';
 import { getPalette } from '@/views/components/monitor/chartPalette';
@@ -30,10 +31,10 @@ import './WfMonitor.css';
 // ── helpers ──
 
 function fmtNum(n: number): string {
-  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'G';
-  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
-  return n.toLocaleString();
+  if (n >= 1e9) return parseFloat((n / 1e9).toFixed(1)) + 'G';
+  if (n >= 1e6) return parseFloat((n / 1e6).toFixed(1)) + 'M';
+  if (n >= 1e3) return parseFloat((n / 1e3).toFixed(1)) + 'k';
+  return Math.round(n).toLocaleString();
 }
 
 function fmtBytes(n: number): string {
@@ -75,6 +76,7 @@ function MRol({
 // ── Pipeline stages ──
 
 function PipelineStages({ pipeline }: { pipeline: WfPipelineResponse }) {
+  const { t } = useTranslation();
   const { receiver, window, rule } = pipeline;
   const errColor = receiver.route_errors > 0 ? 'var(--warning)' : undefined;
   const lateColor = window.late_dropped > 0 ? 'var(--warning)' : undefined;
@@ -86,14 +88,14 @@ function PipelineStages({ pipeline }: { pipeline: WfPipelineResponse }) {
         <div className="stage-head">
           <div className="stage-icon rcv">⇩</div>
           <div>
-            <div className="stage-title">数据接入</div>
-            <div className="stage-subtitle">{receiver.source_count} 个来源</div>
+            <div className="stage-title">{t('monitor.wf.pipeline.receiver.title')}</div>
+            <div className="stage-subtitle">{t('monitor.wf.pipeline.receiver.sources', { count: receiver.source_count })}</div>
           </div>
         </div>
         <div className="metric-grid">
-          <MRol label="接收行数" value={fmtNum(receiver.total_rows)} unit="条" />
-          <MRol label="路由错误" value={fmtNum(receiver.route_errors)} unit="次" color={errColor} />
-          <MRol label="速率" value={fmtNum(receiver.rate_rows_per_sec)} unit="行/秒" />
+          <MRol label={t('monitor.wf.pipeline.receiver.totalRows')} value={fmtNum(receiver.total_rows)} unit={t('monitor.wf.unit.rows')} />
+          <MRol label={t('monitor.wf.pipeline.receiver.routeErrors')} value={fmtNum(receiver.route_errors)} unit={t('monitor.wf.unit.times')} color={errColor} />
+          <MRol label={t('monitor.wf.pipeline.receiver.rate')} value={fmtNum(receiver.rate_rows_per_sec)} unit={t('monitor.wf.unit.rowsPerSec')} />
         </div>
       </div>
 
@@ -101,14 +103,14 @@ function PipelineStages({ pipeline }: { pipeline: WfPipelineResponse }) {
         <div className="stage-head">
           <div className="stage-icon win">⊞</div>
           <div>
-            <div className="stage-title">数据窗口</div>
-            <div className="stage-subtitle">{window.window_count} 个窗口</div>
+            <div className="stage-title">{t('monitor.wf.pipeline.window.title')}</div>
+            <div className="stage-subtitle">{t('monitor.wf.pipeline.window.windows', { count: window.window_count })}</div>
           </div>
         </div>
         <div className="metric-grid">
-          <MRol label="数据量" value={fmtNum(window.total_rows)} unit="条" />
-          <MRol label="内存占用" value={fmtBytes(window.total_memory_bytes)} />
-          <MRol label="迟到丢弃" value={fmtNum(window.late_dropped)} unit="条" color={lateColor} />
+          <MRol label={t('monitor.wf.pipeline.window.totalRows')} value={fmtNum(window.total_rows)} unit={t('monitor.wf.unit.rows')} />
+          <MRol label={t('monitor.wf.pipeline.window.memory')} value={fmtBytes(window.total_memory_bytes)} />
+          <MRol label={t('monitor.wf.pipeline.window.lateDropped')} value={fmtNum(window.late_dropped)} unit={t('monitor.wf.unit.rows')} color={lateColor} />
         </div>
       </div>
 
@@ -116,14 +118,14 @@ function PipelineStages({ pipeline }: { pipeline: WfPipelineResponse }) {
         <div className="stage-head">
           <div className="stage-icon rul">◎</div>
           <div>
-            <div className="stage-title">规则检测 & 输出</div>
-            <div className="stage-subtitle">{rule.rule_count} 条规则 · 命中率 {rule.hit_rate_pct.toFixed(1)}%</div>
+            <div className="stage-title">{t('monitor.wf.pipeline.rule.title')}</div>
+            <div className="stage-subtitle">{t('monitor.wf.pipeline.rule.summary', { count: rule.rule_count, rate: rule.hit_rate_pct.toFixed(1) })}</div>
           </div>
         </div>
         <div className="metric-grid">
-          <MRol label="状态机实例" value={fmtNum(rule.total_state_machines)} unit="个" />
-          <MRol label="产出告警" value={fmtNum(rule.total_emitted)} unit="条" />
-          <MRol label="下发失败" value={fmtNum(rule.send_failed)} unit="次" color={failColor} />
+          <MRol label={t('monitor.wf.pipeline.rule.instances')} value={fmtNum(rule.total_state_machines)} unit={t('monitor.wf.unit.times')} />
+          <MRol label={t('monitor.wf.pipeline.rule.emitted')} value={fmtNum(rule.total_emitted)} unit={t('monitor.wf.unit.rows')} />
+          <MRol label={t('monitor.wf.pipeline.rule.sendFailed')} value={fmtNum(rule.send_failed)} unit={t('monitor.wf.unit.times')} color={failColor} />
         </div>
       </div>
     </div>
@@ -175,6 +177,7 @@ function Pagination({
   total: number;
   onChange: (p: number) => void;
 }) {
+  const { t } = useTranslation();
   const totalPages = Math.ceil(total / PAGE_SIZE) || 1;
   const pages: (number | '...')[] = [];
   for (let i = 1; i <= totalPages; i++) {
@@ -205,7 +208,7 @@ function Pagination({
       <button disabled={page >= totalPages} onClick={() => onChange(page + 1)}>
         ›
       </button>
-      <span className="page-info">共 {total} 条</span>
+      <span className="page-info">{t('monitor.wf.totalRecords', { total })}</span>
     </div>
   );
 }
@@ -213,6 +216,7 @@ function Pagination({
 // ── Source table ──
 
 function SourceTable({ sources, timeRange }: { sources: WfSourceItem[]; timeRange: { start: string; end: string } }) {
+  const { t } = useTranslation();
   const [ps, setPs] = useState<PageState>({ page: 1, sortBy: 'rows', sortDir: 'desc' });
   const [search, setSearch] = useState('');
   const [mode, setMode] = useState<'active' | 'quiet'>('active');
@@ -242,6 +246,7 @@ function SourceTable({ sources, timeRange }: { sources: WfSourceItem[]; timeRang
       if (f === 'name') return s.name;
       if (f === 'type') return s.type;
       if (f === 'errs') return s.route_errors;
+      if (f === 'lag') return s.consumer_lag;
       return s.rows;
     });
   }, [sources, mode, search, ps]);
@@ -278,7 +283,7 @@ function SourceTable({ sources, timeRange }: { sources: WfSourceItem[]; timeRang
   return (
     <div className="panel">
       <div className="panel-header">
-        <span>来源详情</span>
+        <span>{t('monitor.wf.sourceTable.title')}</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span className="pill-toggle">
             <span className="pill-slider" />
@@ -286,13 +291,13 @@ function SourceTable({ sources, timeRange }: { sources: WfSourceItem[]; timeRang
               className={'pill-option' + (groupBy === 'source' ? ' active' : '')}
               onClick={() => { setGroupBy('source'); resetPage(); }}
             >
-              来源
+              {t('monitor.wf.sourceTable.source')}
             </span>
             <span
               className={'pill-option' + (groupBy === 'machine' ? ' active' : '')}
               onClick={() => { setGroupBy('machine'); resetPage(); }}
             >
-              设备
+              {t('monitor.wf.sourceTable.machine')}
             </span>
           </span>
           <span className="filter-toggle">
@@ -300,18 +305,18 @@ function SourceTable({ sources, timeRange }: { sources: WfSourceItem[]; timeRang
               className={'ft-btn' + (mode === 'active' ? ' active' : '')}
               onClick={() => { setMode('active'); resetPage(); }}
             >
-              活跃
+              {t('monitor.wf.sourceTable.active')}
             </span>
             <span
               className={'ft-btn' + (mode === 'quiet' ? ' active' : '')}
               onClick={() => { setMode('quiet'); resetPage(); }}
             >
-              静默
+              {t('monitor.wf.sourceTable.silent')}
             </span>
           </span>
           <input
             className="search-input"
-            placeholder="搜索..."
+            placeholder={t('monitor.wf.sourceTable.search')}
             value={search}
             onChange={(e) => { setSearch(e.target.value); resetPage(); }}
           />
@@ -319,7 +324,7 @@ function SourceTable({ sources, timeRange }: { sources: WfSourceItem[]; timeRang
       </div>
       <div className="panel-body">
         {machineLoading ? (
-          <div style={{ padding: 12, color: 'var(--text-dim)', fontSize: 12 }}>加载中...</div>
+          <div style={{ padding: 12, color: 'var(--text-dim)', fontSize: 12 }}>{t('monitor.wf.loading')}</div>
         ) : (
           <table>
             <thead onClick={(e) => {
@@ -330,18 +335,19 @@ function SourceTable({ sources, timeRange }: { sources: WfSourceItem[]; timeRang
                 {groupBy === 'machine'
                   ? (
                     <>
-                      {sortHeader('设备', 'name', ps)}
-                      {sortHeader('来源数', 'count', ps, true)}
-                      {sortHeader('接收行数', 'rows', ps, true)}
-                      {sortHeader('路由错误', 'errs', ps, true)}
+                      {sortHeader(t('monitor.wf.sourceTable.colMachine'), 'name', ps)}
+                      {sortHeader(t('monitor.wf.sourceTable.colSourceCount'), 'count', ps, true)}
+                      {sortHeader(t('monitor.wf.sourceTable.colRows'), 'rows', ps, true)}
+                      {sortHeader(t('monitor.wf.sourceTable.colErrors'), 'errs', ps, true)}
                     </>
                   )
                   : (
                     <>
-                      {sortHeader('来源', 'name', ps)}
-                      {sortHeader('类型', 'type', ps)}
-                      {sortHeader('接收行数', 'rows', ps, true)}
-                      {sortHeader('路由错误', 'errs', ps, true)}
+                      {sortHeader(t('monitor.wf.sourceTable.colName'), 'name', ps)}
+                      {sortHeader(t('monitor.wf.sourceTable.colType'), 'type', ps)}
+                      {sortHeader(t('monitor.wf.sourceTable.colRows'), 'rows', ps, true)}
+                      {sortHeader(t('monitor.wf.sourceTable.colErrors'), 'errs', ps, true)}
+                      {sortHeader(t('monitor.wf.sourceTable.colLag'), 'lag', ps, true)}
                     </>
                   )}
               </tr>
@@ -367,12 +373,15 @@ function SourceTable({ sources, timeRange }: { sources: WfSourceItem[]; timeRang
                       <td className="num" style={{ color: (item as WfSourceItem).route_errors > 0 ? 'var(--warning)' : 'var(--text-dim)' }}>
                         {(item as WfSourceItem).route_errors}
                       </td>
+                      <td className="num" style={{ color: (item as WfSourceItem).consumer_lag > 0 ? 'var(--warning)' : 'var(--text-dim)' }}>
+                        {fmtNum((item as WfSourceItem).consumer_lag)}
+                      </td>
                     </tr>
                   ),
               )}
               {Array.from({ length: pad }, (_, i) => (
                 <tr key={`pad-${i}`} className="pad-row">
-                  <td colSpan={10}>&nbsp;</td>
+                  <td colSpan={11}>&nbsp;</td>
                 </tr>
               ))}
             </tbody>
@@ -391,6 +400,7 @@ function SourceTable({ sources, timeRange }: { sources: WfSourceItem[]; timeRang
 // ── Window table ──
 
 function WindowTable({ windows }: { windows: WfWindowItem[] }) {
+  const { t } = useTranslation();
   const [ps, setPs] = useState<PageState>({ page: 1, sortBy: 'rows', sortDir: 'desc' });
   const [search, setSearch] = useState('');
   const [mode, setMode] = useState<'active' | 'quiet'>('active');
@@ -427,15 +437,15 @@ function WindowTable({ windows }: { windows: WfWindowItem[] }) {
   return (
     <div className="panel">
       <div className="panel-header">
-        <span>窗口详情</span>
+        <span>{t('monitor.wf.windowTable.title')}</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span className="filter-toggle">
-            <span className={'ft-btn' + (mode === 'active' ? ' active' : '')} onClick={() => { setMode('active'); resetPage(); }}>活跃</span>
-            <span className={'ft-btn' + (mode === 'quiet' ? ' active' : '')} onClick={() => { setMode('quiet'); resetPage(); }}>静默</span>
+            <span className={'ft-btn' + (mode === 'active' ? ' active' : '')} onClick={() => { setMode('active'); resetPage(); }}>{t('monitor.wf.windowTable.active')}</span>
+            <span className={'ft-btn' + (mode === 'quiet' ? ' active' : '')} onClick={() => { setMode('quiet'); resetPage(); }}>{t('monitor.wf.windowTable.silent')}</span>
           </span>
           <input
             className="search-input"
-            placeholder="搜索窗口..."
+            placeholder={t('monitor.wf.windowTable.search')}
             value={search}
             onChange={(e) => { setSearch(e.target.value); resetPage(); }}
           />
@@ -448,11 +458,11 @@ function WindowTable({ windows }: { windows: WfWindowItem[] }) {
             if (th) handleSort((th as HTMLElement).dataset.sort!);
           }}>
             <tr>
-              {sortHeader('窗口', 'name', ps)}
-              {sortHeader('数据量', 'rows', ps, true)}
-              {sortHeader('迟到', 'late', ps, true)}
-              {sortHeader('内存', 'mem', ps)}
-              {sortHeader('占比', 'pct', ps)}
+              {sortHeader(t('monitor.wf.windowTable.colName'), 'name', ps)}
+              {sortHeader(t('monitor.wf.windowTable.colRows'), 'rows', ps, true)}
+              {sortHeader(t('monitor.wf.windowTable.colLate'), 'late', ps, true)}
+              {sortHeader(t('monitor.wf.windowTable.colMemory'), 'mem', ps)}
+              {sortHeader(t('monitor.wf.windowTable.colPercent'), 'pct', ps)}
             </tr>
           </thead>
           <tbody>
@@ -506,6 +516,7 @@ function SmPopover({
   triggerEl: HTMLElement;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const [allItems, setAllItems] = useState<WfStateMachineItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [pos, setPos] = useState<{ top: number; left: number; dir: 'above' | 'below'; arrowX: number }>({ top: 0, left: 0, dir: 'above', arrowX: 50 });
@@ -592,7 +603,7 @@ function SmPopover({
         <span className="pop-arrow" />
         <div className="pop-body">
           {loading
-            ? <div className="pop-item" style={{ color: 'var(--text-dim)' }}>加载中...</div>
+            ? <div className="pop-item" style={{ color: 'var(--text-dim)' }}>{t('monitor.wf.loading')}</div>
             : shown.map((si) => (
               <div className="pop-item" key={si.scope_key}>
                 <span className="pop-name">{si.scope_key}</span>
@@ -611,7 +622,7 @@ function SmPopover({
               style={{ justifyContent: 'center', color: 'var(--text-dim)', borderTop: '1px solid var(--border-light)', marginTop: 2, paddingTop: 3, fontSize: 10, cursor: 'pointer' }}
               onClick={() => setFsOpen(true)}
             >
-              点击查看全部
+              {t('monitor.wf.popover.viewAll')}
             </div>
           )}
         </div>
@@ -620,7 +631,7 @@ function SmPopover({
       {fsOpen && (
         <div className="fullscreen-overlay show" style={{ background: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFsOpen(false)}>
           <div style={{ maxWidth: 480, width: '100%', background: 'var(--surface-solid)', borderRadius: '8px 8px 0 0', margin: '0 auto', borderBottom: '1px solid var(--border-light)', padding: '12px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>{ruleName} · {totalItems} 个实例</span>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{ruleName} · {t('monitor.wf.popover.instances', { count: totalItems })}</span>
             <span style={{ fontSize: 14, width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', cursor: 'pointer' }} onClick={() => setFsOpen(false)}>✕</span>
           </div>
           <div style={{ maxWidth: 480, width: '100%', background: 'var(--surface-solid)', borderRadius: '0 0 8px 8px', margin: '0 auto', display: 'flex', flexDirection: 'column', maxHeight: '55vh', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
@@ -648,6 +659,7 @@ function SmPopover({
 // ── Alert table ──
 
 function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { start: string; end: string } }) {
+  const { t } = useTranslation();
   const [ps, setPs] = useState<PageState>({ page: 1, sortBy: 'emitted', sortDir: 'desc' });
   const [search, setSearch] = useState('');
   const [mode, setMode] = useState<'active' | 'quiet'>('active');
@@ -706,20 +718,20 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
   return (
     <div className="panel">
       <div className="panel-header">
-        <span>告警详情</span>
+        <span>{t('monitor.wf.alertTable.title')}</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span className="pill-toggle">
             <span className="pill-slider" />
-            <span className={'pill-option' + (groupBy === 'rule' ? ' active' : '')} onClick={() => { setGroupBy('rule'); resetPage(); }}>规则</span>
-            <span className={'pill-option' + (groupBy === 'machine' ? ' active' : '')} onClick={() => { setGroupBy('machine'); resetPage(); }}>设备</span>
+            <span className={'pill-option' + (groupBy === 'rule' ? ' active' : '')} onClick={() => { setGroupBy('rule'); resetPage(); }}>{t('monitor.wf.alertTable.rule')}</span>
+            <span className={'pill-option' + (groupBy === 'machine' ? ' active' : '')} onClick={() => { setGroupBy('machine'); resetPage(); }}>{t('monitor.wf.alertTable.machine')}</span>
           </span>
           <span className="filter-toggle">
-            <span className={'ft-btn' + (mode === 'active' ? ' active' : '')} onClick={() => { setMode('active'); resetPage(); }}>活跃</span>
-            <span className={'ft-btn' + (mode === 'quiet' ? ' active' : '')} onClick={() => { setMode('quiet'); resetPage(); }}>静默</span>
+            <span className={'ft-btn' + (mode === 'active' ? ' active' : '')} onClick={() => { setMode('active'); resetPage(); }}>{t('monitor.wf.alertTable.active')}</span>
+            <span className={'ft-btn' + (mode === 'quiet' ? ' active' : '')} onClick={() => { setMode('quiet'); resetPage(); }}>{t('monitor.wf.alertTable.silent')}</span>
           </span>
           <input
             className="search-input"
-            placeholder="搜索..."
+            placeholder={t('monitor.wf.alertTable.search')}
             value={search}
             onChange={(e) => { setSearch(e.target.value); resetPage(); }}
           />
@@ -735,16 +747,16 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
               {groupBy === 'machine'
                 ? (
                   <>
-                    {sortHeader('设备', 'name', ps)}
-                    {sortHeader('关联规则', 'count', ps, true)}
-                    {sortHeader('产出告警', 'emitted', ps, true)}
+                    {sortHeader(t('monitor.wf.alertTable.colMachine'), 'name', ps)}
+                    {sortHeader(t('monitor.wf.alertTable.colRuleCount'), 'count', ps, true)}
+                    {sortHeader(t('monitor.wf.alertTable.colEmitted'), 'emitted', ps, true)}
                   </>
                 )
                 : (
                   <>
-                    {sortHeader('规则', 'name', ps)}
-                    {sortHeader('产出告警', 'emitted', ps, true)}
-                    {sortHeader('状态机实例', 'instances', ps, true)}
+                    {sortHeader(t('monitor.wf.alertTable.colName'), 'name', ps)}
+                    {sortHeader(t('monitor.wf.alertTable.colEmitted'), 'emitted', ps, true)}
+                    {sortHeader(t('monitor.wf.alertTable.colInstances'), 'instances', ps, true)}
                   </>
                 )}
             </tr>
@@ -838,7 +850,8 @@ function TrendChart({
   valueFormatter?: (v: number) => string;
   axisValueFormatter?: (v: number) => string;
 }) {
-  const multiSeries = seriesList.length > 1 ? seriesList : undefined;
+  const { t } = useTranslation();
+  const multiSeries = seriesList.length > 0 ? seriesList : undefined;
   const singlePoints = seriesList.length === 1 ? seriesList[0].points : [];
   const color = seriesList.length === 1 ? seriesList[0].color : palette[0];
   const vf = vfProp ?? ((v: number) => fmtNum(v));
@@ -863,7 +876,7 @@ function TrendChart({
             </span>
           )}
           {onExpand && (
-            <span className="expand-btn" onClick={onExpand} title="全屏">
+            <span className="expand-btn" onClick={onExpand} title={t('monitor.wf.chart.fullscreen')}>
               ⛶
             </span>
           )}
@@ -877,7 +890,7 @@ function TrendChart({
               points={singlePoints}
               multiSeries={multiSeries}
               color={color}
-              showLegend={multiSeries !== undefined}
+              showLegend={seriesList.length > 0}
               valueFormatter={vf}
               axisValueFormatter={avf}
               minY={0}
@@ -892,7 +905,7 @@ function TrendChart({
               legendMarkerSize={5}
             />
           ) : (
-            <div style={{ padding: 12, color: 'var(--text-dim)', fontSize: 12 }}>暂无数据</div>
+            <div style={{ padding: 12, color: 'var(--text-dim)', fontSize: 12 }}>{t('monitor.wf.chart.noData')}</div>
           )}
         </div>
       </div>
@@ -903,6 +916,7 @@ function TrendChart({
 // ── Main WfMonitor ──
 
 export default function WfMonitor({ startTime, endTime }: { startTime: string; endTime: string }) {
+  const { t } = useTranslation();
   const { theme } = useTheme();
   const palette = useMemo(() => getPalette(theme), [theme]);
 
@@ -934,6 +948,9 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
       label: isLight ? '#aeaeb2' : '#69655e',
     };
   }, [theme]);
+
+  const windowMetricRef = useRef(windowMetric);
+  windowMetricRef.current = windowMetric;
 
   const timeRange = useMemo(() => ({ start: startTime, end: endTime }), [startTime, endTime]);
   const timeRangeRef = useRef(timeRange);
@@ -973,7 +990,7 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
     // timeseries
     const [tsRes, wsRes, asRes] = await Promise.all([
       fetchWfTimeseriesThroughput(s, e, throughputGroupBy),
-      fetchWfTimeseriesWindows(s, e, windowMetric),
+      fetchWfTimeseriesWindows(s, e, windowMetricRef.current),
       fetchWfTimeseriesAlerts(s, e, alertGroupBy),
     ]);
     setThroughputSeries(tsRes.data);
@@ -1010,11 +1027,11 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
     if (windowMetric === 'memory') {
       return { vf: (v: number) => fmtBytes(v), avf: (v: number) => fmtBytes(v), unit: undefined };
     }
-    return { vf: (v: number) => fmtNum(v), avf: (v: number) => fmtNum(v), unit: '条' as string | undefined };
-  }, [windowMetric]);
+    return { vf: (v: number) => fmtNum(v), avf: (v: number) => fmtNum(v), unit: t('monitor.wf.unit.rows') as string | undefined };
+  }, [windowMetric, t]);
 
   if (!pipeline) {
-    return <div style={{ padding: 24, color: 'var(--text-dim)' }}>加载中...</div>;
+    return <div style={{ padding: 24, color: 'var(--text-dim)' }}>{t('monitor.wf.loading')}</div>;
   }
 
   return (
@@ -1029,16 +1046,16 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
 
       <div className="grid-3">
         <TrendChart
-          title="数据流入"
+          title={t('monitor.wf.chart.throughput')}
           seriesList={throughputChartSeries}
           palette={palette}
           yAxisUnit="eps"
           gridColor={chartColors.grid}
           labelColor={chartColors.label}
-          onExpand={() => { setFsTitle('数据流入'); setFsSeriesList(throughputChartSeries); setFsPalette(palette); setFsYAxisUnit('eps'); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsOpen(true); }}
+          onExpand={() => { setFsTitle(t('monitor.wf.chart.throughput')); setFsSeriesList(throughputChartSeries); setFsPalette(palette); setFsYAxisUnit('eps'); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsOpen(true); }}
         />
         <TrendChart
-          title="窗口曲线"
+          title={t('monitor.wf.chart.window')}
           seriesList={windowChartSeries}
           palette={palette}
           yAxisUnit={winFormatter.unit}
@@ -1047,22 +1064,22 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
           gridColor={chartColors.grid}
           labelColor={chartColors.label}
           metricTabs={[
-            { key: 'rows', label: '数据量' },
-            { key: 'memory', label: '内存' },
-            { key: 'late', label: '迟到' },
+            { key: 'rows', label: t('monitor.wf.chart.metricRows') },
+            { key: 'memory', label: t('monitor.wf.chart.metricMemory') },
+            { key: 'late', label: t('monitor.wf.chart.metricLate') },
           ]}
           activeMetric={windowMetric}
           onMetricChange={setWindowMetric}
-          onExpand={() => { setFsTitle('窗口曲线'); setFsSeriesList(windowChartSeries); setFsPalette(palette); setFsYAxisUnit(winFormatter.unit); setFsValueFormatter(winFormatter.vf); setFsAxisValueFormatter(winFormatter.avf); setFsOpen(true); }}
+          onExpand={() => { setFsTitle(t('monitor.wf.chart.window')); setFsSeriesList(windowChartSeries); setFsPalette(palette); setFsYAxisUnit(winFormatter.unit); setFsValueFormatter(winFormatter.vf); setFsAxisValueFormatter(winFormatter.avf); setFsOpen(true); }}
         />
         <TrendChart
-          title="告警趋势"
+          title={t('monitor.wf.chart.alerts')}
           seriesList={alertChartSeries}
           palette={palette}
-          yAxisUnit="次"
+          yAxisUnit={t('monitor.wf.unit.times')}
           gridColor={chartColors.grid}
           labelColor={chartColors.label}
-          onExpand={() => { setFsTitle('告警趋势'); setFsSeriesList(alertChartSeries); setFsPalette(palette); setFsYAxisUnit('次'); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsOpen(true); }}
+          onExpand={() => { setFsTitle(t('monitor.wf.chart.alerts')); setFsSeriesList(alertChartSeries); setFsPalette(palette); setFsYAxisUnit(t('monitor.wf.unit.times')); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsOpen(true); }}
         />
       </div>
 
@@ -1078,9 +1095,9 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
                 <TimeSeriesChart
                   title={fsTitle}
                   points={fsSeriesList.length === 1 ? fsSeriesList[0].points : []}
-                  multiSeries={fsSeriesList.length > 1 ? fsSeriesList : undefined}
+                  multiSeries={fsSeriesList.length > 0 ? fsSeriesList : undefined}
                   color={fsSeriesList.length === 1 ? fsSeriesList[0].color : fsPalette[0]}
-                  showLegend={fsSeriesList.length > 1}
+                  showLegend={fsSeriesList.length > 0}
                   valueFormatter={fsValueFormatter ?? ((v: number) => fmtNum(v))}
                   axisValueFormatter={fsAxisValueFormatter ?? ((v: number) => fmtNum(v))}
                   minY={0}

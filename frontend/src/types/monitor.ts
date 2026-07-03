@@ -177,6 +177,7 @@ export interface WfSourceItem {
   type: string;
   rows: number;
   route_errors: number;
+  consumer_lag: number;
   machines: string[];
 }
 

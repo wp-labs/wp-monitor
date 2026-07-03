@@ -364,12 +364,22 @@ impl WfRepository for WfVmRepository {
             "sum by (source_name) (increase(wf_route_errors_total{{source_name!=\"\"}}[{}]))",
             w
         );
-        let (rows_series, errs_series) = tokio::try_join!(
+        let q_lag = format!(
+            "max_over_time(sum by (source_name) (kafka_consumer_lag{{source_name!=\"\"}})[{}])",
+            w
+        );
+        let (rows_series, errs_series, lag_series) = tokio::try_join!(
             self.instant_query(&q_rows, at),
-            self.instant_query(&q_errs, at)
+            self.instant_query(&q_errs, at),
+            self.instant_query(&q_lag, at)
         )?;
 
         let err_map: HashMap<&str, f64> = errs_series
+            .iter()
+            .filter_map(|s| Some((s.metric.get("source_name")?.as_str(), s.value)))
+            .collect();
+
+        let lag_map: HashMap<&str, f64> = lag_series
             .iter()
             .filter_map(|s| Some((s.metric.get("source_name")?.as_str(), s.value)))
             .collect();
@@ -381,6 +391,15 @@ impl WfRepository for WfVmRepository {
                 source_type: s.metric.get("source_type").cloned().unwrap_or_default(),
                 rows: s.value,
                 route_errors: err_map
+                    .get(
+                        s.metric
+                            .get("source_name")
+                            .map(|v| v.as_str())
+                            .unwrap_or(""),
+                    )
+                    .copied()
+                    .unwrap_or(0.0),
+                consumer_lag: lag_map
                     .get(
                         s.metric
                             .get("source_name")
@@ -670,7 +689,9 @@ impl WfRepository for WfVmRepository {
             WfWindowMetric::Late => format!(
                 "sum by (window_name) (rate(wf_window_late_total{{window_name!=\"\"}}[{rate_window}]))"
             ),
-            WfWindowMetric::Rows => "sum by (window_name) (wf_window_rows_total{window_name!=\"\"})".to_string(),
+            WfWindowMetric::Rows => {
+                "sum by (window_name) (wf_window_rows_total{window_name!=\"\"})".to_string()
+            }
         };
         let series = self.range_query(&promql, start, end, &step).await?;
         Ok(series

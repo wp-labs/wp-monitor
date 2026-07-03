@@ -1213,8 +1213,8 @@ export default function WpMonitorPage() {
             className="wf-tabs"
             tabBarStyle={{ marginBottom: 0 }}
             items={[
-              { key: 'pipeline', label: '流水线监控' },
-              { key: 'engine', label: '引擎监控' },
+              { key: 'pipeline', label: 'wparse' },
+              { key: 'engine', label: 'wfusion' },
             ]}
           />
         </div>

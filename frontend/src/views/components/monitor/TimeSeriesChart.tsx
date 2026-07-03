@@ -1,8 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import ApexCharts, { type ApexOptions } from 'apexcharts';
+import { useEffect, useMemo, useRef } from 'react';
+import * as echarts from 'echarts/core';
+import { LineChart } from 'echarts/charts';
+import {
+  GridComponent,
+  LegendComponent,
+  TitleComponent,
+  TooltipComponent,
+} from 'echarts/components';
+import { CanvasRenderer } from 'echarts/renderers';
 import type { TimePoint } from '@/types/monitor';
 import { useLocale } from '@/context/LocaleContext';
 import { MONITOR_SERIES_PALETTE } from '@/views/components/monitor/chartPalette';
+
+echarts.use([LineChart, GridComponent, LegendComponent, TitleComponent, TooltipComponent, CanvasRenderer]);
 
 interface Props {
   title: string;
@@ -25,10 +35,17 @@ interface Props {
   legendMarkerSize?: number;
 }
 
-function removeApexNativeSvgTitles(root: HTMLDivElement | null) {
-  root?.querySelectorAll('.apexcharts-svg > title').forEach((titleEl) => {
-    titleEl.remove();
-  });
+function fmtTime(value: number, intlLocale: string): string {
+  const date = new Date(value);
+  return new Intl.DateTimeFormat(intlLocale, {
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(date);
 }
 
 export default function TimeSeriesChart({
@@ -51,15 +68,20 @@ export default function TimeSeriesChart({
   legendMarkerSize,
 }: Props) {
   const { intlLocale } = useLocale();
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const instanceRef = useRef<echarts.ECharts | null>(null);
+  const legendKeyRef = useRef('');
+
   const isMulti = Boolean(multiSeries && multiSeries.length > 0);
   const flatPoints = isMulti
-    ? (multiSeries ?? []).flatMap((seriesItem) => seriesItem.points)
+    ? (multiSeries ?? []).flatMap((s) => s.points)
     : points;
+
   const firstTs = flatPoints[0] ? new Date(flatPoints[0].ts).getTime() : undefined;
   const lastTs = flatPoints[flatPoints.length - 1]
     ? new Date(flatPoints[flatPoints.length - 1].ts).getTime()
     : undefined;
-  const values = flatPoints.map((point) => point.value);
+  const values = flatPoints.map((p) => p.value);
   const valueMin = values.length > 0 ? Math.min(...values) : undefined;
   const valueMax = values.length > 0 ? Math.max(...values) : undefined;
   const computedMinY =
@@ -72,215 +94,206 @@ export default function TimeSeriesChart({
     typeof valueMax === 'number'
       ? Math.max(valueMax * 1.05, (computedMinY ?? 0) + 1)
       : undefined;
-  const chartRef = useRef<HTMLDivElement | null>(null);
-  const instanceRef = useRef<ApexCharts | null>(null);
-  const [chartWidth, setChartWidth] = useState(0);
-  const xTickAmount = useMemo(() => {
-    const baseWidth = chartWidth > 0 ? chartWidth : 560;
-    const ticksByWidth = Math.max(4, Math.min(12, Math.floor(baseWidth / 88)));
-    const maxTicksByPoints =
-      flatPoints.length > 0 ? Math.max(2, flatPoints.length) : 4;
-    return Math.min(ticksByWidth, maxTicksByPoints);
-  }, [chartWidth, flatPoints.length]);
-
-  const series = useMemo(
-    () =>
-      isMulti
-        ? (multiSeries ?? []).map((seriesItem) => ({
-          name: seriesItem.name,
-          data: seriesItem.points.map((point) => ({ x: new Date(point.ts).getTime(), y: point.value })),
-        }))
-        : [
-          {
-            name: title,
-            data: points.map((point) => ({ x: new Date(point.ts).getTime(), y: point.value })),
-          },
-        ],
-    [isMulti, multiSeries, points, title],
-  );
 
   const palette = useMemo(() => {
     if (!isMulti) return [color];
     return (multiSeries ?? []).map(
-      (seriesItem, index) => seriesItem.color ?? MONITOR_SERIES_PALETTE[index % MONITOR_SERIES_PALETTE.length],
+      (s, i) => s.color ?? MONITOR_SERIES_PALETTE[i % MONITOR_SERIES_PALETTE.length],
     );
   }, [color, isMulti, multiSeries]);
 
-  const options = useMemo<ApexOptions>(
-    () => ({
-      chart: {
-        type: 'line',
-        height: '100%',
-        parentHeightOffset: 0,
-        toolbar: { show: false },
-        zoom: { enabled: false },
-        animations: { enabled: true, speed: 320 },
-        fontFamily: '"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif',
-      },
-      colors: palette,
-      stroke: {
-        curve: 'monotoneCubic',
-        width: isMulti ? 1.6 : 2,
-        lineCap: 'round',
-      },
-      dataLabels: { enabled: false },
-      markers: {
-        size: 0,
-        hover: { size: 5, sizeOffset: 2 },
-      },
+  const series = useMemo(() => {
+    if (isMulti) {
+      return (multiSeries ?? []).map((s, i) => ({
+        name: s.name,
+        type: 'line' as const,
+        data: s.points.map((p) => [new Date(p.ts).getTime(), p.value] as [number, number]),
+        smooth: 0.4,
+        symbol: 'none' as const,
+        lineStyle: { width: 1.6, cap: 'round' as const },
+        color: s.color ?? palette[i],
+      }));
+    }
+    return [{
+      name: title,
+      type: 'line' as const,
+      data: points.map((p) => [new Date(p.ts).getTime(), p.value] as [number, number]),
+      smooth: 0.4,
+      symbol: 'none' as const,
+      lineStyle: { width: 2, cap: 'round' as const },
+      color,
+    }];
+  }, [isMulti, multiSeries, points, title, color, palette]);
+
+  const subtitleText = useMemo(() => {
+    if (isMulti && multiSeries && multiSeries.length === 1) return multiSeries[0].name;
+    if (!isMulti && points.length > 0) return title;
+    return '';
+  }, [isMulti, multiSeries, points.length, title]);
+
+  const yLabelFmt = useMemo(() => {
+    const fmt = axisValueFormatter || valueFormatter;
+    return (value: number) => {
+      const num = Number(value);
+      const formatted = fmt ? fmt(num) : Math.round(num).toString();
+      return yAxisUnit ? `${formatted} ${yAxisUnit}` : formatted;
+    };
+  }, [axisValueFormatter, valueFormatter, yAxisUnit]);
+
+  const legendAtBottom = legendPosition === 'bottom';
+
+  const option = useMemo(() => {
+    const gridColorVal = gridColor || '#d2ddf0';
+    const labelColorVal = labelColor || '#7f94b4';
+    const gridTop = subtitleText ? 26 : 6;
+    const gridBottom = legendAtBottom && showLegend && series.length > 0 ? 28 : 4;
+
+    return {
+      title: subtitleText ? {
+        text: subtitleText,
+        left: 'center',
+        top: 0,
+        textStyle: {
+          fontSize: 11,
+          fontWeight: 500,
+          color: labelColorVal,
+          fontFamily: 'var(--font-mono)',
+        },
+      } : undefined,
+      color: palette,
       grid: {
-        borderColor: gridColor || '#d2ddf0',
-        strokeDashArray: 4,
-        padding: { left: 16, right: 10, top: -12, bottom: 2 },
+        left: 12,
+        right: 8,
+        top: gridTop,
+        bottom: gridBottom,
+        containLabel: false,
       },
-      xaxis: {
-        type: 'datetime',
+      xAxis: {
+        type: 'time' as const,
         min: firstTs,
         max: lastTs,
-        tickAmount: xTickAmount,
-        labels: {
+        axisLine: { lineStyle: { color: gridColorVal }, show: !hideXAxis },
+        axisTick: { lineStyle: { color: gridColorVal }, show: !hideXAxis },
+        axisLabel: {
           show: !hideXAxis,
-          style: { colors: labelColor || '#7f94b4', fontSize: '10px' },
-          offsetY: 0,
-          datetimeUTC: false,
-          datetimeFormatter: {
-            year: 'yyyy',
-            month: 'MM/dd',
-            day: 'MM/dd',
-            hour: 'HH:mm',
-            minute: 'HH:mm',
-            second: 'HH:mm:ss',
+          color: labelColorVal,
+          fontSize: 10,
+          margin: 2,
+          formatter: (value: number) => {
+            const span = (lastTs ?? Date.now()) - (firstTs ?? 0);
+            const d = new Date(value);
+            const pad = (n: number) => String(n).padStart(2, '0');
+            const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+            if (span < 3600000) return `${hm}:${pad(d.getSeconds())}`;
+            if (span < 86400000) return hm;
+            if (span < 604800000) return `${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+            return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
           },
         },
-        tooltip: { enabled: false },
-        axisBorder: { color: gridColor || '#cfdcf1' },
-        axisTicks: { color: gridColor || '#cfdcf1' },
+        splitLine: { show: false },
       },
-      yaxis: {
+      yAxis: {
+        type: 'value' as const,
         min: computedMinY,
         max: computedMaxY,
-        tickAmount: yTickAmount,
-        forceNiceScale: true,
-        labels: {
-          show: true,
-          minWidth: 64,
-          offsetX: -2,
-          style: { colors: labelColor || '#6b84a8', fontSize: '10px' },
-          formatter: (value) => {
-            const num = Number(value);
-            const formatted = axisValueFormatter
-              ? axisValueFormatter(num)
-              : valueFormatter
-                ? valueFormatter(num)
-                : num.toFixed(1);
-            return yAxisUnit ? `${formatted} ${yAxisUnit}` : formatted;
-          },
+        splitNumber: yTickAmount,
+        axisLabel: {
+          color: labelColorVal,
+          fontSize: 10,
+          formatter: yLabelFmt,
+        },
+        splitLine: {
+          lineStyle: { color: gridColorVal, type: 'dashed' as const },
         },
       },
       tooltip: {
-        theme: 'dark',
-        shared: isMulti,
-        intersect: false,
-        followCursor: true,
-        x: {
-          formatter: (value) => {
-            const date = new Date(value);
-            return new Intl.DateTimeFormat(intlLocale, {
-              hour12: false,
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit',
-            }).format(date);
-          },
-        },
-        y: {
-          formatter: (value) => (valueFormatter ? valueFormatter(Number(value)) : Number(value).toFixed(2)),
+        trigger: isMulti ? ('axis' as const) : ('item' as const),
+        backgroundColor: 'rgba(20,20,30,0.92)',
+        borderColor: 'rgba(255,255,255,0.08)',
+        borderWidth: 1,
+        padding: [6, 10],
+        textStyle: { fontSize: 12, color: '#e8e8ec' },
+        extraCssText: 'border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.35);',
+        formatter: (params: unknown) => {
+          const items = (Array.isArray(params) ? params : [params]) as Array<{
+            seriesName: string;
+            color: string;
+            data: [number, number];
+          }>;
+          const p0 = items[0];
+          if (!p0) return '';
+          const timeStr = fmtTime(p0.data[0], intlLocale);
+          const lines = items.map(
+            (p) => `<span style="display:flex;align-items:center;gap:6px;margin:2px 0">
+              <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${p.color};flex-shrink:0"></span>
+              ${p.seriesName}: <b>${valueFormatter ? valueFormatter(p.data[1]) : p.data[1].toFixed(2)}</b>
+            </span>`,
+          );
+          return `<div style="font-size:10px;color:#9a9aad;margin-bottom:3px">${timeStr}</div>${lines.join('')}`;
         },
       },
-      legend: {
-        show: isMulti && showLegend,
-        position: legendPosition || "top",
-        horizontalAlign: legendAlign || "left",
-        fontSize: legendFontSize || '12px',
-        fontFamily: 'var(--font-mono)',
-        labels: { colors: labelColor || '#7f94b4' },
-        markers: {
-          size: legendMarkerSize ?? 6,
-          strokeWidth: 0,
+      legend: showLegend && series.length > 0 ? {
+        show: true,
+        ...(legendAtBottom ? { bottom: 0 } : { top: 0 }),
+        left: (legendAlign === 'right' ? 'right' : legendAlign === 'center' ? 'center' : 'left') as string,
+        textStyle: {
+          color: labelColorVal,
+          fontSize: parseInt(legendFontSize || '11', 10) || 11,
+          fontFamily: 'var(--font-mono)',
         },
-        itemMargin: { horizontal: 4, vertical: 2 },
-      },
-    }),
-    [
-      axisValueFormatter,
-      computedMaxY,
-      computedMinY,
-      firstTs,
-      gridColor,
-      hideXAxis,
-      intlLocale,
-      isMulti,
-      labelColor,
-      lastTs,
-      legendAlign,
-      legendFontSize,
-      legendMarkerSize,
-      legendPosition,
-      palette,
-      showLegend,
-      xTickAmount,
-      valueFormatter,
-      yAxisUnit,
-      yTickAmount,
-    ],
-  );
+        itemWidth: (legendMarkerSize ?? 5) * 2,
+        itemHeight: (legendMarkerSize ?? 5) * 2,
+        itemGap: 8,
+        icon: 'circle',
+      } : { show: false },
+      series,
+    };
+  }, [
+    subtitleText, palette, firstTs, lastTs, hideXAxis, computedMinY, computedMaxY,
+    yTickAmount, yLabelFmt, isMulti, showLegend, legendAtBottom, legendAlign,
+    legendFontSize, legendMarkerSize, gridColor, labelColor, series,
+    valueFormatter, intlLocale,
+  ]);
 
+  const legendKey = `${isMulti}-${showLegend}-${subtitleText}`;
+
+  // init
   useEffect(() => {
     if (!chartRef.current) return;
-    const chart = new ApexCharts(chartRef.current, { ...options, series });
-    instanceRef.current = chart;
-    void chart.render().then(() => removeApexNativeSvgTitles(chartRef.current));
+    const inst = echarts.init(chartRef.current);
+    instanceRef.current = inst;
+    inst.setOption(option, true);
+    legendKeyRef.current = legendKey;
 
     return () => {
-      instanceRef.current?.destroy();
+      inst.dispose();
       instanceRef.current = null;
     };
   }, []);
 
+  // resize
   useEffect(() => {
     if (!chartRef.current) return;
-    setChartWidth(chartRef.current.clientWidth || 0);
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      setChartWidth(entry.contentRect.width || 0);
+    const observer = new ResizeObserver(() => {
+      instanceRef.current?.resize();
     });
     observer.observe(chartRef.current);
     return () => observer.disconnect();
   }, []);
 
+  // update
   useEffect(() => {
-    if (!instanceRef.current) return;
-    // 实时刷新时避免整图重绘与动画闪烁，仅增量更新坐标轴与序列。
-    void instanceRef.current.updateOptions(
-      {
-        colors: options.colors,
-        xaxis: options.xaxis,
-        yaxis: options.yaxis,
-        series,
-      },
-      false,
-      false,
-      false,
-    ).then(() => removeApexNativeSvgTitles(chartRef.current));
-  }, [options, series]);
+    const inst = instanceRef.current;
+    if (!inst) return;
+
+    const structural = legendKey !== legendKeyRef.current;
+    inst.setOption(option, structural ? true : false);
+    legendKeyRef.current = legendKey;
+  }, [option, legendKey]);
 
   return (
     <div className="spark">
-      <div ref={chartRef} className="spark-chart" />
+      <div ref={chartRef} className="spark-chart" style={{ height: '100%' }} />
     </div>
   );
 }

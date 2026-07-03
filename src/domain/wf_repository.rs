@@ -53,6 +53,8 @@ pub struct WfSourceItem {
     pub source_type: String,
     pub rows: f64,
     pub route_errors: f64,
+    /// kafka 消费积压（gauge），非 kafka 来源返回 0。
+    pub consumer_lag: f64,
     /// 关联的设备标识，取自 `machine_name` 标签。
     pub machines: Vec<String>,
 }
