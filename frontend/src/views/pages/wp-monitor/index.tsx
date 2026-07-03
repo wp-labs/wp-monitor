@@ -307,7 +307,7 @@ export default function WpMonitorPage() {
   const missScrollRef = useRef<HTMLDivElement | null>(null);
   const isInitialMountRef = useRef(true);
   const userTimeChangeRef = useRef(false);
-  const autoRefreshEnabled = refreshIntervalSec > 0;
+  const autoRefreshEnabled = refreshIntervalSec > 0 && activeRangeKey !== "custom";
   const missPageSize = detailFullscreen ? MISS_FULLSCREEN_PAGE_SIZE : MISS_PAGE_SIZE;
   const clampDetailPanelHeight = useCallback((h: number) => {
     const isMobile = window.innerWidth <= 768;
@@ -1299,26 +1299,26 @@ export default function WpMonitorPage() {
     await applyTimeRange(range.start, range.end);
   }
 
-  async function onApplyTime() {
-    if (!draftStart || !draftEnd) {
+  async function onApplyTime(dates?: [Dayjs, Dayjs]) {
+    const effectiveStart = dates?.[0]?.toDate() ?? draftStart;
+    const effectiveEnd = dates?.[1]?.toDate() ?? draftEnd;
+    if (!effectiveStart || !effectiveEnd) {
       setError(t("monitor.error.invalidTimeFormat"));
       return;
     }
-    const nextStart = draftStart.toISOString();
-    const nextEnd = draftEnd.toISOString();
-    const ok = await applyTimeRange(nextStart, nextEnd);
-    if (!ok) return;
+    const nextStart = effectiveStart.toISOString();
+    const nextEnd = effectiveEnd.toISOString();
     setActiveRangeKey("custom");
     setIsRangePickerOpen(false);
+    const ok = await applyTimeRange(nextStart, nextEnd);
+    if (!ok) return;
   }
 
   function onAbsoluteRangeOpenChange(open: boolean) {
     setIsRangePickerOpen(open);
     if (open) {
       resetTimeDraft();
-      return;
     }
-    resetTimeDraft();
   }
 
   function onRefreshIntervalChange(raw: string) {
@@ -1518,7 +1518,7 @@ export default function WpMonitorPage() {
             separator="→"
             suffixIcon={<CalendarRange size={14} />}
             placeholder={[t("monitor.toolbar.startTime"), t("monitor.toolbar.endTime")]}
-            onOk={() => void onApplyTime()}
+            onOk={(dates: [Dayjs, Dayjs]) => void onApplyTime(dates)}
           />
           <span className="wd-chip wd-refresh-chip">
             <span className="wd-time-field-label">{t("monitor.toolbar.autoRefresh")}</span>

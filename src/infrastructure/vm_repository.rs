@@ -161,7 +161,7 @@ impl VmHttpRepository {
     ) -> (String, String, i64) {
         let total_secs = (query.end_time.timestamp() - query.start_time.timestamp()).max(1);
         let target_points = max_data_points
-            .unwrap_or(2000)
+            .unwrap_or(500)
             .clamp(60, Self::DETAIL_MAX_DATA_POINTS) as i64;
         let raw_step_secs = ((total_secs + target_points - 1) / target_points).max(1);
         let step_secs = Self::nice_step_secs(raw_step_secs);
@@ -179,7 +179,7 @@ impl VmHttpRepository {
 
     /// 节点详情趋势图复用自动步长策略，前端通过 ECharts LTTB 按像素宽度降采样。
     fn detail_step_for_timeseries(query: &TimeRangeQuery) -> (String, String, i64, usize) {
-        let max_points = 2000;
+        let max_points = 500;
         let (step, rate_window, step_secs) =
             Self::auto_step_for_timeseries(query, Some(max_points));
         (step, rate_window, step_secs, max_points)
