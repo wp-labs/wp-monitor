@@ -607,16 +607,9 @@ export default function WpMonitorPage() {
 
     const refreshSelectedNodeDetail = async () => {
       try {
-        let nextStart: string;
-        let nextEnd: string;
-        if (activeRangeKey === "custom") {
-          nextStart = detailStartTime;
-          nextEnd = detailEndTime;
-        } else {
-          const nextEndMs = nowWithLagMs();
-          nextStart = new Date(nextEndMs - durationMs).toISOString();
-          nextEnd = new Date(nextEndMs).toISOString();
-        }
+        const nextEndMs = nowWithLagMs();
+        const nextStart = new Date(nextEndMs - durationMs).toISOString();
+        const nextEnd = new Date(nextEndMs).toISOString();
         const [detailResp, seriesResp] = await Promise.all([
           fetchNodeDetail(selectedNode, nextStart, nextEnd),
           fetchNodeTimeSeries(
@@ -657,7 +650,6 @@ export default function WpMonitorPage() {
     refreshIntervalSec,
     detailTrendMetricMode,
     parseSeriesList,
-    activeRangeKey,
     t,
   ]);
 
@@ -687,16 +679,9 @@ export default function WpMonitorPage() {
     const refreshScopeTimeseries = async () => {
       try {
         const filter = parseFilterRef.current;
-        let nextStart: string;
-        let nextEnd: string;
-        if (activeRangeKey === "custom") {
-          nextStart = detailStartTime;
-          nextEnd = detailEndTime;
-        } else {
-          const nextEndMs = nowWithLagMs();
-          nextStart = new Date(nextEndMs - durationMs).toISOString();
-          nextEnd = new Date(nextEndMs).toISOString();
-        }
+        const nextEndMs = nowWithLagMs();
+        const nextStart = new Date(nextEndMs - durationMs).toISOString();
+        const nextEnd = new Date(nextEndMs).toISOString();
         let timeseriesResp;
         if (scopeModeRef.current === "package") {
           const pkgFilters = filteredParses.map((pkg) => ({
@@ -763,7 +748,6 @@ export default function WpMonitorPage() {
     detailEndTime,
     refreshIntervalSec,
     detailTrendMetricMode,
-    activeRangeKey,
     t,
   ]);
 
@@ -1299,7 +1283,7 @@ export default function WpMonitorPage() {
     await applyTimeRange(range.start, range.end);
   }
 
-  async function onApplyTime(dates?: [Dayjs, Dayjs]) {
+  async function onApplyTime(dates?: [Dayjs | null, Dayjs | null]) {
     const effectiveStart = dates?.[0]?.toDate() ?? draftStart;
     const effectiveEnd = dates?.[1]?.toDate() ?? draftEnd;
     if (!effectiveStart || !effectiveEnd) {
@@ -1518,7 +1502,7 @@ export default function WpMonitorPage() {
             separator="→"
             suffixIcon={<CalendarRange size={14} />}
             placeholder={[t("monitor.toolbar.startTime"), t("monitor.toolbar.endTime")]}
-            onOk={(dates: [Dayjs, Dayjs]) => void onApplyTime(dates)}
+            onOk={(dates) => void onApplyTime(dates as [Dayjs | null, Dayjs | null])}
           />
           <span className="wd-chip wd-refresh-chip">
             <span className="wd-time-field-label">{t("monitor.toolbar.autoRefresh")}</span>
