@@ -4,7 +4,6 @@ import { LineChart } from 'echarts/charts';
 import {
   GridComponent,
   LegendComponent,
-  TitleComponent,
   TooltipComponent,
 } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
@@ -12,7 +11,7 @@ import type { TimePoint } from '@/types/monitor';
 import { useLocale } from '@/context/LocaleContext';
 import { MONITOR_SERIES_PALETTE } from '@/views/components/monitor/chartPalette';
 
-echarts.use([LineChart, GridComponent, LegendComponent, TitleComponent, TooltipComponent, CanvasRenderer]);
+echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
 
 interface Props {
   title: string;
@@ -129,12 +128,6 @@ export default function TimeSeriesChart({
     }];
   }, [isMulti, multiSeries, points, title, color, palette]);
 
-  const subtitleText = useMemo(() => {
-    if (isMulti && multiSeries && multiSeries.length === 1) return multiSeries[0].name;
-    if (!isMulti && points.length > 0) return title;
-    return '';
-  }, [isMulti, multiSeries, points.length, title]);
-
   const yLabelFmt = useMemo(() => {
     const fmt = axisValueFormatter || valueFormatter;
     return (value: number) => {
@@ -144,26 +137,15 @@ export default function TimeSeriesChart({
     };
   }, [axisValueFormatter, valueFormatter, yAxisUnit]);
 
-  const legendAtBottom = legendPosition === 'bottom';
+  const legendAtBottom = legendPosition !== 'top';
 
   const option = useMemo(() => {
     const gridColorVal = gridColor || '#d2ddf0';
     const labelColorVal = labelColor || '#7f94b4';
-    const gridTop = subtitleText ? 26 : 6;
+    const gridTop = 6;
     const gridBottom = legendAtBottom && showLegend && series.length > 0 ? 28 : 4;
 
     return {
-      title: subtitleText ? {
-        text: subtitleText,
-        left: 'center',
-        top: 0,
-        textStyle: {
-          fontSize: 11,
-          fontWeight: 500,
-          color: labelColorVal,
-          fontFamily: 'var(--font-mono)',
-        },
-      } : undefined,
       color: palette,
       grid: {
         left: 12,
@@ -182,7 +164,7 @@ export default function TimeSeriesChart({
           show: !hideXAxis,
           color: labelColorVal,
           fontSize: 10,
-          margin: 2,
+          margin: 6,
           formatter: (value: number) => {
             const span = (lastTs ?? Date.now()) - (firstTs ?? 0);
             const d = new Date(value);
@@ -206,9 +188,7 @@ export default function TimeSeriesChart({
           fontSize: 10,
           formatter: yLabelFmt,
         },
-        splitLine: {
-          lineStyle: { color: gridColorVal, type: 'dashed' as const },
-        },
+        splitLine: { show: false },
       },
       tooltip: {
         trigger: isMulti ? ('axis' as const) : ('item' as const),
@@ -239,7 +219,7 @@ export default function TimeSeriesChart({
       legend: showLegend && series.length > 0 ? {
         show: true,
         ...(legendAtBottom ? { bottom: 0 } : { top: 0 }),
-        left: (legendAlign === 'right' ? 'right' : legendAlign === 'center' ? 'center' : 'left') as string,
+        left: (legendAlign || 'center') as string,
         textStyle: {
           color: labelColorVal,
           fontSize: parseInt(legendFontSize || '11', 10) || 11,
@@ -253,13 +233,13 @@ export default function TimeSeriesChart({
       series,
     };
   }, [
-    subtitleText, palette, firstTs, lastTs, hideXAxis, computedMinY, computedMaxY,
+    palette, firstTs, lastTs, hideXAxis, computedMinY, computedMaxY,
     yTickAmount, yLabelFmt, isMulti, showLegend, legendAtBottom, legendAlign,
     legendFontSize, legendMarkerSize, gridColor, labelColor, series,
     valueFormatter, intlLocale,
   ]);
 
-  const legendKey = `${isMulti}-${showLegend}-${subtitleText}`;
+  const legendKey = `${isMulti}-${showLegend}-${legendPosition}-${legendAlign}`;
 
   // init
   useEffect(() => {
@@ -287,11 +267,20 @@ export default function TimeSeriesChart({
 
   // update
   useEffect(() => {
-    const inst = instanceRef.current;
-    if (!inst) return;
+    const container = chartRef.current;
+    if (!container) return;
 
     const structural = legendKey !== legendKeyRef.current;
-    inst.setOption(option, structural ? true : false);
+    if (structural) {
+      instanceRef.current?.dispose();
+      const inst = echarts.init(container);
+      instanceRef.current = inst;
+      inst.setOption(option, true);
+      legendKeyRef.current = legendKey;
+      return;
+    }
+
+    instanceRef.current?.setOption(option, false);
     legendKeyRef.current = legendKey;
   }, [option, legendKey]);
 

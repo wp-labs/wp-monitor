@@ -2133,8 +2133,17 @@ export default function WpMonitorPage() {
                             ? t("monitor.detail.countTrend")
                             : t("monitor.detail.rateTrend")
                         }
-                        points={detailChartPoints}
+                        points={[]}
+                        multiSeries={
+                          detailChartPoints.length > 0
+                            ? [{ name: detailNodePill || selectedNode, points: detailChartPoints }]
+                            : undefined
+                        }
                         color={accentColor}
+                        legendPosition="bottom"
+                        legendAlign="center"
+                        legendFontSize="10px"
+                        legendMarkerSize={5}
                         valueFormatter={
                           detailTrendMetricMode === "count" ? formatCount2 : formatRate2
                         }

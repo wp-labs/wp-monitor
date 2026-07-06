@@ -40,51 +40,6 @@ export default function ScopeTrendPanel({
 
   return (
     <section className="detail-col">
-      {parseMultiSeries.length > 0 && (
-        <>
-          <div
-            style={{
-              margin: "0 0 4px",
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "8px 12px",
-            }}
-          >
-            {parseMultiSeries.map((line) => {
-              const hidden = hiddenScopeSeriesNames.includes(line.name);
-              return (
-                <span
-                  key={line.name}
-                  onClick={() => onToggleSeries(line.name)}
-                  title={hidden ? t("monitor.detail.showSeries") : t("monitor.detail.hideSeries")}
-                  style={{
-                    cursor: "pointer",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 4,
-                    fontSize: 12,
-                    color: hidden ? "var(--text-muted)" : "var(--text-sub)",
-                    textDecoration: hidden ? "line-through" : "none",
-                    userSelect: "none",
-                  }}
-                >
-                  <span
-                    style={{
-                      display: "inline-block",
-                      width: 6,
-                      height: 6,
-                      borderRadius: "50%",
-                      background: hidden ? "var(--text-muted)" : (line.color ?? accentColor),
-                      flexShrink: 0,
-                    }}
-                  />
-                  {line.name}
-                </span>
-              );
-            })}
-          </div>
-        </>
-      )}
       <Spin spinning={loading}>
         <TimeSeriesChart
           key={`scope-${metricMode}`}
@@ -105,6 +60,50 @@ export default function ScopeTrendPanel({
           xMax={xMax}
         />
       </Spin>
+      {parseMultiSeries.length > 0 && (
+        <div
+          style={{
+            margin: "4px 0 0",
+            display: "flex",
+            flexWrap: "wrap",
+            justifyContent: "center",
+            gap: "8px 12px",
+          }}
+        >
+          {parseMultiSeries.map((line) => {
+            const hidden = hiddenScopeSeriesNames.includes(line.name);
+            return (
+              <span
+                key={line.name}
+                onClick={() => onToggleSeries(line.name)}
+                title={hidden ? t("monitor.detail.showSeries") : t("monitor.detail.hideSeries")}
+                style={{
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: 12,
+                  color: hidden ? "var(--text-muted)" : "var(--text-sub)",
+                  textDecoration: hidden ? "line-through" : "none",
+                  userSelect: "none",
+                }}
+              >
+                <span
+                  style={{
+                    display: "inline-block",
+                    width: 6,
+                    height: 6,
+                    borderRadius: "50%",
+                    background: hidden ? "var(--text-muted)" : (line.color ?? accentColor),
+                    flexShrink: 0,
+                  }}
+                />
+                {line.name}
+              </span>
+            );
+          })}
+        </div>
+      )}
       {parseMultiSeries.length === 0 && (
         <div className="scope-empty-hint">{t("monitor.detail.noScopeData")}</div>
       )}
