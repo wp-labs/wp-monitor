@@ -56,6 +56,7 @@ export interface LayerSnapshot {
     id: string;
     name: string;
     metrics: MetricsSnapshot;
+    available_sources: string[];
   };
   sys_metrics: {
     cpu_usage_pct: number;
@@ -86,8 +87,8 @@ export interface VlogRecord {
 }
 
 export interface MissedLogsPage {
-  source?: string;
-  total?: number;
+  source: "vlog" | "file";
+  total: number;
   items: VlogRecord[];
 }
 

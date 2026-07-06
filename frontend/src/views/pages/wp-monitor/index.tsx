@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  App, Button, DatePicker, Divider, Input, InputNumber, Pagination, Space, Spin, Switch, Tabs, Typography,
+  App, Button, DatePicker, Divider, Input, InputNumber, Pagination, Segmented, Space, Spin, Switch, Tabs, Typography,
 } from "antd";
 import {
   Ban,
@@ -266,6 +266,11 @@ export default function WpMonitorPage() {
   const [missTotal, setMissTotal] = useState(0);
   const [missPage, setMissPage] = useState(1);
   const [missExporting, setMissExporting] = useState(false);
+  const [missSource, setMissSource] = useState<"vlog" | "file">(() => {
+    const saved = localStorage.getItem("missSource");
+    if (saved === "file" || saved === "vlog") return saved;
+    return "vlog";
+  });
 
   const [expandedPackages, setExpandedPackages] = useState<string[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
@@ -338,10 +343,10 @@ export default function WpMonitorPage() {
     setIsTimeDraftDirty(false);
   }, [startTime, endTime]);
 
-  async function loadSnapshot(start = startTime, end = endTime) {
+  async function loadSnapshot(start = startTime, end = endTime, ms = missSource) {
     try {
       setError("");
-      const data = await fetchSnapshot(start, end);
+      const data = await fetchSnapshot(start, end, ms);
       setSnapshot(data);
       setExpandedPackages(data.parses.map((parseItem) => parseItem.id));
       setExpandedGroups(data.sinks.map((group) => group.id));
@@ -922,11 +927,11 @@ export default function WpMonitorPage() {
     return classes.join(" ");
   }
 
-  async function loadMissedLogs(resetPage = true) {
+  async function loadMissedLogs(resetPage = true, ms = missSource) {
     try {
       setMissLogsLoading(true);
       setMissLogsError("");
-      const data = await fetchMissedLogs();
+      const data = await fetchMissedLogs(ms);
       setMissLogs(data.items);
       setMissTotal(data.total ?? data.items.length);
       if (resetPage) {
@@ -948,11 +953,21 @@ export default function WpMonitorPage() {
     }
   }
 
+  async function handleMissSourceChange(val: "vlog" | "file") {
+    setMissSource(val);
+    localStorage.setItem("missSource", val);
+    // 重新加载 snapshot（更新 miss count）和 miss 日志
+    await loadSnapshot(startTime, endTime, val);
+    if (isMissSelected) {
+      await loadMissedLogs(true, val);
+    }
+  }
+
   async function onExportMissed() {
     if (!isMissSelected) return;
     try {
       setMissExporting(true);
-      const resp = await exportMissedLogs();
+      const resp = await exportMissedLogs(missSource);
       const blob = await resp.blob();
       const contentDisposition = resp.headers.get("content-disposition") || "";
       const matched = contentDisposition.match(/filename="([^"]+)"/i);
@@ -1013,6 +1028,7 @@ export default function WpMonitorPage() {
         nodeId,
         detailRange.start,
         detailRange.end,
+        missSource,
       );
       const seriesPromise = fetchNodeTimeSeries(
         nodeId,
@@ -1025,7 +1041,7 @@ export default function WpMonitorPage() {
         const [detailResp, seriesResp, missedResp] = await Promise.all([
           detailPromise,
           seriesPromise,
-          fetchMissedLogs(),
+          fetchMissedLogs(missSource),
         ]);
         if (detailRequestSeqRef.current !== seq) return false;
         setMissLogs(missedResp.items);
@@ -2172,6 +2188,17 @@ export default function WpMonitorPage() {
                           </div>
                         </div>
                         <div className="miss-query-toolbar">
+                          {snapshot && snapshot.miss.available_sources.includes("file") && snapshot.miss.available_sources.includes("vlog") && (
+                            <Segmented
+                              size="small"
+                              value={missSource}
+                              onChange={(val) => void handleMissSourceChange(val as "vlog" | "file")}
+                              options={[
+                                { label: "File", value: "file" },
+                                { label: "Vlog", value: "vlog" },
+                              ]}
+                            />
+                          )}
                           <Button
                             size="small"
                             onClick={() => void loadMissedLogs(false)}

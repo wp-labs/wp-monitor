@@ -186,6 +186,7 @@ pub async fn get_wf_timeseries_throughput(
     let query = into_time_range(&TimeRangeRequest {
         start_time: req.start_time.clone(),
         end_time: req.end_time.clone(),
+        miss_source: None,
     })?;
     let data = state
         .wf
@@ -204,6 +205,7 @@ pub async fn get_wf_timeseries_windows(
     let query = into_time_range(&TimeRangeRequest {
         start_time: req.start_time.clone(),
         end_time: req.end_time.clone(),
+        miss_source: None,
     })?;
     let data = state
         .wf
@@ -222,6 +224,7 @@ pub async fn get_wf_timeseries_alerts(
     let query = into_time_range(&TimeRangeRequest {
         start_time: req.start_time.clone(),
         end_time: req.end_time.clone(),
+        miss_source: None,
     })?;
     let data = state
         .wf

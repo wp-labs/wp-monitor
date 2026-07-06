@@ -10,10 +10,12 @@ use crate::{
     shared::error::AppErrorResponse,
     state::AppState,
 };
+use std::str::FromStr;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct VlogMissedPageQuery {
     pub query: Option<String>,
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -27,16 +29,9 @@ impl From<MissRecord> for MissedLogItem {
     }
 }
 
+/// 统一的 miss 数据响应格式。
 #[derive(Debug, Serialize)]
-pub struct VlogMissedPageData {
-    pub query: String,
-    pub total: u64,
-    pub items: Vec<MissedLogItem>,
-}
-
-/// 文件模式的简化响应（无分页）。
-#[derive(Debug, Serialize)]
-pub struct FileMissedData {
+pub struct MissedPageData {
     pub source: String,
     pub total: u64,
     pub items: Vec<MissedLogItem>,
@@ -45,10 +40,17 @@ pub struct FileMissedData {
 #[derive(Debug, serde::Deserialize)]
 pub struct VlogMissedExportQuery {
     pub query: Option<String>,
+    pub source: Option<String>,
 }
 
 const DEFAULT_MISS_QUERY: &str = "wp_stage:miss";
 const MAX_MISS_TOTAL: u32 = 100;
+
+fn parse_miss_source(raw: &Option<String>) -> MissSource {
+    raw.as_ref()
+        .and_then(|s| MissSource::from_str(s).ok())
+        .unwrap_or(MissSource::Vlog)
+}
 
 fn normalize_query(query: &Option<String>) -> String {
     query
@@ -59,33 +61,39 @@ fn normalize_query(query: &Option<String>) -> String {
 }
 
 /// 获取缺失数据（最多返回最近 100 条，分页由前端处理）。
-/// - 文件模式：返回尾部最多 100 条。
-/// - Vlog 模式：走 logsql 查询最近 100 条。
+/// - ?source=vlog（默认）：走 logsql 查询最近 100 条
+/// - ?source=file：返回文件尾部最多 100 条
 #[get("/vlog/missed")]
 pub async fn get_missed_data(
     state: web::Data<AppState>,
     req: web::Query<VlogMissedPageQuery>,
 ) -> Result<HttpResponse> {
     let req = req.into_inner();
+    let miss_source = parse_miss_source(&req.source);
 
-    match state.miss.source {
+    let miss_service = state.resolve_miss(miss_source).map_err(|e| {
+        error!(error = %e, "vlog.handlers.missed_page.invalid_source");
+        AppErrorResponse::from(e)
+    })?;
+
+    match miss_source {
         MissSource::File => {
             debug!("vlog.handlers.missed_page.file_mode");
             let (records, total) = tokio::try_join!(
-                state.miss.fetch_records(MissQuery {
+                miss_service.fetch_records(MissQuery {
                     limit: MAX_MISS_TOTAL as usize,
                     start: DateTime::UNIX_EPOCH,
                     end: Utc::now(),
                     query: None,
                 }),
-                state.miss.count_total(),
+                miss_service.count_total(),
             )
             .map_err(|e| {
                 error!(error = %e, "vlog.handlers.missed_page.file_failed");
                 AppErrorResponse::from(e)
             })?;
             let items: Vec<MissedLogItem> = records.into_iter().map(MissedLogItem::from).collect();
-            Ok(HttpResponse::Ok().json(ApiResponse::ok(FileMissedData {
+            Ok(HttpResponse::Ok().json(ApiResponse::ok(MissedPageData {
                 source: "file".to_string(),
                 total,
                 items,
@@ -102,13 +110,13 @@ pub async fn get_missed_data(
                 "vlog.handlers.missed_page.vlog_mode"
             );
             let (records, total) = tokio::try_join!(
-                state.miss.fetch_records(MissQuery {
+                miss_service.fetch_records(MissQuery {
                     limit: MAX_MISS_TOTAL as usize,
                     start: DateTime::UNIX_EPOCH,
                     end: Utc::now(),
                     query: Some(paged_query),
                 }),
-                state.miss.count_total(),
+                miss_service.count_total(),
             )
             .map_err(|e| {
                 error!(
@@ -118,8 +126,8 @@ pub async fn get_missed_data(
                 AppErrorResponse::from(e)
             })?;
             let items: Vec<MissedLogItem> = records.into_iter().map(MissedLogItem::from).collect();
-            Ok(HttpResponse::Ok().json(ApiResponse::ok(VlogMissedPageData {
-                query,
+            Ok(HttpResponse::Ok().json(ApiResponse::ok(MissedPageData {
+                source: "vlog".to_string(),
                 total,
                 items,
             })))
@@ -134,12 +142,17 @@ pub async fn export_missed_data(
     req: web::Query<VlogMissedExportQuery>,
 ) -> Result<HttpResponse> {
     let req = req.into_inner();
+    let miss_source = parse_miss_source(&req.source);
 
-    match state.miss.source {
+    let miss_service = state.resolve_miss(miss_source).map_err(|e| {
+        error!(error = %e, "vlog.handlers.missed_export.invalid_source");
+        AppErrorResponse::from(e)
+    })?;
+
+    match miss_source {
         MissSource::File => {
             info!("vlog.handlers.missed_export.file_mode");
-            let records = state
-                .miss
+            let records = miss_service
                 .fetch_records(MissQuery {
                     limit: MAX_MISS_TOTAL as usize,
                     start: DateTime::UNIX_EPOCH,
@@ -180,8 +193,7 @@ pub async fn export_missed_data(
                 limit = MAX_MISS_TOTAL,
                 "vlog.handlers.missed_export.vlog_mode"
             );
-            let records = state
-                .miss
+            let records = miss_service
                 .fetch_records(MissQuery {
                     limit: MAX_MISS_TOTAL as usize,
                     start: DateTime::UNIX_EPOCH,

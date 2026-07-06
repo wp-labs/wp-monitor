@@ -15,6 +15,8 @@ pub enum AppReason {
 
     #[orion_error(identity = "biz.invalid_time_range")]
     InvalidTimeRange,
+    #[orion_error(identity = "biz.invalid_miss_source")]
+    InvalidMissSource,
 
     #[orion_error(identity = "sys.vm_request_failed")]
     VmRequestFailed,

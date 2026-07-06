@@ -148,10 +148,13 @@ export async function fetchPackagesTimeSeries(
   return requestPostJson<NodeTimeSeries[]>("/api/v1/wp-monitor/packages/timeseries", body);
 }
 
-export async function fetchSnapshot(startTime?: string, endTime?: string) {
+export async function fetchSnapshot(startTime?: string, endTime?: string, missSource?: string) {
   const start = normalizeIsoToSecondBoundary(startTime ?? isoMinutesAgo(15));
   const end = normalizeIsoToSecondBoundary(endTime ?? new Date().toISOString());
-  const url = `/api/v1/wp-monitor/layers/snapshot?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`;
+  let url = `/api/v1/wp-monitor/layers/snapshot?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`;
+  if (missSource) {
+    url += `&miss_source=${encodeURIComponent(missSource)}`;
+  }
   const data = await requestJson<LayerSnapshot>(url);
   return data.data;
 }
@@ -194,12 +197,16 @@ export async function fetchNodeDetail(
   nodeId: string,
   startTime: string,
   endTime: string,
+  missSource?: string,
 ) {
   const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(
     startTime,
     endTime,
   );
-  const url = `/api/v1/wp-monitor/nodes/${encodeURIComponent(nodeId)}/detail?start_time=${encodeURIComponent(normalizedStart)}&end_time=${encodeURIComponent(normalizedEnd)}`;
+  let url = `/api/v1/wp-monitor/nodes/${encodeURIComponent(nodeId)}/detail?start_time=${encodeURIComponent(normalizedStart)}&end_time=${encodeURIComponent(normalizedEnd)}`;
+  if (missSource) {
+    url += `&miss_source=${encodeURIComponent(missSource)}`;
+  }
   return requestJson<NodeDetail>(url);
 }
 
@@ -270,22 +277,20 @@ export async function fetchNodeTimeSeries(
   }
 }
 
-export async function fetchMissedLogs() {
-  const url = `/api/v1/wp-monitor/vlog/missed?query=${encodeURIComponent("wp_stage:miss")}`;
-  const data = await requestJson<MissedLogsPage>(url);
-  const body = data.data;
-  if (body.source === "file") {
-    return {
-      source: "file" as const,
-      items: body.items,
-      total: body.items.length,
-    };
+export async function fetchMissedLogs(source?: string) {
+  let url = `/api/v1/wp-monitor/vlog/missed?query=${encodeURIComponent("wp_stage:miss")}`;
+  if (source) {
+    url += `&source=${encodeURIComponent(source)}`;
   }
-  return body;
+  const data = await requestJson<MissedLogsPage>(url);
+  return data.data;
 }
 
-export async function exportMissedLogs() {
-  const url = `/api/v1/wp-monitor/vlog/missed/export?query=${encodeURIComponent("wp_stage:miss")}`;
+export async function exportMissedLogs(source?: string) {
+  let url = `/api/v1/wp-monitor/vlog/missed/export?query=${encodeURIComponent("wp_stage:miss")}`;
+  if (source) {
+    url += `&source=${encodeURIComponent(source)}`;
+  }
   const resp = await fetch(url);
   if (!resp.ok) {
     const body = await resp.json() as ApiErrorBody;

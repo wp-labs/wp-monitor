@@ -19,7 +19,6 @@ interface Props {
   multiSeries?: Array<{ name: string; points: TimePoint[]; color?: string }>;
   color: string;
   showLegend?: boolean;
-  showTitleValue?: boolean;
   valueFormatter?: (v: number) => string;
   axisValueFormatter?: (v: number) => string;
   minY?: number;
@@ -90,12 +89,12 @@ export default function TimeSeriesChart({
   const computedMinY =
     typeof minY === 'number'
       ? minY
-      : typeof valueMin === 'number'
-        ? Math.max(0, valueMin * 0.95)
+      : typeof valueMin === 'number' && Number.isFinite(valueMin)
+        ? Math.floor(Math.max(0, valueMin * 0.95))
         : undefined;
   const computedMaxY =
-    typeof valueMax === 'number'
-      ? Math.max(valueMax * 1.05, (computedMinY ?? 0) + 1)
+    typeof valueMax === 'number' && Number.isFinite(valueMax)
+      ? Math.ceil(Math.max(valueMax * 1.05, (computedMinY ?? 0) + 1))
       : undefined;
 
   const palette = useMemo(() => {
@@ -132,12 +131,12 @@ export default function TimeSeriesChart({
     const fmt = axisValueFormatter || valueFormatter;
     return (value: number) => {
       const num = Number(value);
-      const formatted = fmt ? fmt(num) : Math.round(num).toString();
+      const formatted = typeof fmt === 'function' ? fmt(num) : num.toString();
       return yAxisUnit ? `${formatted} ${yAxisUnit}` : formatted;
     };
   }, [axisValueFormatter, valueFormatter, yAxisUnit]);
 
-  const legendAtBottom = legendPosition !== 'top';
+  const legendAtBottom = legendPosition === 'bottom';
 
   const option = useMemo(() => {
     const gridColorVal = gridColor || '#d2ddf0';
@@ -153,6 +152,7 @@ export default function TimeSeriesChart({
         top: gridTop,
         bottom: gridBottom,
         containLabel: false,
+        borderWidth: 0,
       },
       xAxis: {
         type: 'time' as const,
@@ -164,7 +164,7 @@ export default function TimeSeriesChart({
           show: !hideXAxis,
           color: labelColorVal,
           fontSize: 10,
-          margin: 6,
+          margin: 2,
           formatter: (value: number) => {
             const span = (lastTs ?? Date.now()) - (firstTs ?? 0);
             const d = new Date(value);
@@ -182,6 +182,7 @@ export default function TimeSeriesChart({
         type: 'value' as const,
         min: computedMinY,
         max: computedMaxY,
+        minInterval: 1,
         splitNumber: yTickAmount,
         axisLabel: {
           color: labelColorVal,
@@ -210,7 +211,7 @@ export default function TimeSeriesChart({
           const lines = items.map(
             (p) => `<span style="display:flex;align-items:center;gap:6px;margin:2px 0">
               <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${p.color};flex-shrink:0"></span>
-              ${p.seriesName}: <b>${valueFormatter ? valueFormatter(p.data[1]) : p.data[1].toFixed(2)}</b>
+              ${p.seriesName}: <b>${typeof valueFormatter === 'function' ? valueFormatter(p.data[1]) : (Math.ceil(Number(p.data[1]) * 100) / 100).toString()}</b>
             </span>`,
           );
           return `<div style="font-size:10px;color:#9a9aad;margin-bottom:3px">${timeStr}</div>${lines.join('')}`;
@@ -219,7 +220,7 @@ export default function TimeSeriesChart({
       legend: showLegend && series.length > 0 ? {
         show: true,
         ...(legendAtBottom ? { bottom: 0 } : { top: 0 }),
-        left: (legendAlign || 'center') as string,
+        left: (legendAlign === 'right' ? 'right' : legendAlign === 'center' ? 'center' : 'left') as string,
         textStyle: {
           color: labelColorVal,
           fontSize: parseInt(legendFontSize || '11', 10) || 11,
@@ -236,7 +237,7 @@ export default function TimeSeriesChart({
     palette, firstTs, lastTs, hideXAxis, computedMinY, computedMaxY,
     yTickAmount, yLabelFmt, isMulti, showLegend, legendAtBottom, legendAlign,
     legendFontSize, legendMarkerSize, gridColor, labelColor, series,
-    valueFormatter, intlLocale,
+    valueFormatter, intlLocale, xMin, xMax,
   ]);
 
   const legendKey = `${isMulti}-${showLegend}-${legendPosition}-${legendAlign}`;
@@ -267,20 +268,11 @@ export default function TimeSeriesChart({
 
   // update
   useEffect(() => {
-    const container = chartRef.current;
-    if (!container) return;
+    const inst = instanceRef.current;
+    if (!inst) return;
 
     const structural = legendKey !== legendKeyRef.current;
-    if (structural) {
-      instanceRef.current?.dispose();
-      const inst = echarts.init(container);
-      instanceRef.current = inst;
-      inst.setOption(option, true);
-      legendKeyRef.current = legendKey;
-      return;
-    }
-
-    instanceRef.current?.setOption(option, false);
+    inst.setOption(option, structural ? true : false);
     legendKeyRef.current = legendKey;
   }, [option, legendKey]);
 

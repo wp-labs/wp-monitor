@@ -1,3 +1,4 @@
+use crate::application::miss_service::MissSource;
 use crate::domain::model::TimeRangeQuery;
 use crate::domain::vm_repository::{PackageFilter, TimeSeriesMetricMode};
 use crate::shared::api::{ApiResponse, ReadyResponse, VersionResponse};
@@ -5,6 +6,7 @@ use crate::shared::error::AppErrorResponse;
 use crate::state::AppState;
 use actix_web::{HttpResponse, Result, get, post, web};
 use serde::Deserialize;
+use std::str::FromStr;
 use tracing::{debug, error};
 
 /// HTTP 查询参数：通用时间窗口。
@@ -13,6 +15,7 @@ use tracing::{debug, error};
 pub struct TimeRangeRequest {
     pub start_time: String,
     pub end_time: String,
+    pub miss_source: Option<String>,
 }
 
 /// HTTP 查询参数：指标增量刷新请求。
@@ -22,6 +25,7 @@ pub struct MetricsRequest {
     pub end_time: String,
     pub node_ids: Option<String>,
     pub filters: Option<Vec<PackageFilter>>,
+    pub miss_source: Option<String>,
 }
 
 /// HTTP 查询参数：节点时序请求。
@@ -36,6 +40,12 @@ pub struct TimeSeriesRequest {
     pub metric_mode: Option<TimeSeriesMetricMode>,
 }
 
+fn parse_miss_source(raw: &Option<String>) -> MissSource {
+    raw.as_ref()
+        .and_then(|s| MissSource::from_str(s).ok())
+        .unwrap_or(MissSource::Vlog)
+}
+
 /// 获取全量分层快照。
 #[get("/layers/snapshot")]
 pub async fn get_layers_snapshot(
@@ -47,6 +57,7 @@ pub async fn get_layers_snapshot(
         end_time = %req.end_time,
         "vm.handlers.layers_snapshot.request"
     );
+    let miss_source = parse_miss_source(&req.miss_source);
     let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
         error!(
             start_time = %req.start_time,
@@ -58,7 +69,7 @@ pub async fn get_layers_snapshot(
     })?;
     let data = state
         .layer
-        .get_layers_snapshot(query, None)
+        .get_layers_snapshot(query, None, miss_source)
         .await
         .map_err(|e| {
             error!(error = %e, "vm.handlers.layers_snapshot.failed");
@@ -80,6 +91,7 @@ pub async fn get_layers_metrics(
         has_node_ids = req.node_ids.is_some(),
         "vm.handlers.layers_metrics.request"
     );
+    let miss_source = parse_miss_source(&req.miss_source);
     let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
         error!(
             start_time = %req.start_time,
@@ -97,7 +109,7 @@ pub async fn get_layers_metrics(
 
     let data = state
         .layer
-        .get_layers_metrics(query, node_ids, req.filters)
+        .get_layers_metrics(query, node_ids, req.filters, miss_source)
         .await
         .map_err(|e| {
             error!(error = %e, "vm.handlers.layers_metrics.failed");
@@ -120,6 +132,7 @@ pub async fn get_node_detail(
         end_time = %req.end_time,
         "vm.handlers.node_detail.request"
     );
+    let miss_source = parse_miss_source(&req.miss_source);
     let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
         error!(
             node_id = %node_id,
@@ -132,7 +145,7 @@ pub async fn get_node_detail(
     })?;
     let data = state
         .layer
-        .get_node_detail(node_id, query)
+        .get_node_detail(node_id, query, miss_source)
         .await
         .map_err(|e| {
             error!(node_id = %node_id, error = %e, "vm.handlers.node_detail.failed");

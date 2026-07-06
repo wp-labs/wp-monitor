@@ -854,8 +854,9 @@ function TrendChart({
   const multiSeries = seriesList.length > 0 ? seriesList : undefined;
   const singlePoints = seriesList.length === 1 ? seriesList[0].points : [];
   const color = seriesList.length === 1 ? seriesList[0].color : palette[0];
-  const vf = vfProp ?? ((v: number) => fmtNum(v));
-  const avf = avfProp ?? ((v: number) => fmtNum(v));
+  const ceil2 = (v: number) => (Math.ceil(v * 100) / 100).toString();
+  const vf = vfProp ?? ceil2;
+  const avf = avfProp ?? ceil2;
 
   return (
     <div className="panel">
@@ -897,7 +898,6 @@ function TrendChart({
               yTickAmount={5}
               gridColor={gridColor}
               labelColor={labelColor}
-              hideXAxis
               yAxisUnit={yAxisUnit}
               legendPosition="bottom"
               legendAlign="center"
@@ -934,12 +934,13 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
   const [alertGroupBy] = useState<'rule' | 'machine'>('rule');
   const [alertSeries, setAlertSeries] = useState<NodeTimeSeries[]>([]);
   const [fsOpen, setFsOpen] = useState(false);
+  const [fsChartKey, setFsChartKey] = useState<'throughput' | 'window' | 'alerts'>('throughput');
   const [fsTitle, setFsTitle] = useState('');
-  const [fsSeriesList, setFsSeriesList] = useState<Array<{ name: string; points: TimePoint[]; color: string }>>([]);
-  const [fsPalette, setFsPalette] = useState<string[]>([]);
   const [fsYAxisUnit, setFsYAxisUnit] = useState<string | undefined>(undefined);
   const [fsValueFormatter, setFsValueFormatter] = useState<((v: number) => string) | undefined>(undefined);
   const [fsAxisValueFormatter, setFsAxisValueFormatter] = useState<((v: number) => string) | undefined>(undefined);
+  const [fsMetricTabs, setFsMetricTabs] = useState<{ key: string; label: string }[] | undefined>(undefined);
+  const [fsActiveMetric, setFsActiveMetric] = useState<string | undefined>(undefined);
 
   const chartColors = useMemo(() => {
     const isLight = theme === 'light-modern';
@@ -966,6 +967,20 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
     const timer = setInterval(loadAll, REFRESH_MS);
     return () => clearInterval(timer);
   }, []);
+
+  // 窗口指标切换时立即拉取时序，不等 5s 全量轮询
+  useEffect(() => {
+    const tr = timeRangeRef.current;
+    const startMs = new Date(tr.start).getTime();
+    const endMs = new Date(tr.end).getTime();
+    const durationMs = endMs - startMs;
+    const now = Date.now();
+    const e = new Date(now).toISOString();
+    const s = new Date(now - (durationMs > 0 ? durationMs : 5 * 60 * 1000)).toISOString();
+    fetchWfTimeseriesWindows(s, e, windowMetric)
+      .then((res) => setWindowSeries(res.data))
+      .catch(() => {});
+  }, [windowMetric]);
 
   async function loadAll() {
     const tr = timeRangeRef.current;
@@ -1023,12 +1038,25 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
     }));
   }, [alertSeries, palette]);
 
+  const fsSeriesList = useMemo(() => {
+    if (fsChartKey === 'throughput') return throughputChartSeries;
+    if (fsChartKey === 'window') return windowChartSeries;
+    return alertChartSeries;
+  }, [fsChartKey, throughputChartSeries, windowChartSeries, alertChartSeries]);
+
   const winFormatter = useMemo(() => {
     if (windowMetric === 'memory') {
       return { vf: (v: number) => fmtBytes(v), avf: (v: number) => fmtBytes(v), unit: undefined };
     }
     return { vf: (v: number) => fmtNum(v), avf: (v: number) => fmtNum(v), unit: t('monitor.wf.unit.rows') as string | undefined };
   }, [windowMetric, t]);
+
+  const fsFormatter = useMemo(() => {
+    if (fsChartKey === 'window') {
+      return { vf: winFormatter.vf, avf: winFormatter.avf, unit: winFormatter.unit };
+    }
+    return { vf: fsValueFormatter, avf: fsAxisValueFormatter, unit: fsYAxisUnit };
+  }, [fsChartKey, winFormatter, fsValueFormatter, fsAxisValueFormatter, fsYAxisUnit]);
 
   if (!pipeline) {
     return <div style={{ padding: 24, color: 'var(--text-dim)' }}>{t('monitor.wf.loading')}</div>;
@@ -1052,7 +1080,7 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
           yAxisUnit="eps"
           gridColor={chartColors.grid}
           labelColor={chartColors.label}
-          onExpand={() => { setFsTitle(t('monitor.wf.chart.throughput')); setFsSeriesList(throughputChartSeries); setFsPalette(palette); setFsYAxisUnit('eps'); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsOpen(true); }}
+          onExpand={() => { setFsChartKey('throughput'); setFsTitle(t('monitor.wf.chart.throughput')); setFsYAxisUnit('eps'); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsMetricTabs(undefined); setFsActiveMetric(undefined); setFsOpen(true); }}
         />
         <TrendChart
           title={t('monitor.wf.chart.window')}
@@ -1070,7 +1098,7 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
           ]}
           activeMetric={windowMetric}
           onMetricChange={setWindowMetric}
-          onExpand={() => { setFsTitle(t('monitor.wf.chart.window')); setFsSeriesList(windowChartSeries); setFsPalette(palette); setFsYAxisUnit(winFormatter.unit); setFsValueFormatter(winFormatter.vf); setFsAxisValueFormatter(winFormatter.avf); setFsOpen(true); }}
+          onExpand={() => { setFsChartKey('window'); setFsTitle(t('monitor.wf.chart.window')); setFsYAxisUnit(winFormatter.unit); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsMetricTabs([{ key: 'rows', label: t('monitor.wf.chart.metricRows') }, { key: 'memory', label: t('monitor.wf.chart.metricMemory') }, { key: 'late', label: t('monitor.wf.chart.metricLate') }]); setFsActiveMetric(windowMetric); setFsOpen(true); }}
         />
         <TrendChart
           title={t('monitor.wf.chart.alerts')}
@@ -1079,15 +1107,42 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
           yAxisUnit={t('monitor.wf.unit.times')}
           gridColor={chartColors.grid}
           labelColor={chartColors.label}
-          onExpand={() => { setFsTitle(t('monitor.wf.chart.alerts')); setFsSeriesList(alertChartSeries); setFsPalette(palette); setFsYAxisUnit(t('monitor.wf.unit.times')); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsOpen(true); }}
+          onExpand={() => { setFsChartKey('alerts'); setFsTitle(t('monitor.wf.chart.alerts')); setFsYAxisUnit(t('monitor.wf.unit.times')); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsMetricTabs(undefined); setFsActiveMetric(undefined); setFsOpen(true); }}
         />
       </div>
 
       {fsOpen && (
         <div className="fullscreen-overlay show" onClick={() => setFsOpen(false)}>
-          <div className="fs-header">
-            <span>{fsTitle}</span>
-            <span className="fs-close" onClick={() => setFsOpen(false)}>✕</span>
+          <div className="fs-header" style={{ color: '#e6e4e0', borderColor: 'rgba(255,255,255,0.08)' }}>
+            <span style={{ color: '#e6e4e0' }}>{fsTitle}</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              {fsMetricTabs && (
+                <span className="chart-tabs" style={{ display: 'flex', gap: 2 }}>
+                  {fsMetricTabs.map((t) => (
+                    <span
+                      key={t.key}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFsActiveMetric(t.key);
+                        setWindowMetric(t.key);
+                      }}
+                      style={{
+                        padding: '2px 8px',
+                        borderRadius: 4,
+                        fontSize: 12,
+                        cursor: 'pointer',
+                        color: t.key === fsActiveMetric ? '#60a5fa' : '#9a9aad',
+                        background: t.key === fsActiveMetric ? 'rgba(96,165,250,0.12)' : 'transparent',
+                        fontWeight: t.key === fsActiveMetric ? 600 : 400,
+                      }}
+                    >
+                      {t.label}
+                    </span>
+                  ))}
+                </span>
+              )}
+              <span className="fs-close" onClick={(e) => { e.stopPropagation(); setFsOpen(false); }} style={{ color: '#e6e4e0', fontSize: 22, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, cursor: 'pointer', background: 'rgba(255,255,255,0.06)' }}>✕</span>
+            </span>
           </div>
           <div className="fs-body" onClick={(e) => e.stopPropagation()}>
             <div className="fs-chart">
@@ -1096,15 +1151,16 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
                   title={fsTitle}
                   points={fsSeriesList.length === 1 ? fsSeriesList[0].points : []}
                   multiSeries={fsSeriesList.length > 0 ? fsSeriesList : undefined}
-                  color={fsSeriesList.length === 1 ? fsSeriesList[0].color : fsPalette[0]}
+                  color={fsSeriesList.length === 1 ? fsSeriesList[0].color : palette[0]}
                   showLegend={fsSeriesList.length > 0}
-                  valueFormatter={fsValueFormatter ?? ((v: number) => fmtNum(v))}
-                  axisValueFormatter={fsAxisValueFormatter ?? ((v: number) => fmtNum(v))}
+                  valueFormatter={fsFormatter.vf ?? ((v: number) => (Math.ceil(v * 100) / 100).toString())}
+                  axisValueFormatter={fsFormatter.avf ?? ((v: number) => (Math.ceil(v * 100) / 100).toString())}
                   minY={0}
                   yTickAmount={6}
-                  yAxisUnit={fsYAxisUnit}
+                  yAxisUnit={fsFormatter.unit}
                   gridColor={chartColors.grid}
                   labelColor={chartColors.label}
+                  hideXAxis={false}
                   legendPosition="bottom"
                   legendAlign="center"
                 />

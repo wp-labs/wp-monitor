@@ -63,6 +63,7 @@ pub struct MissNode {
     pub id: String,
     pub name: String,
     pub metrics: MetricsSnapshot,
+    pub available_sources: Vec<String>,
 }
 
 /// 各层结构版本（由稳定哈希生成）。
