@@ -141,20 +141,15 @@ impl VmHttpRepository {
     /// - 2s 步长使用 4s，保持轻微平滑；
     /// - 5s 及以上默认与 step 一致，避免窗口被过度放大。
     fn rate_window_secs_for_step(step_secs: i64) -> i64 {
-        match step_secs {
-            0..=1 => 3,
-            2 => 4,
-            _ => step_secs.max(1),
-        }
+        step_secs.max(1)
     }
 
     /// 按时间范围与目标点数自动计算 query_range 的步长（Grafana 风格）。
     /// 返回值：(step_str, rate_window_str, step_secs)
     ///
     /// step 与 rate_window 必须分开：
-    /// - step 决定返回的数据点密度；
-    /// - count 模式固定使用 step 作为统计桶；
-    /// - rate 模式仅在极小步长时做最小限度平滑，不再放大到 4x step。
+    /// - step 决定返回的数据点密度，同时作为 count 模式的统计桶；
+    /// - rate 模式的 rate_window 与 step 保持一致，避免统计窗口不一致。
     fn auto_step_for_timeseries(
         query: &TimeRangeQuery,
         max_data_points: Option<usize>,

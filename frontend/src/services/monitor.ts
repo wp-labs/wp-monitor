@@ -86,6 +86,7 @@ async function requestNodeTimeSeriesOnce(
   nodeId: string,
   startTime: string,
   endTime: string,
+  metricMode: TimeSeriesMetricMode,
   maxDataPoints?: number,
 ) {
   const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(
@@ -93,7 +94,7 @@ async function requestNodeTimeSeriesOnce(
     endTime,
   );
   const safeMaxDataPoints = normalizeMaxDataPoints(maxDataPoints);
-  const url = `/api/v1/wp-monitor/nodes/${encodeURIComponent(nodeId)}/timeseries?start_time=${encodeURIComponent(normalizedStart)}&end_time=${encodeURIComponent(normalizedEnd)}${safeMaxDataPoints ? `&max_data_points=${safeMaxDataPoints}` : ""}`;
+  const url = `/api/v1/wp-monitor/nodes/${encodeURIComponent(nodeId)}/timeseries?start_time=${encodeURIComponent(normalizedStart)}&end_time=${encodeURIComponent(normalizedEnd)}&metric_mode=${encodeURIComponent(metricMode)}${safeMaxDataPoints ? `&max_data_points=${safeMaxDataPoints}` : ""}`;
   return requestJson<NodeTimeSeries>(url);
 }
 
@@ -214,7 +215,7 @@ export async function fetchNodeTimeSeries(
   nodeId: string,
   startTime: string,
   endTime: string,
-  _metricMode?: TimeSeriesMetricMode,
+  metricMode: TimeSeriesMetricMode = "rate",
   maxDataPoints?: number,
 ) {
   const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(
@@ -227,6 +228,7 @@ export async function fetchNodeTimeSeries(
       nodeId,
       normalizedStart,
       normalizedEnd,
+      metricMode,
       safeMaxDataPoints,
     );
   } catch (err) {
@@ -257,6 +259,7 @@ export async function fetchNodeTimeSeries(
         nodeId,
         new Date(chunkStartMs).toISOString(),
         new Date(chunkEndMs).toISOString(),
+        metricMode,
         perChunkPoints,
       );
       chunks.push(chunkResp.data);
@@ -265,6 +268,7 @@ export async function fetchNodeTimeSeries(
     const merged: NodeTimeSeries = {
       node_id: chunks[0]?.node_id ?? nodeId,
       log_rate_eps: mergeTimePoints(chunks.map((chunk) => chunk.log_rate_eps ?? [])),
+      log_count: mergeTimePoints(chunks.map((chunk) => chunk.log_count ?? [])),
     };
     const step = chunks.find((chunk) => typeof chunk.step_secs === "number")?.step_secs;
     if (typeof step === "number") merged.step_secs = step;
