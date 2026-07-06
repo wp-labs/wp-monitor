@@ -126,7 +126,7 @@ impl WfVmRepository {
             .iter()
             .map(|(ts, val)| TimePoint {
                 ts: Self::ts_to_rfc3339(*ts),
-                value: val.max(0.0),
+                value: Some(val.max(0.0)),
             })
             .collect()
     }
@@ -664,6 +664,7 @@ impl WfRepository for WfVmRepository {
                 NodeTimeSeries {
                     node_id: name,
                     log_rate_eps: Self::range_to_time_points(&s.values),
+                    log_count: vec![],
                     step_secs,
                     rate_window_secs: rate_window.trim_end_matches('s').parse().unwrap_or(0),
                 }
@@ -705,6 +706,7 @@ impl WfRepository for WfVmRepository {
                 NodeTimeSeries {
                     node_id: name,
                     log_rate_eps: Self::range_to_time_points(&s.values),
+                    log_count: vec![],
                     step_secs,
                     rate_window_secs: rate_window.trim_end_matches('s').parse().unwrap_or(0),
                 }
@@ -742,6 +744,7 @@ impl WfRepository for WfVmRepository {
                 NodeTimeSeries {
                     node_id: name,
                     log_rate_eps: Self::range_to_time_points(&s.values),
+                    log_count: vec![],
                     step_secs,
                     rate_window_secs: rate_window.trim_end_matches('s').parse().unwrap_or(0),
                 }

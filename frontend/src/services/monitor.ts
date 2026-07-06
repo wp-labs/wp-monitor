@@ -138,6 +138,7 @@ export async function fetchPackagesTimeSeries(
   const body: Record<string, unknown> = {
     start_time: normalizedStart,
     end_time: normalizedEnd,
+    metric_mode: metricMode,
     filters: (filters ?? []).map((f) => ({
       package_name: f.packageName,
       rule_names: f.ruleNames,
@@ -206,6 +207,7 @@ export async function fetchNodeTimeSeries(
   nodeId: string,
   startTime: string,
   endTime: string,
+  _metricMode?: TimeSeriesMetricMode,
   maxDataPoints?: number,
 ) {
   const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(
