@@ -33,6 +33,8 @@ interface Props {
   legendAlign?: 'left' | 'center' | 'right';
   legendFontSize?: string;
   legendMarkerSize?: number;
+  xMin?: number;
+  xMax?: number;
 }
 
 function fmtTime(value: number, intlLocale: string): string {
@@ -66,6 +68,8 @@ export default function TimeSeriesChart({
   legendAlign,
   legendFontSize,
   legendMarkerSize,
+  xMin,
+  xMax,
 }: Props) {
   const { intlLocale } = useLocale();
   const chartRef = useRef<HTMLDivElement | null>(null);
@@ -170,8 +174,8 @@ export default function TimeSeriesChart({
       },
       xAxis: {
         type: 'time' as const,
-        min: firstTs,
-        max: lastTs,
+        min: xMin ?? firstTs,
+        max: xMax ?? lastTs,
         axisLine: { lineStyle: { color: gridColorVal }, show: !hideXAxis },
         axisTick: { lineStyle: { color: gridColorVal }, show: !hideXAxis },
         axisLabel: {

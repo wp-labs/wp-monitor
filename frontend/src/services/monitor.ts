@@ -16,6 +16,9 @@ import type {
   WfRuleMachineItem,
 } from "@/types/monitor";
 import { ApiError } from "@/types/monitor";
+
+export type TimeSeriesMetricMode = "rate" | "count";
+
 function normalizeIsoToSecondBoundary(iso: string) {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
@@ -98,6 +101,7 @@ export async function fetchParseTimeSeries(
   scope: "parse" | "source" | "sink",
   startTime: string,
   endTime: string,
+  metricMode: TimeSeriesMetricMode = "rate",
   maxDataPoints?: number,
   packageName?: string,
   sinkGroup?: string,
@@ -112,6 +116,7 @@ export async function fetchParseTimeSeries(
     scope,
     start_time: normalizedStart,
     end_time: normalizedEnd,
+    metric_mode: metricMode,
     package_name: packageName ? [packageName] : [],
     rule_name: ruleNames ?? [],
   };
@@ -124,6 +129,7 @@ export async function fetchParseTimeSeries(
 export async function fetchPackagesTimeSeries(
   startTime: string,
   endTime: string,
+  metricMode: TimeSeriesMetricMode = "rate",
   maxDataPoints?: number,
   filters?: Array<{ packageName: string; ruleNames: string[] }>,
 ) {
