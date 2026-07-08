@@ -408,7 +408,7 @@ td.dim { color: var(--wf-text-dim); font-size: 10px; }
   position: fixed;
   inset: 0;
   z-index: 999;
-  background: rgba(8,12,18,0.97);
+  background: var(--wf-overlay-bg);
   flex-direction: column;
 }
 

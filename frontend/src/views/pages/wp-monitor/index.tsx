@@ -213,6 +213,7 @@ function resolveAutoRefreshRange(
 export default function WpMonitorPage() {
   const { t } = useTranslation();
   const { theme, accentColor } = useTheme();
+
   const logoUrl = theme === 'light-modern' ? logoLightUrl : logoDarkUrl;
   const formatRate2 = useCallback((v: number) => `${v.toFixed(2)} e/s`, []);
   const formatCount2 = useCallback((v: number) => `${Math.max(0, Math.round(v))}`, []);
@@ -230,6 +231,8 @@ export default function WpMonitorPage() {
   );
 
   const [activeTab, setActiveTab] = useState<'pipeline' | 'engine'>('pipeline');
+  const [enginePreloaded, setEnginePreloaded] = useState(false);
+  useEffect(() => { setEnginePreloaded(true); }, []);
   const [appVersion, setAppVersion] = useState("");
   const [snapshot, setSnapshot] = useState<LayerSnapshot | null>(null);
   const [startTime, setStartTime] = useState(() => toIsoByMinutesAgo(5));
@@ -1452,10 +1455,9 @@ export default function WpMonitorPage() {
     <div
       className="app"
       id="app"
-      style={
-        selectedNode && activeTab === 'pipeline'
-          ? { paddingBottom: `${detailPanelHeight + 22}px` }
-          : undefined
+      style={(selectedNode && activeTab === 'pipeline')
+          ? { position: 'relative', paddingBottom: `${detailPanelHeight + 22}px` }
+          : { position: 'relative' }
       }
     >
       <div className="title-wrap">
@@ -1556,13 +1558,20 @@ export default function WpMonitorPage() {
         </div>
       </div>
 
-      {activeTab === 'engine' ? (
-        <Suspense fallback={<div style={{ padding: 24, color: 'var(--text-dim)' }}>加载中...</div>}>
-          <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-            <WfMonitor startTime={startTime} endTime={endTime} />
-          </div>
-        </Suspense>
-      ) : (
+      <div style={{
+        position: activeTab === 'engine' ? 'static' : 'absolute',
+        visibility: activeTab === 'engine' ? 'visible' : 'hidden',
+        ...(activeTab === 'engine' ? { flex: 1, overflowY: 'auto' as const, minHeight: 0 } : { inset: 0 }),
+      }}>
+        {(enginePreloaded || activeTab === 'engine') && (
+          <Suspense fallback={<div style={{ padding: 24, color: 'var(--text-dim)' }}>加载中...</div>}>
+            <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+              <WfMonitor startTime={startTime} endTime={endTime} refreshIntervalSec={refreshIntervalSec} />
+            </div>
+          </Suspense>
+        )}
+      </div>
+      {activeTab !== 'engine' && (
       <>
       <div className="canvas" id="canvas">
         {!snapshot && (

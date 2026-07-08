@@ -66,6 +66,7 @@
   --wf-bg-th: rgba(0,0,0,0.015);
   --wf-bar-bg: rgba(0,0,0,0.05);
   --wf-tooltip-border: rgba(0,0,0,0.08);
+  --wf-overlay-bg: rgba(255,255,255,0.97);
 }
 
 [data-theme="light-modern"] .app {

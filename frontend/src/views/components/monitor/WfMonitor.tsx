@@ -45,7 +45,6 @@ function fmtBytes(n: number): string {
 }
 
 const PAGE_SIZE = 10;
-const REFRESH_MS = 5000;
 
 // ── small metric row ──
 
@@ -836,6 +835,8 @@ function TrendChart({
   yAxisUnit,
   valueFormatter: vfProp,
   axisValueFormatter: avfProp,
+  xMin,
+  xMax,
 }: {
   title: string;
   seriesList: Array<{ name: string; points: TimePoint[]; color: string }>;
@@ -849,6 +850,8 @@ function TrendChart({
   yAxisUnit?: string;
   valueFormatter?: (v: number) => string;
   axisValueFormatter?: (v: number) => string;
+  xMin?: number;
+  xMax?: number;
 }) {
   const { t } = useTranslation();
   const multiSeries = seriesList.length > 0 ? seriesList : undefined;
@@ -903,6 +906,8 @@ function TrendChart({
               legendAlign="center"
               legendFontSize="10px"
               legendMarkerSize={5}
+              xMin={xMin}
+              xMax={xMax}
             />
           ) : (
             <div style={{ padding: 12, color: 'var(--text-dim)', fontSize: 12 }}>{t('monitor.wf.chart.noData')}</div>
@@ -915,7 +920,7 @@ function TrendChart({
 
 // ── Main WfMonitor ──
 
-export default function WfMonitor({ startTime, endTime }: { startTime: string; endTime: string }) {
+export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { startTime: string; endTime: string; refreshIntervalSec: number }) {
   const { t } = useTranslation();
   const { theme } = useTheme();
   const palette = useMemo(() => getPalette(theme), [theme]);
@@ -957,19 +962,24 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
   const timeRangeRef = useRef(timeRange);
   timeRangeRef.current = timeRange;
 
-  // initial load + reload on time range change
+  const loadGenRef = useRef(0);
+
+  const chartXRange = useMemo(() => ({
+    xMin: new Date(startTime).getTime(),
+    xMax: new Date(endTime).getTime(),
+  }), [startTime, endTime]);
+
+  // 统一的数据加载入口：时间范围变化立刻拉，定时器按 refreshIntervalSec 周期拉
   useEffect(() => {
     loadAll();
-  }, [startTime, endTime]);
-
-  // periodic refresh
-  useEffect(() => {
-    const timer = setInterval(loadAll, REFRESH_MS);
+    if (refreshIntervalSec <= 0) return;
+    const timer = setInterval(loadAll, refreshIntervalSec * 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [startTime, endTime, refreshIntervalSec]);
 
-  // 窗口指标切换时立即拉取时序，不等 5s 全量轮询
+  // 窗口指标切换时立即拉取时序
   useEffect(() => {
+    const gen = ++loadGenRef.current;
     const tr = timeRangeRef.current;
     const startMs = new Date(tr.start).getTime();
     const endMs = new Date(tr.end).getTime();
@@ -978,11 +988,12 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
     const e = new Date(now).toISOString();
     const s = new Date(now - (durationMs > 0 ? durationMs : 5 * 60 * 1000)).toISOString();
     fetchWfTimeseriesWindows(s, e, windowMetric)
-      .then((res) => setWindowSeries(res.data))
+      .then((res) => { if (gen >= loadGenRef.current) setWindowSeries(res.data); })
       .catch(() => {});
   }, [windowMetric]);
 
   async function loadAll() {
+    const gen = ++loadGenRef.current;
     const tr = timeRangeRef.current;
     const startMs = new Date(tr.start).getTime();
     const endMs = new Date(tr.end).getTime();
@@ -991,31 +1002,39 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
     const e = new Date(now).toISOString();
     const s = new Date(now - (durationMs > 0 ? durationMs : 5 * 60 * 1000)).toISOString();
 
-    const [pipelineRes, sourcesRes, windowsRes, rulesRes] = await Promise.all([
+    // 阶段 1：快照数据（instant query，快），批量更新减少 render 次数
+    const [pipelineRes, sourcesRes, windowsRes, rulesRes] = await Promise.allSettled([
       fetchWfPipeline(s, e),
       fetchWfSources(s, e),
       fetchWfWindows(s, e),
       fetchWfRules(s, e),
     ]);
-    setPipeline(pipelineRes.data);
-    setSources(sourcesRes.data);
-    setWindows(windowsRes.data);
-    setRules(rulesRes.data);
+    if (gen >= loadGenRef.current) {
+      if (pipelineRes.status === 'fulfilled') setPipeline(pipelineRes.value.data);
+      if (sourcesRes.status === 'fulfilled') setSources(sourcesRes.value.data);
+      if (windowsRes.status === 'fulfilled') setWindows(windowsRes.value.data);
+      if (rulesRes.status === 'fulfilled') setRules(rulesRes.value.data);
+    }
 
-    // timeseries
-    const [tsRes, wsRes, asRes] = await Promise.all([
+    // 阶段 2：时序数据（range query，可能较慢），批量更新
+    const [tsRes, wsRes, asRes] = await Promise.allSettled([
       fetchWfTimeseriesThroughput(s, e, throughputGroupBy),
       fetchWfTimeseriesWindows(s, e, windowMetricRef.current),
       fetchWfTimeseriesAlerts(s, e, alertGroupBy),
     ]);
-    setThroughputSeries(tsRes.data);
-    setWindowSeries(wsRes.data);
-    setAlertSeries(asRes.data);
+    if (gen >= loadGenRef.current) {
+      if (tsRes.status === 'fulfilled') setThroughputSeries(tsRes.value.data);
+      if (wsRes.status === 'fulfilled') setWindowSeries(wsRes.value.data);
+      if (asRes.status === 'fulfilled') setAlertSeries(asRes.value.data);
+    }
   }
 
-  // build chart series
+  const MAX_CHART_SERIES = 20;
+
+  // build chart series (skip silent nodes with no activity)
   const throughputChartSeries = useMemo(() => {
-    return throughputSeries.map((s, i) => ({
+    const active = throughputSeries.filter((s) => s.log_rate_eps.some((p) => p.value != null && p.value !== 0));
+    return active.slice(0, MAX_CHART_SERIES).map((s, i) => ({
       name: s.node_id,
       points: s.log_rate_eps,
       color: palette[i % palette.length],
@@ -1023,7 +1042,8 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
   }, [throughputSeries, palette]);
 
   const windowChartSeries = useMemo(() => {
-    return windowSeries.map((s, i) => ({
+    const active = windowSeries.filter((s) => s.log_rate_eps.some((p) => p.value != null && p.value !== 0));
+    return active.slice(0, MAX_CHART_SERIES).map((s, i) => ({
       name: s.node_id,
       points: s.log_rate_eps,
       color: palette[i % palette.length],
@@ -1031,7 +1051,8 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
   }, [windowSeries, palette]);
 
   const alertChartSeries = useMemo(() => {
-    return alertSeries.map((s, i) => ({
+    const active = alertSeries.filter((s) => s.log_rate_eps.some((p) => p.value != null && p.value !== 0));
+    return active.slice(0, MAX_CHART_SERIES).map((s, i) => ({
       name: s.node_id,
       points: s.log_rate_eps,
       color: palette[i % palette.length],
@@ -1080,6 +1101,8 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
           yAxisUnit="eps"
           gridColor={chartColors.grid}
           labelColor={chartColors.label}
+          xMin={chartXRange.xMin}
+          xMax={chartXRange.xMax}
           onExpand={() => { setFsChartKey('throughput'); setFsTitle(t('monitor.wf.chart.throughput')); setFsYAxisUnit('eps'); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsMetricTabs(undefined); setFsActiveMetric(undefined); setFsOpen(true); }}
         />
         <TrendChart
@@ -1091,6 +1114,8 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
           axisValueFormatter={winFormatter.avf}
           gridColor={chartColors.grid}
           labelColor={chartColors.label}
+          xMin={chartXRange.xMin}
+          xMax={chartXRange.xMax}
           metricTabs={[
             { key: 'rows', label: t('monitor.wf.chart.metricRows') },
             { key: 'memory', label: t('monitor.wf.chart.metricMemory') },
@@ -1107,33 +1132,27 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
           yAxisUnit={t('monitor.wf.unit.times')}
           gridColor={chartColors.grid}
           labelColor={chartColors.label}
+          xMin={chartXRange.xMin}
+          xMax={chartXRange.xMax}
           onExpand={() => { setFsChartKey('alerts'); setFsTitle(t('monitor.wf.chart.alerts')); setFsYAxisUnit(t('monitor.wf.unit.times')); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsMetricTabs(undefined); setFsActiveMetric(undefined); setFsOpen(true); }}
         />
       </div>
 
       {fsOpen && (
         <div className="fullscreen-overlay show" onClick={() => setFsOpen(false)}>
-          <div className="fs-header" style={{ color: '#e6e4e0', borderColor: 'rgba(255,255,255,0.08)' }}>
-            <span style={{ color: '#e6e4e0' }}>{fsTitle}</span>
+          <div className="fs-header">
+            <span>{fsTitle}</span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               {fsMetricTabs && (
-                <span className="chart-tabs" style={{ display: 'flex', gap: 2 }}>
+                <span className="chart-tabs">
                   {fsMetricTabs.map((t) => (
                     <span
                       key={t.key}
+                      className={`ctab${t.key === fsActiveMetric ? ' active' : ''}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         setFsActiveMetric(t.key);
                         setWindowMetric(t.key);
-                      }}
-                      style={{
-                        padding: '2px 8px',
-                        borderRadius: 4,
-                        fontSize: 12,
-                        cursor: 'pointer',
-                        color: t.key === fsActiveMetric ? '#60a5fa' : '#9a9aad',
-                        background: t.key === fsActiveMetric ? 'rgba(96,165,250,0.12)' : 'transparent',
-                        fontWeight: t.key === fsActiveMetric ? 600 : 400,
                       }}
                     >
                       {t.label}
@@ -1141,7 +1160,7 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
                   ))}
                 </span>
               )}
-              <span className="fs-close" onClick={(e) => { e.stopPropagation(); setFsOpen(false); }} style={{ color: '#e6e4e0', fontSize: 22, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, cursor: 'pointer', background: 'rgba(255,255,255,0.06)' }}>✕</span>
+              <span className="fs-close" onClick={(e) => { e.stopPropagation(); setFsOpen(false); }}>✕</span>
             </span>
           </div>
           <div className="fs-body" onClick={(e) => e.stopPropagation()}>
@@ -1163,6 +1182,8 @@ export default function WfMonitor({ startTime, endTime }: { startTime: string; e
                   hideXAxis={false}
                   legendPosition="bottom"
                   legendAlign="center"
+                  xMin={chartXRange.xMin}
+                  xMax={chartXRange.xMax}
                 />
               )}
             </div>

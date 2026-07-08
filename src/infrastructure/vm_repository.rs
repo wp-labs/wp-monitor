@@ -1,3 +1,4 @@
+use super::vm_utils::{align_points_to_grid, ts_to_rfc3339};
 use crate::domain::model::{
     LogTypeNode, MetricsSnapshot, NodeTimeSeries, ParseNode, SinkGroupNode, SinkLeafNode,
     SourceNode, SysMetrics, TimePoint, TimeRangeQuery,
@@ -11,7 +12,7 @@ use chrono::Utc;
 use orion_error::{OperationContext, prelude::*};
 use reqwest::Client;
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use tracing::{debug, warn};
 
 /// 转义 PromQL 正则特殊字符。
@@ -72,12 +73,6 @@ impl VmHttpRepository {
     }
 
     /// 将秒级时间戳安全转换为 RFC3339 字符串。
-    fn ts_to_rfc3339(ts: i64) -> String {
-        chrono::DateTime::from_timestamp(ts, 0)
-            .map(|d| d.to_rfc3339())
-            .unwrap_or_else(|| Utc::now().to_rfc3339())
-    }
-
     /// 计算实际查询时间范围，并对右边界做安全回退。
     /// 这里保留用户选择的左边界，避免“本周/今天”等自然时间范围被意外截断。
     fn effective_query_range(query: &TimeRangeQuery) -> Option<(i64, i64)> {
@@ -93,7 +88,7 @@ impl VmHttpRepository {
         values
             .iter()
             .map(|p| TimePoint {
-                ts: Self::ts_to_rfc3339(p.ts as i64),
+                ts: ts_to_rfc3339(p.ts as i64),
                 value: p.value.map(|v| v.max(0.0)),
             })
             .collect::<Vec<_>>()
@@ -533,83 +528,6 @@ impl VmHttpRepository {
             .unwrap_or_default()
     }
 
-    /// 基于 query_range 的实际 start/end/step 生成完整时间网格。
-    /// VM 只返回有样本的点时，可借此补齐缺失步点，保证前端时间轴完整。
-    fn align_points_to_grid(
-        start: i64,
-        end: i64,
-        step_secs: i64,
-        points: Vec<TimePoint>,
-        fill_value: Option<f64>,
-    ) -> Vec<TimePoint> {
-        if start > end || step_secs <= 0 {
-            return Vec::new();
-        }
-        if points.is_empty() {
-            return vec![
-                TimePoint {
-                    ts: Self::ts_to_rfc3339(start),
-                    value: fill_value,
-                },
-                TimePoint {
-                    ts: Self::ts_to_rfc3339(end),
-                    value: fill_value,
-                },
-            ];
-        }
-        let point_map = points
-            .into_iter()
-            .filter_map(|point| {
-                let ts = chrono::DateTime::parse_from_rfc3339(&point.ts)
-                    .ok()?
-                    .timestamp();
-                Some((ts, point))
-            })
-            .collect::<BTreeMap<_, _>>();
-        let Some((&first_real_ts, _)) = point_map.first_key_value() else {
-            return Vec::new();
-        };
-        let start_ts_str = Self::ts_to_rfc3339(start);
-        let end_ts_str = Self::ts_to_rfc3339(end);
-        // 用真实返回点确定相位，再在该相位网格上补齐缺失点。
-        // 这样既能保留用户选择的显示边界，也不会因为 start 未对齐 step 而错失真实点。
-        let phase_offset = (first_real_ts - start).rem_euclid(step_secs);
-        let mut ts = start + phase_offset;
-        if ts > first_real_ts {
-            ts -= step_secs;
-        }
-        let mut out = Vec::new();
-        while ts <= end {
-            if ts >= start {
-                if let Some(point) = point_map.get(&ts) {
-                    out.push(point.clone());
-                } else {
-                    out.push(TimePoint {
-                        ts: Self::ts_to_rfc3339(ts),
-                        value: fill_value,
-                    });
-                }
-            }
-            ts += step_secs;
-        }
-        if out.first().map(|point| point.ts.as_str()) != Some(start_ts_str.as_str()) {
-            out.insert(
-                0,
-                TimePoint {
-                    ts: start_ts_str,
-                    value: fill_value,
-                },
-            );
-        }
-        if out.last().map(|point| point.ts.as_str()) != Some(end_ts_str.as_str()) {
-            out.push(TimePoint {
-                ts: end_ts_str,
-                value: fill_value,
-            });
-        }
-        out
-    }
-
     async fn fetch_scope_timeseries_internal<F>(
         &self,
         query: &TimeRangeQuery,
@@ -644,7 +562,7 @@ impl VmHttpRepository {
         let mut out = Vec::with_capacity(series.len());
         for s in series {
             let node_id = node_id_builder(&s.metric);
-            let points = Self::align_points_to_grid(
+            let points = align_points_to_grid(
                 start,
                 end,
                 step_secs,
@@ -939,13 +857,8 @@ impl VmRepository for VmHttpRepository {
             TimeSeriesMetricMode::Count => count_q,
         };
         let series = self.range_query(&query_prom, start, end, &step).await?;
-        let points = Self::align_points_to_grid(
-            start,
-            end,
-            step_secs,
-            Self::series_to_points(&series),
-            None,
-        );
+        let points =
+            align_points_to_grid(start, end, step_secs, Self::series_to_points(&series), None);
 
         debug!(
             node_id = node_id,

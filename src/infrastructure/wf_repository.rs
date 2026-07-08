@@ -1,3 +1,4 @@
+use super::vm_utils::{align_points_to_grid, ts_to_rfc3339};
 use crate::domain::model::{NodeTimeSeries, TimePoint, TimeRangeQuery};
 use crate::domain::wf_repository::{
     WfPipelineReceiver, WfPipelineResponse, WfPipelineRule, WfPipelineWindow, WfRepository,
@@ -72,12 +73,6 @@ impl WfVmRepository {
         v.parse::<f64>().unwrap_or(0.0)
     }
 
-    fn ts_to_rfc3339(ts: i64) -> String {
-        chrono::DateTime::from_timestamp(ts, 0)
-            .map(|d| d.to_rfc3339())
-            .unwrap_or_else(|| Utc::now().to_rfc3339())
-    }
-
     fn effective_query_range(query: &TimeRangeQuery) -> Option<(i64, i64)> {
         let start = query.start_time.timestamp();
         let end = query.end_time.timestamp();
@@ -125,7 +120,7 @@ impl WfVmRepository {
         values
             .iter()
             .map(|(ts, val)| TimePoint {
-                ts: Self::ts_to_rfc3339(*ts),
+                ts: ts_to_rfc3339(*ts),
                 value: Some(val.max(0.0)),
             })
             .collect()
@@ -661,9 +656,10 @@ impl WfRepository for WfVmRepository {
                     .get(by_labels)
                     .cloned()
                     .unwrap_or_else(|| "unknown".into());
+                let raw = Self::range_to_time_points(&s.values);
                 NodeTimeSeries {
                     node_id: name,
-                    log_rate_eps: Self::range_to_time_points(&s.values),
+                    log_rate_eps: align_points_to_grid(start, end, step_secs, raw, None),
                     log_count: vec![],
                     step_secs,
                     rate_window_secs: rate_window.trim_end_matches('s').parse().unwrap_or(0),
@@ -703,9 +699,10 @@ impl WfRepository for WfVmRepository {
                     .get("window_name")
                     .cloned()
                     .unwrap_or_else(|| "unknown".into());
+                let raw = Self::range_to_time_points(&s.values);
                 NodeTimeSeries {
                     node_id: name,
-                    log_rate_eps: Self::range_to_time_points(&s.values),
+                    log_rate_eps: align_points_to_grid(start, end, step_secs, raw, None),
                     log_count: vec![],
                     step_secs,
                     rate_window_secs: rate_window.trim_end_matches('s').parse().unwrap_or(0),
@@ -741,9 +738,10 @@ impl WfRepository for WfVmRepository {
                     .get(by_labels)
                     .cloned()
                     .unwrap_or_else(|| "unknown".into());
+                let raw = Self::range_to_time_points(&s.values);
                 NodeTimeSeries {
                     node_id: name,
-                    log_rate_eps: Self::range_to_time_points(&s.values),
+                    log_rate_eps: align_points_to_grid(start, end, step_secs, raw, None),
                     log_count: vec![],
                     step_secs,
                     rate_window_secs: rate_window.trim_end_matches('s').parse().unwrap_or(0),

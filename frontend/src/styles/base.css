@@ -78,6 +78,7 @@ body::before {
   --wf-bg-th: rgba(255,255,255,0.02);
   --wf-bar-bg: rgba(255,255,255,0.06);
   --wf-tooltip-border: rgba(255,255,255,0.08);
+  --wf-overlay-bg: rgba(8,12,18,0.97);
 }
 
 /* ===== Keyframes ===== */
