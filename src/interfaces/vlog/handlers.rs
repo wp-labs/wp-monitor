@@ -101,20 +101,13 @@ pub async fn get_missed_data(
         }
         MissSource::Vlog => {
             let query = normalize_query(&req.query);
-            let paged_query = format!(
-                "{} | sort by (_time) desc | limit {} | sort by (_time) asc",
-                query, MAX_MISS_TOTAL
-            );
-            debug!(
-                paged_query = &paged_query,
-                "vlog.handlers.missed_page.vlog_mode"
-            );
+            debug!(query = &query, "vlog.handlers.missed_page.vlog_mode");
             let (records, total) = tokio::try_join!(
                 miss_service.fetch_records(MissQuery {
                     limit: MAX_MISS_TOTAL as usize,
                     start: DateTime::UNIX_EPOCH,
                     end: Utc::now(),
-                    query: Some(paged_query),
+                    query: Some(query),
                 }),
                 miss_service.count_total(),
             )
@@ -185,10 +178,6 @@ pub async fn export_missed_data(
         }
         MissSource::Vlog => {
             let query = normalize_query(&req.query);
-            let export_query = format!(
-                "{} | sort by (_time) desc | limit {} | sort by (_time) asc",
-                query, MAX_MISS_TOTAL
-            );
             info!(
                 limit = MAX_MISS_TOTAL,
                 "vlog.handlers.missed_export.vlog_mode"
@@ -198,7 +187,7 @@ pub async fn export_missed_data(
                     limit: MAX_MISS_TOTAL as usize,
                     start: DateTime::UNIX_EPOCH,
                     end: Utc::now(),
-                    query: Some(export_query),
+                    query: Some(query),
                 })
                 .await
                 .map_err(|e| {

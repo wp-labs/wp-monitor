@@ -75,12 +75,12 @@ impl MissRepository for VlogMissRepository {
         let logsql = match query.query {
             Some(ref q) if q.contains('|') => q.clone(),
             Some(q) => format!(
-                "{} | sort by (_time) asc | limit {}",
+                "{} | sort by (_time) desc | limit {}",
                 q,
                 query.limit.min(MAX_EXPORT_ROWS as usize)
             ),
             None => format!(
-                "{} | sort by (_time) asc | limit {}",
+                "{} | sort by (_time) desc | limit {}",
                 DEFAULT_MISS_QUERY,
                 query.limit.min(MAX_EXPORT_ROWS as usize)
             ),

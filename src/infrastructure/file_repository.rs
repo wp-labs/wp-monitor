@@ -3,8 +3,8 @@ use bstr::ByteSlice;
 use memchr::memrchr_iter;
 use memmap2::Mmap;
 use orion_error::prelude::*;
+use std::fs::File;
 use std::process::Command;
-use std::{collections::VecDeque, fs::File};
 
 pub struct FileRepository {
     file: File,
@@ -63,8 +63,8 @@ fn blank_line_sep(data: &[u8], pos: usize) -> Option<usize> {
 }
 
 /// 获取最后 n 条记录
-fn last_records(data: &[u8], limit: usize) -> VecDeque<&[u8]> {
-    let mut records = VecDeque::with_capacity(limit);
+fn last_records(data: &[u8], limit: usize) -> Vec<&[u8]> {
+    let mut records = Vec::with_capacity(limit);
 
     let mut end = data.len();
 
@@ -77,7 +77,7 @@ fn last_records(data: &[u8], limit: usize) -> VecDeque<&[u8]> {
                 let slice = &data[start..end];
 
                 if !slice.trim().is_empty() {
-                    records.push_front(slice);
+                    records.push(slice);
 
                     if records.len() >= limit {
                         break;
@@ -94,7 +94,7 @@ fn last_records(data: &[u8], limit: usize) -> VecDeque<&[u8]> {
         let slice = &data[..end];
 
         if !slice.trim().is_empty() {
-            records.push_front(slice);
+            records.push(slice);
         }
     }
 
