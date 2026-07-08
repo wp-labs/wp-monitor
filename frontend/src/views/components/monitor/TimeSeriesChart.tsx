@@ -120,6 +120,7 @@ export default function TimeSeriesChart({
   const { intlLocale } = useLocale();
   const chartRef = useRef<HTMLDivElement | null>(null);
   const instanceRef = useRef<echarts.EChartsType | null>(null);
+  const legendSelectedRef = useRef<Record<string, boolean> | null>(null);
   const isMulti = Boolean(multiSeries && multiSeries.length > 0);
 
   const normalizedPoints = useMemo(
@@ -277,6 +278,7 @@ export default function TimeSeriesChart({
         fontSize: Number.parseInt(legendFontSize || '12', 10),
         fontFamily: 'var(--font-mono)',
       },
+      ...(legendSelectedRef.current ? { selected: legendSelectedRef.current } : {}),
     },
     tooltip: {
       trigger: 'axis',
@@ -403,9 +405,14 @@ export default function TimeSeriesChart({
       renderer: 'canvas',
     });
     instanceRef.current = instance;
+    instance.on('legendselectchanged', (params: unknown) => {
+      const evt = params as { selected?: Record<string, boolean> };
+      legendSelectedRef.current = evt.selected ?? null;
+    });
     return () => {
       instance.dispose();
       instanceRef.current = null;
+      legendSelectedRef.current = null;
     };
   }, []);
 
