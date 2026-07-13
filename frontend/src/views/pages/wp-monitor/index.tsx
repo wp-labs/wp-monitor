@@ -533,21 +533,32 @@ export default function WpMonitorPage() {
       snapshot.miss.metrics.log_rate_eps > 0
     );
   }, [snapshot]);
+  const isSearching = useMemo(() => !!parseQuery.trim(), [parseQuery]);
+
   const filteredParses = useMemo(() => {
     if (!snapshot) return [];
+    if (isSearching) {
+      const q = parseQuery.trim().toLowerCase();
+      return snapshot.parses.filter((p) => {
+        if (p.package_name.toLowerCase().includes(q)) return true;
+        return p.logs.some((l) => l.name.toLowerCase().includes(q));
+      });
+    }
     return snapshot.parses.filter((p) => {
       if (parseFilter === "withData") return p.metrics.log_rate_eps > 0;
       if (parseFilter === "noData") return p.logs.some((l) => l.metrics.log_rate_eps === 0);
       return true;
     });
-  }, [snapshot, parseFilter]);
+  }, [snapshot, parseFilter, parseQuery, isSearching]);
 
   const parsePages = useMemo(() => {
     const pages: (typeof filteredParses)[] = [];
     let cur: typeof filteredParses = [];
     let curCnt = 0;
     for (const pkg of filteredParses) {
-      const cnt = filterLogsByMode(pkg.logs, parseFilter).length;
+      const cnt = isSearching
+        ? pkg.logs.length
+        : filterLogsByMode(pkg.logs, parseFilter).length;
       if (curCnt >= PARSE_PAGE_SIZE && cur.length > 0) {
         pages.push(cur);
         cur = [];
@@ -558,7 +569,7 @@ export default function WpMonitorPage() {
     }
     if (cur.length > 0) pages.push(cur);
     return pages.length > 0 ? pages : [[]];
-  }, [filteredParses, parseFilter]);
+  }, [filteredParses, parseFilter, isSearching]);
 
   const parseTotalPages = parsePages.length;
   const parsePageItems = parsePages[Math.min(parsePage - 1, parseTotalPages - 1)] || [];
@@ -1727,11 +1738,13 @@ export default function WpMonitorPage() {
               <div className="lane-scroll">
                 {parsePageItems.map((parseItem, index) => {
                   const isExpanded = expandedPackages.includes(parseItem.id);
-                  const showLogs = parseFilter === "withData"
-                    ? parseItem.logs.filter((l) => l.metrics.log_rate_eps > 0)
-                    : parseFilter === "noData"
-                      ? parseItem.logs.filter((l) => l.metrics.log_rate_eps === 0)
-                      : parseItem.logs;
+                  const showLogs = parseQuery.trim()
+                    ? parseItem.logs
+                    : parseFilter === "withData"
+                      ? parseItem.logs.filter((l) => l.metrics.log_rate_eps > 0)
+                      : parseFilter === "noData"
+                        ? parseItem.logs.filter((l) => l.metrics.log_rate_eps === 0)
+                        : parseItem.logs;
                   const packageTone = PACKAGE_ICON_TONES[index % PACKAGE_ICON_TONES.length];
                   return (
                     <section
