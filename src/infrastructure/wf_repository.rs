@@ -88,7 +88,7 @@ impl WfVmRepository {
         let target = max_data_points.unwrap_or(480).clamp(60, 2000) as i64;
         let raw = ((total_secs + target - 1) / target).max(1);
         let step = Self::nice_step(raw);
-        let rate_window = (step * 4).max(step).clamp(20, 1800);
+        let rate_window = step.max(1);
         (format!("{}s", step), format!("{}s", rate_window), step)
     }
 
@@ -514,7 +514,7 @@ impl WfRepository for WfVmRepository {
 
     // ── 告警详情 ──
 
-    /// 告警产出（counter）与状态机实例数（gauge），分别按 `alert_name` / `rule_name` 分组。
+    /// 告警产出（counter）、状态机实例数（gauge）、scope_key 分布，一次返回保证数据对齐。
     async fn fetch_rules(&self, query: &TimeRangeQuery) -> Result<Vec<WfRuleItem>, AppError> {
         let (start, end) = Self::effective_query_range(query).ok_or_else(|| {
             AppReason::InvalidTimeRange
@@ -530,15 +530,40 @@ impl WfRepository for WfVmRepository {
         );
         let q_instances =
             "sum by (rule_name) (wf_rule_instances_total{rule_name!=\"\"})".to_string();
-        let (emitted, instances) = tokio::try_join!(
+        let q_scopes = format!(
+            "sum by (alert_name, scope_key) (increase(wf_alert_emitted_total{{alert_name!=\"\",scope_key!=\"-\"}}[{}]))",
+            w
+        );
+        let (emitted, instances, scopes) = tokio::try_join!(
             self.instant_query(&q_emitted, at),
-            self.instant_query(&q_instances, at)
+            self.instant_query(&q_instances, at),
+            self.instant_query(&q_scopes, at)
         )?;
 
         let inst_map: HashMap<&str, f64> = instances
             .iter()
             .filter_map(|s| Some((s.metric.get("rule_name")?.as_str(), s.value)))
             .collect();
+
+        // 将 scope_key 数据按 alert_name 分组
+        let mut scopes_map: HashMap<&str, Vec<WfStateMachineItem>> = HashMap::new();
+        for s in &scopes {
+            let alert_name = match s.metric.get("alert_name") {
+                Some(n) => n.as_str(),
+                None => continue,
+            };
+            let scope_key = match s.metric.get("scope_key") {
+                Some(k) => k.clone(),
+                None => continue,
+            };
+            scopes_map
+                .entry(alert_name)
+                .or_default()
+                .push(WfStateMachineItem {
+                    scope_key,
+                    emitted: s.value,
+                });
+        }
 
         Ok(emitted
             .iter()
@@ -547,6 +572,7 @@ impl WfRepository for WfVmRepository {
                 Some(WfRuleItem {
                     instances: inst_map.get(name.as_str()).copied().unwrap_or(0.0),
                     emitted: s.value,
+                    state_machines: scopes_map.remove(name.as_str()).unwrap_or_default(),
                     name,
                 })
             })
@@ -726,8 +752,10 @@ impl WfRepository for WfVmRepository {
         } else {
             "alert_name"
         };
+        // 用 increase / window_secs 手动算速率，替代 rate()，避免 VM 对稀疏 counter 返回全零
+        let rw_secs: f64 = rate_window.trim_end_matches('s').parse().unwrap_or(1.0);
         let promql = format!(
-            "sum by ({by_labels}) (rate(wf_alert_emitted_total{{alert_name!=\"\"}}[{rate_window}]))"
+            "sum by ({by_labels}) (increase(wf_alert_emitted_total{{alert_name!=\"\"}}[{rate_window}]) / {rw_secs})"
         );
         let series = self.range_query(&promql, start, end, &step).await?;
         Ok(series

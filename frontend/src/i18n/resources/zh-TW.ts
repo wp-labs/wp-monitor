@@ -170,6 +170,8 @@ export const zhTW = {
       popover: {
         viewAll: '點擊查看全部',
         instances: '{{count}} 個實例',
+        noInstances: '暫無實例數據',
+        noAlerts: '該規則有 {{count}} 個活躍實例，當前時間窗口內無告警產出',
       },
       chart: {
         throughput: '資料流入',

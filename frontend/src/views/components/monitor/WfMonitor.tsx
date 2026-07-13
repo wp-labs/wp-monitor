@@ -9,7 +9,6 @@ import {
   fetchWfSourceMachines,
   fetchWfWindows,
   fetchWfRules,
-  fetchWfStateMachines,
   fetchWfRuleMachines,
   fetchWfTimeseriesThroughput,
   fetchWfTimeseriesWindows,
@@ -323,7 +322,7 @@ function SourceTable({ sources, timeRange }: { sources: WfSourceItem[]; timeRang
       </div>
       <div className="panel-body">
         {machineLoading ? (
-          <div style={{ padding: 12, color: 'var(--text-dim)', fontSize: 12 }}>{t('monitor.wf.loading')}</div>
+          <div style={{ padding: 12, color: 'var(--wf-text-dim)', fontSize: 12 }}>{t('monitor.wf.loading')}</div>
         ) : (
           <table>
             <thead onClick={(e) => {
@@ -359,7 +358,7 @@ function SourceTable({ sources, timeRange }: { sources: WfSourceItem[]; timeRang
                       <td className="name">{(item as WfSourceMachineItem).machine}</td>
                       <td className="num">{(item as WfSourceMachineItem).source_count}</td>
                       <td className="num">{fmtNum(item.rows)}</td>
-                      <td className="num" style={{ color: (item as WfSourceMachineItem).route_errors > 0 ? 'var(--warning)' : 'var(--text-dim)' }}>
+                      <td className="num" style={{ color: (item as WfSourceMachineItem).route_errors > 0 ? 'var(--warning)' : 'var(--wf-text-dim)' }}>
                         {(item as WfSourceMachineItem).route_errors}
                       </td>
                     </tr>
@@ -369,10 +368,10 @@ function SourceTable({ sources, timeRange }: { sources: WfSourceItem[]; timeRang
                       <td className="name">{(item as WfSourceItem).name}</td>
                       <td className="dim">{(item as WfSourceItem).type}</td>
                       <td className="num">{fmtNum(item.rows)}</td>
-                      <td className="num" style={{ color: (item as WfSourceItem).route_errors > 0 ? 'var(--warning)' : 'var(--text-dim)' }}>
+                      <td className="num" style={{ color: (item as WfSourceItem).route_errors > 0 ? 'var(--warning)' : 'var(--wf-text-dim)' }}>
                         {(item as WfSourceItem).route_errors}
                       </td>
-                      <td className="num" style={{ color: (item as WfSourceItem).consumer_lag > 0 ? 'var(--warning)' : 'var(--text-dim)' }}>
+                      <td className="num" style={{ color: (item as WfSourceItem).consumer_lag > 0 ? 'var(--warning)' : 'var(--wf-text-dim)' }}>
                         {fmtNum((item as WfSourceItem).consumer_lag)}
                       </td>
                     </tr>
@@ -474,7 +473,7 @@ function WindowTable({ windows }: { windows: WfWindowItem[] }) {
                 <tr key={w.name}>
                   <td className="name">{w.name}</td>
                   <td className="num" style={{ color: w.rows > 5000 ? 'var(--warning)' : undefined }}>{fmtNum(w.rows)}</td>
-                  <td className="num" style={{ color: w.late_dropped > 0 ? 'var(--warning)' : 'var(--text-dim)' }}>{fmtNum(w.late_dropped)}</td>
+                  <td className="num" style={{ color: w.late_dropped > 0 ? 'var(--warning)' : 'var(--wf-text-dim)' }}>{fmtNum(w.late_dropped)}</td>
                   <td>
                     <span className="bar-num">{memMB.toFixed(1)}<span className="bar-cap"> / {capMB.toFixed(0)} MiB</span></span>
                   </td>
@@ -503,21 +502,21 @@ function WindowTable({ windows }: { windows: WfWindowItem[] }) {
 function SmPopover({
   ruleName,
   totalEmitted,
-  startTime,
-  endTime,
+  totalInstances,
+  stateMachines,
   triggerEl,
   onClose,
+  onClearCloseTimer,
 }: {
   ruleName: string;
   totalEmitted: number;
-  startTime: string;
-  endTime: string;
+  totalInstances: number;
+  stateMachines: WfStateMachineItem[];
   triggerEl: HTMLElement;
   onClose: () => void;
+  onClearCloseTimer: () => void;
 }) {
   const { t } = useTranslation();
-  const [allItems, setAllItems] = useState<WfStateMachineItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const [pos, setPos] = useState<{ top: number; left: number; dir: 'above' | 'below'; arrowX: number }>({ top: 0, left: 0, dir: 'above', arrowX: 50 });
   const [visible, setVisible] = useState(false);
   const [fsOpen, setFsOpen] = useState(false);
@@ -525,20 +524,11 @@ function SmPopover({
   const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetchWfStateMachines(ruleName, startTime, endTime).then((r) => {
-      if (!cancelled) {
-        setAllItems(r.data);
-        setLoading(false);
-      }
-    });
-    return () => { cancelled = true; };
-  }, [ruleName, startTime, endTime]);
+  const allItems = stateMachines;
+  const loading = false;
 
   // position popover relative to trigger
   useEffect(() => {
-    if (loading) return;
     const rect = triggerEl.getBoundingClientRect();
     const popW = popRef.current?.offsetWidth || 200;
     const popH = popRef.current?.offsetHeight || 140;
@@ -560,7 +550,7 @@ function SmPopover({
     const arrowX = Math.max(12, Math.min(popW - 12, rect.left + rect.width / 2 - left));
     setPos({ top, left, dir, arrowX });
     setVisible(true);
-  }, [triggerEl, loading, allItems]);
+  }, [triggerEl, allItems]);
 
   // delayed show
   useEffect(() => {
@@ -577,6 +567,7 @@ function SmPopover({
   }, [triggerEl]);
 
   const handleMouseEnter = () => {
+    onClearCloseTimer();
     if (hideTimer.current !== null) {
       clearTimeout(hideTimer.current);
       hideTimer.current = null;
@@ -602,38 +593,48 @@ function SmPopover({
         <span className="pop-arrow" />
         <div className="pop-body">
           {loading
-            ? <div className="pop-item" style={{ color: 'var(--text-dim)' }}>{t('monitor.wf.loading')}</div>
-            : shown.map((si) => (
-              <div className="pop-item" key={si.scope_key}>
-                <span className="pop-name">{si.scope_key}</span>
-                <span className="pop-bar-wrap">
-                  <span
-                    className="pop-bar"
-                    style={{ width: `${totalEmitted > 0 ? Math.max(2, (si.emitted / totalEmitted) * 100).toFixed(0) : 0}%` }}
-                  />
-                </span>
-                <span className="pop-val">{fmtNum(si.emitted)}</span>
-              </div>
-            ))}
-          {totalItems > 4 && (
-            <div
-              className="pop-item"
-              style={{ justifyContent: 'center', color: 'var(--text-dim)', borderTop: '1px solid var(--border-light)', marginTop: 2, paddingTop: 3, fontSize: 10, cursor: 'pointer' }}
-              onClick={() => setFsOpen(true)}
-            >
-              {t('monitor.wf.popover.viewAll')}
-            </div>
-          )}
+            ? <div className="pop-item" style={{ color: 'var(--wf-text-dim)' }}>{t('monitor.wf.loading')}</div>
+            : totalItems === 0
+              ? <div className="pop-item" style={{ color: 'var(--wf-text-dim)', fontSize: 11 }}>
+                  {totalInstances > 0
+                    ? t('monitor.wf.popover.noAlerts', { count: totalInstances })
+                    : t('monitor.wf.popover.noInstances')}
+                </div>
+              : (
+                <>
+                  {shown.map((si) => (
+                    <div className="pop-item" key={si.scope_key}>
+                      <span className="pop-name">{si.scope_key}</span>
+                      <span className="pop-bar-wrap">
+                        <span
+                          className="pop-bar"
+                          style={{ width: `${totalEmitted > 0 ? Math.max(2, (si.emitted / totalEmitted) * 100).toFixed(0) : 0}%` }}
+                        />
+                      </span>
+                      <span className="pop-val">{fmtNum(si.emitted)}</span>
+                    </div>
+                  ))}
+                  {totalItems > 4 && (
+                    <div
+                      className="pop-item"
+                      style={{ justifyContent: 'center', color: 'var(--wf-text-dim)', borderTop: '1px solid var(--wf-border-light)', marginTop: 2, paddingTop: 3, fontSize: 10, cursor: 'pointer' }}
+                      onClick={() => setFsOpen(true)}
+                    >
+                      {t('monitor.wf.popover.viewAll')}
+                    </div>
+                  )}
+                </>
+              )}
         </div>
       </div>
 
       {fsOpen && (
         <div className="fullscreen-overlay show" style={{ background: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFsOpen(false)}>
-          <div style={{ maxWidth: 480, width: '100%', background: 'var(--surface-solid)', borderRadius: '8px 8px 0 0', margin: '0 auto', borderBottom: '1px solid var(--border-light)', padding: '12px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ maxWidth: 480, width: '100%', background: 'var(--surface-overlay)', borderRadius: '8px 8px 0 0', margin: '0 auto', borderBottom: '1px solid var(--wf-border-light)', padding: '12px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 13, fontWeight: 600 }}>{ruleName} · {t('monitor.wf.popover.instances', { count: totalItems })}</span>
-            <span style={{ fontSize: 14, width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', cursor: 'pointer' }} onClick={() => setFsOpen(false)}>✕</span>
+            <span style={{ fontSize: 14, width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--wf-text-dim)', cursor: 'pointer' }} onClick={() => setFsOpen(false)}>✕</span>
           </div>
-          <div style={{ maxWidth: 480, width: '100%', background: 'var(--surface-solid)', borderRadius: '0 0 8px 8px', margin: '0 auto', display: 'flex', flexDirection: 'column', maxHeight: '55vh', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
+          <div style={{ maxWidth: 480, width: '100%', background: 'var(--surface-overlay)', borderRadius: '0 0 8px 8px', margin: '0 auto', display: 'flex', flexDirection: 'column', maxHeight: '55vh', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
             <div style={{ padding: '4px 0', overflowY: 'auto' }}>
               {allItems.map((si) => (
                 <div className="pop-item" key={si.scope_key}>
@@ -666,6 +667,19 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
   const [machineData, setMachineData] = useState<WfRuleMachineItem[] | null>(null);
   const [hoverRule, setHoverRule] = useState<string | null>(null);
   const [hoverTrigger, setHoverTrigger] = useState<HTMLElement | null>(null);
+  const hoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearHoverCloseTimer = () => {
+    if (hoverCloseTimerRef.current !== null) {
+      clearTimeout(hoverCloseTimerRef.current);
+      hoverCloseTimerRef.current = null;
+    }
+  };
+
+  const scheduleHoverClose = () => {
+    clearHoverCloseTimer();
+    hoverCloseTimerRef.current = setTimeout(() => setHoverRule(null), 150);
+  };
 
   useEffect(() => {
     if (groupBy === 'machine') {
@@ -768,7 +782,7 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
                   <tr key={m.machine}>
                     <td className="name">{m.machine}</td>
                     <td className="num">{m.rule_count}</td>
-                    <td className="num" style={{ color: m.emitted > 0 ? 'var(--orange)' : 'var(--text-dim)' }}>{fmtNum(m.emitted)}</td>
+                    <td className="num" style={{ color: m.emitted > 0 ? 'var(--orange)' : 'var(--wf-text-dim)' }}>{fmtNum(m.emitted)}</td>
                   </tr>
                 );
               }
@@ -778,11 +792,17 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
                   <span
                     className="sm-trigger"
                     data-rule={r.name}
-                    onMouseEnter={(e) => {
+                    onClick={(e) => {
+                      clearHoverCloseTimer();
                       setHoverRule(r.name);
                       setHoverTrigger(e.currentTarget as HTMLElement);
                     }}
-                    onMouseLeave={() => setHoverRule(null)}
+                    onMouseEnter={(e) => {
+                      clearHoverCloseTimer();
+                      setHoverRule(r.name);
+                      setHoverTrigger(e.currentTarget as HTMLElement);
+                    }}
+                    onMouseLeave={scheduleHoverClose}
                   >
                     {r.instances}
                   </span>
@@ -792,7 +812,7 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
               return (
                 <tr key={r.name}>
                   <td className="name">{r.name}</td>
-                  <td className="num" style={{ color: r.emitted > 0 ? 'var(--orange)' : 'var(--text-dim)' }}>{fmtNum(r.emitted)}</td>
+                  <td className="num" style={{ color: r.emitted > 0 ? 'var(--orange)' : 'var(--wf-text-dim)' }}>{fmtNum(r.emitted)}</td>
                   <td className="num">{cell}</td>
                 </tr>
               );
@@ -806,16 +826,20 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
       <Pagination page={ps.page} total={total} onChange={(p) => setPs((prev) => ({ ...prev, page: p }))} />
 
       {/* global popover positioned relative to trigger */}
-      {hoverRule && hoverTrigger && (
+      {hoverRule && hoverTrigger && (() => {
+        const rule = rules.find((r) => r.name === hoverRule);
+        return (
         <SmPopover
           ruleName={hoverRule}
-          totalEmitted={rules.find((r) => r.name === hoverRule)?.emitted || 0}
-          startTime={timeRange.start}
-          endTime={timeRange.end}
+          totalEmitted={rule?.emitted || 0}
+          totalInstances={rule?.instances || 0}
+          stateMachines={rule?.state_machines || []}
           triggerEl={hoverTrigger}
           onClose={() => setHoverRule(null)}
+          onClearCloseTimer={clearHoverCloseTimer}
         />
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -910,7 +934,7 @@ function TrendChart({
               xMax={xMax}
             />
           ) : (
-            <div style={{ padding: 12, color: 'var(--text-dim)', fontSize: 12 }}>{t('monitor.wf.chart.noData')}</div>
+            <div style={{ padding: 12, color: 'var(--wf-text-dim)', fontSize: 12 }}>{t('monitor.wf.chart.noData')}</div>
           )}
         </div>
       </div>
@@ -955,12 +979,26 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
     };
   }, [theme]);
 
+  // Recreate on every render so SourceTable/AlertTable get fresh values;
+  // the loading cycle only depends on duration, not on this object.
+  const timeRange = useMemo(() => ({ start: startTime, end: endTime }), [startTime, endTime]);
+
   const windowMetricRef = useRef(windowMetric);
   windowMetricRef.current = windowMetric;
 
-  const timeRange = useMemo(() => ({ start: startTime, end: endTime }), [startTime, endTime]);
-  const timeRangeRef = useRef(timeRange);
-  timeRangeRef.current = timeRange;
+  // Track the time-range duration in ms. Updated on every render from props,
+  // but only changes meaningfully when the user picks a different range.
+  // Auto-refresh slides the window but keeps the same duration, so we avoid
+  // resetting the loading cycle on every parent update.
+  const durationMsRef = useRef(0);
+  const prevDurationMsRef = useRef(0);
+  {
+    const startMs = new Date(startTime).getTime();
+    const endMs = new Date(endTime).getTime();
+    if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs) {
+      durationMsRef.current = endMs - startMs;
+    }
+  }
 
   const loadGenRef = useRef(0);
 
@@ -969,21 +1007,32 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
     xMax: new Date(endTime).getTime(),
   }), [startTime, endTime]);
 
-  // 统一的数据加载入口：时间范围变化立刻拉，定时器按 refreshIntervalSec 周期拉
+  // Periodic refresh: the interval runs continuously without being reset
+  // on every parent auto-refresh. loadAll always uses Date.now() for the
+  // query window, so it stays fresh regardless of props.
   useEffect(() => {
     loadAll();
     if (refreshIntervalSec <= 0) return;
     const timer = setInterval(loadAll, refreshIntervalSec * 1000);
     return () => clearInterval(timer);
-  }, [startTime, endTime, refreshIntervalSec]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshIntervalSec]);
+
+  // When the user intentionally changes the time range (different duration),
+  // trigger an immediate fetch. Auto-refresh keeps the same duration so this
+  // does NOT fire on every parent update.
+  useEffect(() => {
+    const curr = durationMsRef.current;
+    if (prevDurationMsRef.current !== 0 && prevDurationMsRef.current !== curr) {
+      loadAll();
+    }
+    prevDurationMsRef.current = curr;
+  }, [startTime, endTime]);
 
   // 窗口指标切换时立即拉取时序
   useEffect(() => {
     const gen = ++loadGenRef.current;
-    const tr = timeRangeRef.current;
-    const startMs = new Date(tr.start).getTime();
-    const endMs = new Date(tr.end).getTime();
-    const durationMs = endMs - startMs;
+    const durationMs = durationMsRef.current;
     const now = Date.now();
     const e = new Date(now).toISOString();
     const s = new Date(now - (durationMs > 0 ? durationMs : 5 * 60 * 1000)).toISOString();
@@ -994,10 +1043,7 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
 
   async function loadAll() {
     const gen = ++loadGenRef.current;
-    const tr = timeRangeRef.current;
-    const startMs = new Date(tr.start).getTime();
-    const endMs = new Date(tr.end).getTime();
-    const durationMs = endMs - startMs;
+    const durationMs = durationMsRef.current;
     const now = Date.now();
     const e = new Date(now).toISOString();
     const s = new Date(now - (durationMs > 0 ? durationMs : 5 * 60 * 1000)).toISOString();
@@ -1080,7 +1126,7 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
   }, [fsChartKey, winFormatter, fsValueFormatter, fsAxisValueFormatter, fsYAxisUnit]);
 
   if (!pipeline) {
-    return <div style={{ padding: 24, color: 'var(--text-dim)' }}>{t('monitor.wf.loading')}</div>;
+    return <div style={{ padding: 24, color: 'var(--wf-text-dim)' }}>{t('monitor.wf.loading')}</div>;
   }
 
   return (

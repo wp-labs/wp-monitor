@@ -168,6 +168,8 @@ export const zhCN = {
       popover: {
         viewAll: '点击查看全部',
         instances: '{{count}} 个实例',
+        noInstances: '暂无实例数据',
+        noAlerts: '该规则有 {{count}} 个活跃实例，当前时间窗口内无告警产出',
       },
       chart: {
         throughput: '数据流入',

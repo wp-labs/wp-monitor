@@ -192,7 +192,7 @@ td.dim { color: var(--wf-text-dim); font-size: 10px; }
 }
 
 .pill-option:hover { color: var(--wf-text); }
-.pill-option.active { color: #fff; }
+.pill-option.active { color: var(--pill-active-text, #fff); }
 
 /* ── Filter toggle ── */
 .filter-toggle { display: flex; gap: 1px; }
@@ -473,3 +473,18 @@ td.dim { color: var(--wf-text-dim); font-size: 10px; }
 @media (max-width: 768px) {
   .stage { min-width: 100%; }
 }
+
+/* ── theme-specific toggle readability ── */
+[data-theme="light-modern"] .pill-option { color: #334155; }
+[data-theme="light-modern"] .pill-option.active { color: var(--accent); }
+[data-theme="light-modern"] .ft-btn { color: #475569; }
+[data-theme="light-modern"] .ft-btn.active { color: var(--accent); }
+[data-theme="light-modern"] .ctab { color: #475569; }
+[data-theme="light-modern"] .ctab.active { color: var(--accent); }
+
+[data-theme="night-blue"] .pill-option { color: #eef2fb; }
+[data-theme="night-blue"] .pill-option.active { color: var(--accent); }
+[data-theme="night-blue"] .ft-btn { color: #dbe4f4; }
+[data-theme="night-blue"] .ft-btn.active { color: var(--accent); }
+[data-theme="night-blue"] .ctab { color: #dbe4f4; }
+[data-theme="night-blue"] .ctab.active { color: var(--accent); }

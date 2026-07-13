@@ -56,7 +56,7 @@
   --wf-border: var(--border-subtle);
   --wf-border-light: rgba(0,0,0,0.04);
   --wf-text: var(--text-main);
-  --wf-text-dim: var(--text-muted);
+  --wf-text-dim: #475569;
   --wf-text-sub: var(--text-sub);
   --wf-radius: var(--radius-sm);
   --wf-shadow: 0 1px 4px rgba(0,0,0,0.06);
@@ -67,6 +67,7 @@
   --wf-bar-bg: rgba(0,0,0,0.05);
   --wf-tooltip-border: rgba(0,0,0,0.08);
   --wf-overlay-bg: rgba(255,255,255,0.97);
+  --pill-active-text: var(--accent);
 }
 
 [data-theme="light-modern"] .app {

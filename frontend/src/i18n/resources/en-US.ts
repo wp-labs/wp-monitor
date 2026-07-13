@@ -170,6 +170,8 @@ export const enUS = {
       popover: {
         viewAll: 'Click to view all',
         instances: '{{count}} instances',
+        noInstances: 'No instance data',
+        noAlerts: '{{count}} active instances, no alerts in current window',
       },
       chart: {
         throughput: 'Data Throughput',

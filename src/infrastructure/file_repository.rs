@@ -56,7 +56,7 @@ fn blank_line_sep(data: &[u8], pos: usize) -> Option<usize> {
     if pos > 0 && data[pos - 1] == b'\n' {
         return Some(2);
     }
-    if pos >= 3 && data[pos - 3..=pos] == [b'\r', b'\n', b'\r', b'\n'] {
+    if pos >= 3 && data[pos - 3..=pos] == *b"\r\n\r\n" {
         return Some(4);
     }
     None

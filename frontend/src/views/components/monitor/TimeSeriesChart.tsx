@@ -278,7 +278,20 @@ export default function TimeSeriesChart({
         fontSize: Number.parseInt(legendFontSize || '12', 10),
         fontFamily: 'var(--font-mono)',
       },
-      ...(legendSelectedRef.current ? { selected: legendSelectedRef.current } : {}),
+      ...(legendSelectedRef.current
+        ? {
+            selected: (() => {
+              const merged: Record<string, boolean> = { ...legendSelectedRef.current };
+              for (const s of seriesOption) {
+                const name = s.name;
+                if (name != null && !(name in merged)) {
+                  merged[name] = true;
+                }
+              }
+              return merged;
+            })(),
+          }
+        : {}),
     },
     tooltip: {
       trigger: 'axis',

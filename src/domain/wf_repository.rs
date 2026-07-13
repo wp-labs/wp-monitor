@@ -88,6 +88,10 @@ pub struct WfRuleItem {
     pub name: String,
     pub emitted: f64,
     pub instances: f64,
+    /// scope_key 维度的告警分布，随规则列表一起返回，保证数据对齐。
+    /// 活跃规则包含各 scope 的 emitted 数量；静默规则为空。
+    #[serde(default)]
+    pub state_machines: Vec<WfStateMachineItem>,
 }
 
 /// 状态机实例告警分布（hover popover 数据）。

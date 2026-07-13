@@ -202,6 +202,7 @@ export interface WfRuleItem {
   name: string;
   emitted: number;
   instances: number;
+  state_machines?: WfStateMachineItem[];
 }
 
 export interface WfStateMachineItem {
