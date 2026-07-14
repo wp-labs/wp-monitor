@@ -306,6 +306,9 @@ export default function WpMonitorPage() {
   const [parseQuery, setParseQuery] = useState("");
   const [parseSearchOpen, setParseSearchOpen] = useState(false);
   const [parseSearchActiveIndex, setParseSearchActiveIndex] = useState(0);
+  const [parseSearchTargetPkgIds, setParseSearchTargetPkgIds] = useState<
+    string[] | null
+  >(null);
   const parseSearchRef = useRef<HTMLDivElement | null>(null);
   const detailPanelRef = useRef<HTMLElement | null>(null);
   const refreshSpinTimerRef = useRef<number | null>(null);
@@ -537,11 +540,15 @@ export default function WpMonitorPage() {
 
   const filteredParses = useMemo(() => {
     if (!snapshot) return [];
+    if (parseSearchTargetPkgIds) {
+      const idSet = new Set(parseSearchTargetPkgIds);
+      return snapshot.parses.filter((p) => idSet.has(p.id));
+    }
     if (isSearching) {
-      const q = parseQuery.trim().toLowerCase();
+      const terms = parseQuery.trim().toLowerCase().split(/\s*\/\s*/);
       return snapshot.parses.filter((p) => {
-        if (p.package_name.toLowerCase().includes(q)) return true;
-        return p.logs.some((l) => l.name.toLowerCase().includes(q));
+        if (terms.some((t) => p.package_name.toLowerCase().includes(t))) return true;
+        return p.logs.some((l) => terms.some((t) => l.name.toLowerCase().includes(t)));
       });
     }
     return snapshot.parses.filter((p) => {
@@ -549,14 +556,14 @@ export default function WpMonitorPage() {
       if (parseFilter === "noData") return p.logs.some((l) => l.metrics.log_rate_eps === 0);
       return true;
     });
-  }, [snapshot, parseFilter, parseQuery, isSearching]);
+  }, [snapshot, parseFilter, parseQuery, isSearching, parseSearchTargetPkgIds]);
 
   const parsePages = useMemo(() => {
     const pages: (typeof filteredParses)[] = [];
     let cur: typeof filteredParses = [];
     let curCnt = 0;
     for (const pkg of filteredParses) {
-      const cnt = isSearching
+      const cnt = (isSearching || parseSearchTargetPkgIds)
         ? pkg.logs.length
         : filterLogsByMode(pkg.logs, parseFilter).length;
       if (curCnt >= PARSE_PAGE_SIZE && cur.length > 0) {
@@ -569,7 +576,7 @@ export default function WpMonitorPage() {
     }
     if (cur.length > 0) pages.push(cur);
     return pages.length > 0 ? pages : [[]];
-  }, [filteredParses, parseFilter, isSearching]);
+  }, [filteredParses, parseFilter, isSearching, parseSearchTargetPkgIds]);
 
   const parseTotalPages = parsePages.length;
   const parsePageItems = parsePages[Math.min(parsePage - 1, parseTotalPages - 1)] || [];
@@ -1367,6 +1374,7 @@ export default function WpMonitorPage() {
   async function onSelectParsePackage(packageId: string, packageName: string) {
     setParseQuery(packageName);
     setParseSearchOpen(false);
+    setParseSearchTargetPkgIds([packageId]);
     await openParseTimeseries(
       "parse",
       packageId,
@@ -1376,13 +1384,14 @@ export default function WpMonitorPage() {
   }
 
   async function onSelectParseLog(
-    _packageId: string,
+    packageId: string,
     logId: string,
     packageName: string,
     logName: string,
   ) {
     setParseQuery(`${packageName} / ${logName}`);
     setParseSearchOpen(false);
+    setParseSearchTargetPkgIds([packageId]);
     await openDetail(logId);
   }
 
@@ -1684,6 +1693,7 @@ export default function WpMonitorPage() {
                         onChange={(event) => {
                           setParseQuery(event.target.value);
                           setParseSearchOpen(true);
+                          if (!event.target.value) setParseSearchTargetPkgIds(null);
                         }}
                         onFocus={() => setParseSearchOpen(true)}
                         onKeyDown={(event) => void onParseSearchKeyDown(event)}
