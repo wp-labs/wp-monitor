@@ -469,6 +469,7 @@ impl LayerService {
         Ok(LayersMetricsResponse {
             generated_at: Utc::now().to_rfc3339(),
             items,
+            layer_versions: snapshot.meta.layer_versions,
         })
     }
 

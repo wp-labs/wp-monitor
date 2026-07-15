@@ -71,6 +71,11 @@ export interface NodeMetricsItem {
 
 export interface LayersMetricsResponse {
   generated_at: string;
+  layer_versions: {
+    source_version: string;
+    parse_version: string;
+    sink_version: string;
+  };
   items: NodeMetricsItem[];
 }
 

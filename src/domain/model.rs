@@ -113,6 +113,7 @@ pub struct NodeMetricsItem {
 pub struct LayersMetricsResponse {
     pub generated_at: String,
     pub items: Vec<NodeMetricsItem>,
+    pub layer_versions: LayerVersions,
 }
 
 /// 节点详情响应。

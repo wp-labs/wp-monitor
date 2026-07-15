@@ -377,6 +377,18 @@ export default function WpMonitorPage() {
       const nextStart = nextRange.start;
       const nextEnd = nextRange.end;
       const data = await fetchMetrics(nextStart, nextEnd, ids, pkgFilters);
+
+      const prevVer = snapshot.meta.layer_versions;
+      const nextVer = data.layer_versions;
+      if (
+        prevVer.source_version !== nextVer.source_version ||
+        prevVer.parse_version !== nextVer.parse_version ||
+        prevVer.sink_version !== nextVer.sink_version
+      ) {
+        await loadSnapshot(nextStart, nextEnd);
+        return;
+      }
+
       setSnapshot((prev) =>
         prev ? applyMetricsToSnapshot(prev, data.items) : prev,
       );
