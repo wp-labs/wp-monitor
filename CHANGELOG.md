@@ -6,6 +6,170 @@
 All notable changes are documented in this file, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 with version numbers adhering to [Semantic Versioning](https://semver.org/).
 
+## [1.0.4] - 2026-07-15
+
+### Added
+
+- 指标增量刷新接口 `/layers/metrics` 返回 `layer_versions`，前端自动检测节点拓扑变化（新增/移除节点）并触发全量快照刷新。
+
+- Return `layer_versions` from `/layers/metrics` so the frontend can automatically detect node topology changes and trigger a full snapshot reload.
+
+## [1.0.3] - 2026-07-14
+
+### Fixed
+
+- 修复静默日志类型在搜索框中无法选中的问题。
+
+- Fix issue where the silent log type could not be selected in the search box.
+
+## [1.0.2] - 2026-07-13
+
+### Fixed
+
+- 修复搜索框中选中节点未回显的问题。
+- 修复 VM `rate()` 对稀疏计数器返回零值导致告警趋势图为空的问题。
+
+- Fix issue where the selected node was not displayed in the search box.
+- Fix empty alert trend chart caused by VM `rate()` returning zeros for sparse counters.
+
+## [1.0.1] - 2026-07-08
+
+### Added
+
+- Wfusion 引擎监控面板国际化支持。
+- 图表库从 ApexCharts 迁移至 ECharts，重新设计图表调色板。
+- 支持运行时切换 MISS 数据源（vlog/file），无需刷新页面。
+- 图表 Y 轴和全屏模式交互优化。
+- 新增 `build.rs` 支持前端自动构建。
+- 图表图例状态持久化。
+
+- i18n support for wfusion engine monitoring panel.
+- Replace ApexCharts with ECharts, redesign chart palettes.
+- Runtime miss source switching (vlog/file) without page refresh.
+- Chart Y-axis and fullscreen interaction improvements.
+- Add `build.rs` for auto frontend build.
+- Persist chart legend state.
+
+### Changed
+
+- MISS 查询排序逻辑统一收敛至 repo 层，返回结果按最新优先排列。
+- 统计窗口指标口径统一。
+
+- Centralize miss query sorting in repo layer, returning records newest-first.
+- Unify stat window metric semantics.
+
+### Fixed
+
+- 修复 React 19 类型错误（WfMonitor timer ref）。
+- 修复 `metric_mode` 参数问题，恢复 light-modern 主题。
+- 修复 Y 轴标签重复问题，过滤静默图表系列。
+- 提取共享 VM 工具函数以减少重复代码。
+- 修复前端趋势图渲染问题。
+
+- Fix React 19 type error with WfMonitor timer ref.
+- Fix `metric_mode` parameter and restore light-modern theme.
+- Fix Y-axis label duplication and filter silent chart series.
+- Extract shared VM utilities to reduce code duplication.
+- Fix frontend trend chart rendering issues.
+
+## [0.8.6] - 2026-07-03
+
+### Fixed
+
+- 修复前端编译错误。
+
+- Fix frontend compilation errors.
+
+## [0.8.5] - 2026-07-03
+
+### Fixed
+
+- 修复时间窗口相关 bug。
+
+- Fix time window bug.
+
+## [0.8.4] - 2026-07-02
+
+### Changed
+
+- 界面交互优化。
+
+- Interface optimization.
+
+## [0.8.2] - 2026-07-02
+
+### Added
+
+- 监控详情时序修正，优化时间窗口交互体验。
+- 新增数量趋势图。
+- 修复全屏模式下 MISS 数据显示问题。
+
+- Fix time series correction for monitoring details and improve time window interaction.
+- Add count trend chart.
+- Fix MISS data display in fullscreen mode.
+
+### Changed
+
+- 监控时间"本周"选项改为"最近 7 天"。
+
+- Change "this week" time option to "last 7 days".
+
+## [0.8.1] - 2026-06-30
+
+### Fixed
+
+- 修复 wp-monitor 与监控面板状态时间刷新联动问题。
+
+- Fix time refresh linkage between wp-monitor and monitoring panel state.
+
+## [0.8.0] - 2026-06-29
+
+### Added
+
+- 新增 source 数量徽章显示。
+- 新增节点详情全屏模式。
+
+- Add source count badge display.
+- Add node detail fullscreen mode.
+
+## [0.7.7] - 2026-06-25
+
+### Fixed
+
+- 消除自动刷新期间趋势图闪烁与加载闪烁问题。
+
+- Eliminate trend chart flicker and loading flash during auto-refresh.
+
+## [0.7.6] - 2026-06-25
+
+### Added
+
+- 新增 wfusion 引擎监控界面。
+
+- Add wfusion engine monitoring interface.
+
+### Fixed
+
+- 改进 MISS 数据显示、时间范围交互体验及详情面板同步问题。
+
+- Improve MISS data display, time range UX, and detail panel sync.
+
+## [0.7.5] - 2026-06-09
+
+### Changed
+
+- MISS 日志改为客户端分页，统一导出接口，简化前后端交互逻辑。
+
+- Switch MISS logs to client-side pagination with unified export, simplifying frontend-backend interaction.
+
+## [0.7.4] - 2026-05-22
+
+### Changed
+
+- 版本号迭代，无功能变更。
+
+- Version bump, no functional changes.
+
 ## [0.7.3] - 2026-05-19
 
 ### Added
