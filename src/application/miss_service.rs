@@ -48,4 +48,7 @@ impl MissService {
     pub async fn count_total(&self) -> Result<u64, AppError> {
         self.repository.count_total().await
     }
+    pub async fn clear_miss_data(&self, query: &str) -> Result<(), AppError> {
+        self.repository.clear_miss_data(query).await
+    }
 }

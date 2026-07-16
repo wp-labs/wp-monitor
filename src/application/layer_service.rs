@@ -482,6 +482,24 @@ impl LayerService {
         miss_source: MissSource,
     ) -> Result<NodeDetail, AppError> {
         debug!(node_id = %node_id, "layer_service.node_detail.start");
+
+        if node_id == "miss" {
+            let miss_repo = self.resolve_miss_repo(miss_source)?;
+            let miss_count = miss_repo.count_total().await?;
+            debug!(node_id = %node_id, "layer_service.node_detail.miss");
+            return Ok(NodeDetail {
+                id: "miss".to_string(),
+                name: "MISS".to_string(),
+                node_type: "miss".to_string(),
+                package_name: None,
+                metrics: MetricsSnapshot {
+                    log_rate_eps: 0.0,
+                    log_count: miss_count,
+                    collected_at: Utc::now().to_rfc3339(),
+                },
+            });
+        }
+
         let snapshot = self
             .get_layers_snapshot(query.clone(), None, miss_source)
             .await?;
@@ -544,23 +562,6 @@ impl LayerService {
                 })
         }) {
             return Ok(detail);
-        }
-
-        if node_id == "miss" {
-            let miss_repo = self.resolve_miss_repo(miss_source)?;
-            let miss_count = miss_repo.count_total().await?;
-            debug!(node_id = %node_id, "layer_service.node_detail.miss");
-            return Ok(NodeDetail {
-                id: "miss".to_string(),
-                name: "MISS".to_string(),
-                node_type: "miss".to_string(),
-                package_name: None,
-                metrics: MetricsSnapshot {
-                    log_rate_eps: 0.0,
-                    log_count: miss_count,
-                    collected_at: Utc::now().to_rfc3339(),
-                },
-            });
         }
 
         // 未命中任何已知节点时，返回 unknown（不抛错，保证接口稳定）。

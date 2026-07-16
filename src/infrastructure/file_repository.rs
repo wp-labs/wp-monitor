@@ -7,8 +7,8 @@ use std::fs::File;
 use std::process::Command;
 
 pub struct FileRepository {
-    file: File,
-    file_path: String,
+    pub file: File,
+    pub file_path: String,
 }
 
 impl FileRepository {

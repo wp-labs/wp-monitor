@@ -127,6 +127,37 @@ impl VlogHttpRepository {
         }
         Ok(records)
     }
+
+    pub async fn clear_miss_data(&self, query: &str) -> Result<(), AppError> {
+        let url = format!("{}/delete/run_task", self.base_url);
+
+        let ctx = OperationContext::doing("clear miss data").with_field("url", url.clone());
+        let resp = self
+            .client
+            .post(&url)
+            .query(&[("filter", query)])
+            .send()
+            .await
+            .source_raw_err(
+                AppReason::VlogRequestFailed,
+                "vlog clear miss data http request failed",
+            )
+            .with_context(&ctx)?;
+        if !resp.status().is_success() {
+            return Err(AppError::new(
+                AppReason::VlogRequestFailed,
+                format!(
+                    "vlog clear miss data request failed with status: {}",
+                    resp.status()
+                )
+                .into(),
+                None,
+                Vec::new(),
+            ));
+        }
+        debug!("vlog_repository.clear_miss_data.success");
+        Ok(())
+    }
 }
 
 #[cfg(test)]

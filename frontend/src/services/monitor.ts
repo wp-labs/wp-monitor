@@ -303,6 +303,14 @@ export async function exportMissedLogs(source?: string) {
   return resp;
 }
 
+export async function clearMissedLogs(source?: string) {
+  let url = `/api/v1/wp-monitor/vlog/missed/clear?query=${encodeURIComponent("wp_stage:miss")}`;
+  if (source) {
+    url += `&source=${encodeURIComponent(source)}`;
+  }
+  return requestJson<string>(url);
+}
+
 // ── wfusion engine monitoring ──
 
 const WF_BASE = '/api/v1/wp-monitor/wf';

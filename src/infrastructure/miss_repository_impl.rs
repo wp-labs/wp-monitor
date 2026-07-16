@@ -4,7 +4,7 @@ use crate::infrastructure::file_repository::FileRepository;
 use crate::infrastructure::vlog_repository::VlogHttpRepository;
 use crate::shared::error::{AppError, AppReason};
 use async_trait::async_trait;
-use orion_error::conversion::ToStructError;
+use orion_error::conversion::{SourceRawErr, ToStructError};
 use std::sync::Arc;
 
 const DEFAULT_MISS_QUERY: &str = "wp_stage:miss";
@@ -55,6 +55,22 @@ impl MissRepository for FileMissRepository {
                     .with_detail(format!("count_records spawn_blocking failed: {e}"))
             })?
     }
+
+    async fn clear_miss_data(&self, _query: &str) -> Result<(), AppError> {
+        let file = Arc::clone(&self.file);
+        tokio::task::spawn_blocking(move || {
+            // 清空文件内容
+            std::fs::write(&file.file_path, "")
+                .source_raw_err(AppReason::FileReadFailed, "clear miss data failed")?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| {
+            AppReason::FileReadFailed
+                .to_err()
+                .with_detail(format!("clear_miss_data spawn_blocking failed: {e}"))
+        })?
+    }
 }
 
 /// 基于 VictoriaLogs 的 Miss 仓储实现。
@@ -103,5 +119,9 @@ impl MissRepository for VlogMissRepository {
 
     async fn count_total(&self) -> Result<u64, AppError> {
         self.vlog.count_hits(DEFAULT_MISS_QUERY).await
+    }
+
+    async fn clear_miss_data(&self, query: &str) -> Result<(), AppError> {
+        self.vlog.clear_miss_data(query).await
     }
 }

@@ -33,6 +33,7 @@ import ThemeSwitcher from "@/views/components/monitor/ThemeSwitcher";
 import LanguageSwitcher from "@/views/components/monitor/LanguageSwitcher";
 import { getPalette } from "@/views/components/monitor/chartPalette";
 import {
+  clearMissedLogs,
   exportMissedLogs,
   fetchMissedLogs,
   fetchMetrics,
@@ -238,7 +239,7 @@ export default function WpMonitorPage() {
   const [startTime, setStartTime] = useState(() => toIsoByMinutesAgo(5));
   const [endTime, setEndTime] = useState(() => nowWithLagIso());
   const [error, setError] = useState("");
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
 
   const [selectedNode, setSelectedNode] = useState("");
   const [hoveredNode, setHoveredNode] = useState("");
@@ -269,6 +270,7 @@ export default function WpMonitorPage() {
   const [missTotal, setMissTotal] = useState(0);
   const [missPage, setMissPage] = useState(1);
   const [missExporting, setMissExporting] = useState(false);
+  const [missClearing, setMissClearing] = useState(false);
   const [missSource, setMissSource] = useState<"vlog" | "file">(() => {
     const saved = localStorage.getItem("missSource");
     if (saved === "file" || saved === "vlog") return saved;
@@ -967,6 +969,17 @@ export default function WpMonitorPage() {
       const data = await fetchMissedLogs(ms);
       setMissLogs(data.items);
       setMissTotal(data.total ?? data.items.length);
+      setSnapshot((prev) =>
+        prev
+          ? {
+              ...prev,
+              miss: {
+                ...prev.miss,
+                metrics: { ...prev.miss.metrics, log_count: data.total ?? data.items.length },
+              },
+            }
+          : prev,
+      );
       if (resetPage) {
         setMissPage(1);
       } else {
@@ -1022,6 +1035,30 @@ export default function WpMonitorPage() {
     } finally {
       setMissExporting(false);
     }
+  }
+
+  function onClearMissed() {
+    modal.confirm({
+      title: t("monitor.miss.clearConfirm"),
+      okText: t("common.confirm"),
+      cancelText: t("common.cancel"),
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          setMissClearing(true);
+          await clearMissedLogs(missSource);
+          message.success(t("monitor.miss.clearSuccess"));
+          await loadSnapshot();
+          if (isMissSelected) {
+            await loadMissedLogs(true);
+          }
+        } catch (err) {
+          message.error((err as Error).message || t("monitor.miss.clearFailed"));
+        } finally {
+          setMissClearing(false);
+        }
+      },
+    });
   }
 
   function onMissPageChange(page: number) {
@@ -2252,6 +2289,9 @@ export default function WpMonitorPage() {
                           </Button>
                           <Button size="small" onClick={() => void onExportMissed()} disabled={missExporting}>
                             {missExporting ? t("monitor.miss.exporting") : t("monitor.miss.exportData")}
+                          </Button>
+                          <Button size="small" danger onClick={onClearMissed} disabled={missClearing}>
+                            {missClearing ? t("monitor.miss.clearing") : t("monitor.miss.clearData")}
                           </Button>
                         </div>
                       </div>

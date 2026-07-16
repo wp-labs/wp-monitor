@@ -220,3 +220,37 @@ pub async fn export_missed_data(
         }
     }
 }
+
+#[get("/vlog/missed/clear")]
+pub async fn clear_miss_data(
+    state: web::Data<AppState>,
+    req: web::Query<VlogMissedExportQuery>,
+) -> Result<HttpResponse> {
+    let req = req.into_inner();
+    let miss_source = parse_miss_source(&req.source);
+
+    let miss_service = state.resolve_miss(miss_source).map_err(|e| {
+        error!(error = %e, "vlog.handlers.clear_miss_data.invalid_source");
+        AppErrorResponse::from(e)
+    })?;
+
+    match miss_source {
+        MissSource::File => {
+            info!("vlog.handlers.clear_miss_data.file_mode");
+            miss_service.clear_miss_data("").await.map_err(|e| {
+                error!(error = %e, "vlog.handlers.clear_miss_data.file_failed");
+                AppErrorResponse::from(e)
+            })?;
+            Ok(HttpResponse::Ok().json(ApiResponse::ok("Miss data cleared successfully.")))
+        }
+        MissSource::Vlog => {
+            info!("vlog.handlers.clear_miss_data.vlog_mode");
+            let query = normalize_query(&req.query);
+            miss_service.clear_miss_data(&query).await.map_err(|e| {
+                error!(error = %e, "vlog.handlers.clear_miss_data.vlog_failed");
+                AppErrorResponse::from(e)
+            })?;
+            Ok(HttpResponse::Ok().json(ApiResponse::ok("Miss data cleared successfully.")))
+        }
+    }
+}

@@ -2,4 +2,4 @@
 vm_base_url = "http://127.0.0.1:8428"
 log_level = "debug"
 vlog_base_url = "http://127.0.0.1:9428"
-miss_file_path = "/Users/tangxiangyan/Documents/projects/wp/wp-wf-example/wparse/data/out_dat/miss.dat"
+miss_file_path = "/Users/tangxiangyan/Documents/projects/warp-rule/data/out_dat/miss.dat"

@@ -24,4 +24,6 @@ pub trait MissRepository: Send + Sync {
     async fn fetch_records(&self, query: MissQuery) -> Result<Vec<MissRecord>, AppError>;
     /// 获取 miss 数据总量。
     async fn count_total(&self) -> Result<u64, AppError>;
+    /// 清空miss数据
+    async fn clear_miss_data(&self, query: &str) -> Result<(), AppError>;
 }
