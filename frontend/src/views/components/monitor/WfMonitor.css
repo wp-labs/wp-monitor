@@ -91,7 +91,7 @@
   background: var(--wf-surface);
   border: 1px solid var(--wf-border);
   border-radius: var(--wf-radius);
-  overflow: hidden;
+  overflow: visible;
   box-shadow: var(--wf-shadow);
   display: flex;
   flex-direction: column;
@@ -108,11 +108,13 @@
   justify-content: space-between;
   color: var(--wf-text);
   flex: 0 0 auto;
+  border-radius: var(--wf-radius) var(--wf-radius) 0 0;
 }
 
 .panel-body {
   flex: 1 1 auto;
   min-height: 0;
+  border-radius: 0 0 var(--wf-radius) var(--wf-radius);
 }
 
 /* ── Table ── */

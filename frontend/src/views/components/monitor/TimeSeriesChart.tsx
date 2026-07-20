@@ -121,6 +121,7 @@ export default function TimeSeriesChart({
   const chartRef = useRef<HTMLDivElement | null>(null);
   const instanceRef = useRef<echarts.EChartsType | null>(null);
   const legendSelectedRef = useRef<Record<string, boolean> | null>(null);
+  const initedRef = useRef(false);
   const isMulti = Boolean(multiSeries && multiSeries.length > 0);
 
   const normalizedPoints = useMemo(
@@ -253,26 +254,41 @@ export default function TimeSeriesChart({
 
   const options = useMemo<EChartsOption>(() => ({
     animationDuration: 320,
-    animationDurationUpdate: 220,
+    animationDurationUpdate: 0,
     grid: {
       left: 68,
       right: 18,
-      top: isMulti && showLegend && legendPosition === 'top' ? 34 : 14,
+      top: isMulti && showLegend && legendPosition === 'top' ? 30 : 14,
       bottom: hideXAxis
-        ? (isMulti && showLegend && legendPosition === 'bottom' ? 28 : 12)
-        : (isMulti && showLegend && legendPosition === 'bottom' ? 48 : 32),
+        ? (isMulti && showLegend && legendPosition === 'bottom' ? 36 : 12)
+        : (isMulti && showLegend && legendPosition === 'bottom' ? 56 : 32),
       containLabel: false,
     },
     color: palette,
     legend: {
       show: isMulti && showLegend,
-      type: 'plain',
-      top: legendPosition === 'top' ? 4 : undefined,
-      bottom: legendPosition === 'bottom' ? 0 : undefined,
+      type: 'scroll',
+      top: legendPosition === 'top' ? 8 : undefined,
+      bottom: legendPosition === 'bottom' ? 8 : undefined,
       left: legendAlign === 'center' ? 'center' : legendAlign === 'right' ? 'right' : 'left',
       itemWidth: legendMarkerSize ?? 6,
       itemHeight: legendMarkerSize ?? 6,
       icon: 'circle',
+      pageIconSize: 10,
+      pageIcons: {
+        horizontal: [
+          'path://M15 18l-6-6 6-6',
+          'path://M9 18l6-6-6-6',
+        ],
+        vertical: [
+          'path://M18 15l-6-6 6-6',
+          'path://M18 9l-6 6 6 6',
+        ],
+      },
+      pageTextStyle: {
+        fontSize: 10,
+        fontFamily: 'var(--font-mono)',
+      },
       textStyle: {
         color: labelColor || '#7f94b4',
         fontSize: Number.parseInt(legendFontSize || '12', 10),
@@ -431,8 +447,17 @@ export default function TimeSeriesChart({
 
   useEffect(() => {
     if (!instanceRef.current) return;
-    instanceRef.current.setOption(options, true);
+    if (!initedRef.current) {
+      instanceRef.current.setOption(options, true);
+      initedRef.current = true;
+    } else {
+      instanceRef.current.setOption(options, false);
+    }
   }, [options]);
+
+  useEffect(() => {
+    return () => { initedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     if (!instanceRef.current) return;
