@@ -1077,33 +1077,45 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
 
   const MAX_CHART_SERIES = 20;
 
-  // build chart series (skip silent nodes with no activity)
+  // build chart series (skip silent nodes, sort desc by primary metric)
   const throughputChartSeries = useMemo(() => {
-    const active = throughputSeries.filter((s) => s.log_rate_eps.some((p) => p.value != null && p.value !== 0));
+    const valMap = new Map(sources.map((s) => [s.name, s.rows]));
+    const active = throughputSeries
+      .filter((s) => s.log_rate_eps.some((p) => p.value != null && p.value !== 0))
+      .sort((a, b) => (valMap.get(b.node_id) ?? 0) - (valMap.get(a.node_id) ?? 0));
     return active.slice(0, MAX_CHART_SERIES).map((s, i) => ({
       name: s.node_id,
       points: s.log_rate_eps,
       color: palette[i % palette.length],
     }));
-  }, [throughputSeries, palette]);
+  }, [throughputSeries, palette, sources]);
 
   const windowChartSeries = useMemo(() => {
-    const active = windowSeries.filter((s) => s.log_rate_eps.some((p) => p.value != null && p.value !== 0));
+    const valMap = new Map(windows.map((w) => {
+      const v = windowMetric === 'memory' ? w.memory_bytes : windowMetric === 'late' ? w.late_dropped : w.rows;
+      return [w.name, v] as const;
+    }));
+    const active = windowSeries
+      .filter((s) => s.log_rate_eps.some((p) => p.value != null && p.value !== 0))
+      .sort((a, b) => (valMap.get(b.node_id) ?? 0) - (valMap.get(a.node_id) ?? 0));
     return active.slice(0, MAX_CHART_SERIES).map((s, i) => ({
       name: s.node_id,
       points: s.log_rate_eps,
       color: palette[i % palette.length],
     }));
-  }, [windowSeries, palette]);
+  }, [windowSeries, palette, windows, windowMetric]);
 
   const alertChartSeries = useMemo(() => {
-    const active = alertSeries.filter((s) => s.log_rate_eps.some((p) => p.value != null && p.value !== 0));
+    const valMap = new Map(rules.map((r) => [r.name, r.emitted]));
+    const active = alertSeries
+      .filter((s) => s.log_rate_eps.some((p) => p.value != null && p.value !== 0))
+      .sort((a, b) => (valMap.get(b.node_id) ?? 0) - (valMap.get(a.node_id) ?? 0));
     return active.slice(0, MAX_CHART_SERIES).map((s, i) => ({
       name: s.node_id,
       points: s.log_rate_eps,
       color: palette[i % palette.length],
     }));
-  }, [alertSeries, palette]);
+  }, [alertSeries, palette, rules]);
 
   const fsSeriesList = useMemo(() => {
     if (fsChartKey === 'throughput') return throughputChartSeries;
