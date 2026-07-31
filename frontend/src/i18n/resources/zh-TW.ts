@@ -168,6 +168,7 @@ export const zhTW = {
         silent: '靜默',
         search: '搜尋...',
         colName: '規則',
+        colMatched: '命中數量',
         colEmitted: '產出告警',
         colInstances: '處理器實例',
         colMachine: '設備',

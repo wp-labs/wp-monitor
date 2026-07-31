@@ -58,8 +58,9 @@ interface MockState {
   receiverDelta: number;
   sourceData: Record<string, { rows: number; errors: number; lag: number }>;
   winData: Record<string, { rows: number; mem: number; late: number }>;
-  ruleData: Record<string, { emitted: number; instances: number; hitRate: number }>;
+  ruleData: Record<string, { matched: number; emitted: number; instances: number; hitRate: number }>;
   smAlerts: Record<string, number>;
+  smMatched: Record<string, number>;
   e2eP99: number;
   dispatchFailed: number;
   history: {
@@ -81,9 +82,12 @@ const state: MockState = {
     WINDOWS.map((w) => [w, { rows: 0, mem: 1024, late: 0 }]),
   ),
   ruleData: Object.fromEntries(
-    RULES.map((r) => [r, { emitted: 0, instances: 0, hitRate: 0 }]),
+    RULES.map((r) => [r, { matched: 0, emitted: 0, instances: 0, hitRate: 0 }]),
   ),
   smAlerts: Object.fromEntries(
+    Object.values(RULE_STATE_MACHINES).flat().map((sm) => [sm, 0]),
+  ),
+  smMatched: Object.fromEntries(
     Object.values(RULE_STATE_MACHINES).flat().map((sm) => [sm, 0]),
   ),
   e2eP99: 1.0,
@@ -136,13 +140,16 @@ export function tickMockState() {
     const sms = RULE_STATE_MACHINES[r] || [];
     const delta = rng(0, 30);
     d.emitted += delta;
+    d.matched += rng(delta, delta + rng(5, 50));
     d.instances = sms.length;
     d.hitRate = Math.random() * 40 + 5;
     if (sms.length > 0) {
       const perSM = Math.floor(delta / sms.length);
       let rem = delta % sms.length;
       for (let i = 0; i < sms.length; i++) {
-        s.smAlerts[sms[i]] += perSM + (i < rem ? 1 : 0);
+        const e = perSM + (i < rem ? 1 : 0);
+        s.smAlerts[sms[i]] += e;
+        s.smMatched[sms[i]] += e + rng(0, 10);
       }
     }
     pushHist(s.history.ruleEmitted[r], d.emitted);
@@ -197,6 +204,7 @@ export function buildPipelineResponse(): WfPipelineResponse {
   const totalInst = RULES.reduce((a, r) => a + state.ruleData[r].instances, 0);
   const avgHR = RULES.reduce((a, r) => a + state.ruleData[r].hitRate, 0) / RULES.length;
   const totalEmitted = RULES.reduce((a, r) => a + state.ruleData[r].emitted, 0);
+  const totalMatched = RULES.reduce((a, r) => a + state.ruleData[r].matched, 0);
 
   return {
     generated_at: new Date().toISOString(),
@@ -216,6 +224,7 @@ export function buildPipelineResponse(): WfPipelineResponse {
       rule_count: RULES.length,
       total_state_machines: totalInst,
       hit_rate_pct: Math.round(avgHR * 10) / 10,
+      total_matched: totalMatched,
       total_emitted: totalEmitted,
       send_failed: state.dispatchFailed,
       e2e_p99_ms: Math.round(state.e2eP99 * 1000) / 1000,
@@ -272,6 +281,7 @@ export function buildWindowsResponse(): WfWindowItem[] {
 export function buildRulesResponse(): WfRuleItem[] {
   return RULES.map((r) => ({
     name: r,
+    matched: state.ruleData[r].matched,
     emitted: state.ruleData[r].emitted,
     instances: state.ruleData[r].instances,
   }));
@@ -280,24 +290,25 @@ export function buildRulesResponse(): WfRuleItem[] {
 export function buildStateMachinesResponse(ruleName: string): WfStateMachineItem[] {
   const sms = RULE_STATE_MACHINES[ruleName] || [];
   return sms
-    .map((sm) => ({ scope_key: sm, emitted: state.smAlerts[sm] || 0 }))
+    .map((sm) => ({ scope_key: sm, matched: state.smMatched[sm] || 0, emitted: state.smAlerts[sm] || 0 }))
     .sort((a, b) => b.emitted - a.emitted);
 }
 
 export function buildRuleMachinesResponse(): WfRuleMachineItem[] {
-  const map = new Map<string, { emitted: number; count: number }>();
-  for (const m of MACHINES) map.set(m, { emitted: 0, count: 0 });
+  const map = new Map<string, { matched: number; emitted: number; count: number }>();
+  for (const m of MACHINES) map.set(m, { matched: 0, emitted: 0, count: 0 });
   for (const r of RULES) {
     const ms = RULE_MACHINES[r] || [];
     for (const m of ms) {
       const entry = map.get(m)!;
       entry.count += 1;
+      entry.matched += Math.floor(state.ruleData[r].matched / ms.length);
       entry.emitted += Math.floor(state.ruleData[r].emitted / ms.length);
     }
   }
   return [...map.entries()]
     .filter(([, v]) => v.count > 0)
-    .map(([machine, v]) => ({ machine, emitted: v.emitted, rule_count: v.count }));
+    .map(([machine, v]) => ({ machine, matched: v.matched, emitted: v.emitted, rule_count: v.count }));
 }
 
 function buildTimeSeries(

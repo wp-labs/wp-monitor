@@ -145,14 +145,21 @@ impl WfVmRepository {
             .await
             .source_raw_err(AppReason::VmRequestFailed, "wf vm instant query failed")
             .with_context(&ctx)?;
-        let data = resp
-            .json::<VmQueryResp>()
+        let resp_body = resp
+            .text()
             .await
             .source_raw_err(
                 AppReason::VmResponseInvalid,
-                "parse wf vm instant query response failed",
+                "read wf vm instant query response body failed",
             )
             .with_context(&ctx)?;
+        let data: VmQueryResp = serde_json::from_str(&resp_body).source_raw_err(
+            AppReason::VmResponseInvalid,
+            format!(
+                "parse wf vm instant query response failed, body: {}",
+                &resp_body[..resp_body.len().min(500)]
+            ),
+        )?;
         debug!(
             result_size = data.data.result.len(),
             "wf_repository.instant_query.success"
@@ -192,14 +199,21 @@ impl WfVmRepository {
             .await
             .source_raw_err(AppReason::VmRequestFailed, "wf vm range query failed")
             .with_context(&ctx)?;
-        let data = resp
-            .json::<VmRangeResp>()
+        let resp_body = resp
+            .text()
             .await
             .source_raw_err(
                 AppReason::VmResponseInvalid,
-                "parse wf vm range query response failed",
+                "read wf vm range query response body failed",
             )
             .with_context(&ctx)?;
+        let data: VmRangeResp = serde_json::from_str(&resp_body).source_raw_err(
+            AppReason::VmResponseInvalid,
+            format!(
+                "parse wf vm range query response failed, body: {}",
+                &resp_body[..resp_body.len().min(500)]
+            ),
+        )?;
         debug!(
             series_size = data.data.result.len(),
             "wf_repository.range_query.success"
