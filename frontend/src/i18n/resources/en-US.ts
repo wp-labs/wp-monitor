@@ -168,6 +168,7 @@ export const enUS = {
         silent: 'Silent',
         search: 'Search...',
         colName: 'Rule',
+        colMatched: 'Matched',
         colEmitted: 'Alerts Emitted',
         colInstances: 'Processor Instances',
         colMachine: 'Machine',

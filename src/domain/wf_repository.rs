@@ -86,6 +86,7 @@ pub struct WfWindowItem {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WfRuleItem {
     pub name: String,
+    pub matched: f64,
     pub emitted: f64,
     pub instances: f64,
     /// scope_key 维度的告警分布，随规则列表一起返回，保证数据对齐。

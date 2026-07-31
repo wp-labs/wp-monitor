@@ -524,6 +524,11 @@ impl WfRepository for WfVmRepository {
         let w = Self::query_window(start, end);
         let at = end;
 
+        let q_matched = format!(
+            "sum by (rule_name) (increase(wf_rule_matches_total{{rule_name!=\"\"}}[{}]))",
+            w
+        );
+
         let q_emitted = format!(
             "sum by (alert_name) (increase(wf_alert_emitted_total{{alert_name!=\"\"}}[{}]))",
             w
@@ -534,11 +539,17 @@ impl WfRepository for WfVmRepository {
             "sum by (alert_name, scope_key) (increase(wf_alert_emitted_total{{alert_name!=\"\",scope_key!=\"-\"}}[{}]))",
             w
         );
-        let (emitted, instances, scopes) = tokio::try_join!(
+        let (matched, emitted, instances, scopes) = tokio::try_join!(
+            self.instant_query(&q_matched, at),
             self.instant_query(&q_emitted, at),
             self.instant_query(&q_instances, at),
             self.instant_query(&q_scopes, at)
         )?;
+
+        let matched_map: HashMap<&str, f64> = matched
+            .iter()
+            .filter_map(|f| Some((f.metric.get("rule_name")?.as_str(), f.value)))
+            .collect();
 
         let inst_map: HashMap<&str, f64> = instances
             .iter()
@@ -570,6 +581,7 @@ impl WfRepository for WfVmRepository {
             .filter_map(|s| {
                 let name = s.metric.get("alert_name")?.clone();
                 Some(WfRuleItem {
+                    matched: matched_map.get(name.as_str()).copied().unwrap_or(0.0),
                     instances: inst_map.get(name.as_str()).copied().unwrap_or(0.0),
                     emitted: s.value,
                     state_machines: scopes_map.remove(name.as_str()).unwrap_or_default(),

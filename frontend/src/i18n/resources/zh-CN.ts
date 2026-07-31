@@ -166,6 +166,7 @@ export const zhCN = {
         silent: '静默',
         search: '搜索...',
         colName: '规则',
+        colMatched: '命中数量',
         colEmitted: '产出告警',
         colInstances: '处理器实例',
         colMachine: '设备',

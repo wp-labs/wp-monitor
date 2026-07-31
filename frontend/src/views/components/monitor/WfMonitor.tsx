@@ -689,7 +689,7 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
 
   // rule mode
   const ruleFiltered = useMemo(() => {
-    let list = rules.filter((r) => (r.emitted > 0) === (mode === 'active'));
+    let list = rules.filter((r) => (r.emitted > 0 || r.matched > 0) === (mode === 'active'));
     if (search) {
       const q = search.toLowerCase();
       list = list.filter((r) => r.name.toLowerCase().includes(q));
@@ -697,16 +697,18 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
     return sortItems(list, ps.sortBy, ps.sortDir, (r, f) => {
       if (f === 'name') return r.name;
       if (f === 'instances') return r.instances;
+      if (f === 'matched') return r.matched;
       return r.emitted;
     });
   }, [rules, mode, search, ps]);
 
   // machine mode
   const macFiltered = useMemo(() => {
-    const list = (machineData || []).filter((m) => (m.emitted > 0) === (mode === 'active'));
+    const list = (machineData || []).filter((m) => (m.emitted > 0 || m.matched > 0) === (mode === 'active'));
     return sortItems(list, ps.sortBy, ps.sortDir, (m, f) => {
       if (f === 'name') return m.machine;
       if (f === 'count') return m.rule_count;
+      if (f === 'matched') return m.matched;
       return m.emitted;
     });
   }, [machineData, mode, ps]);
@@ -762,12 +764,14 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
                   <>
                     {sortHeader(t('monitor.wf.alertTable.colMachine'), 'name', ps)}
                     {sortHeader(t('monitor.wf.alertTable.colRuleCount'), 'count', ps, true)}
+                    {sortHeader(t('monitor.wf.alertTable.colMatched'), 'matched', ps, true)}
                     {sortHeader(t('monitor.wf.alertTable.colEmitted'), 'emitted', ps, true)}
                   </>
                 )
                 : (
                   <>
                     {sortHeader(t('monitor.wf.alertTable.colName'), 'name', ps)}
+                    {sortHeader(t('monitor.wf.alertTable.colMatched'), 'matched', ps, true)}
                     {sortHeader(t('monitor.wf.alertTable.colEmitted'), 'emitted', ps, true)}
                     {sortHeader(t('monitor.wf.alertTable.colInstances'), 'instances', ps, true)}
                   </>
@@ -782,6 +786,7 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
                   <tr key={m.machine}>
                     <td className="name">{m.machine}</td>
                     <td className="num">{m.rule_count}</td>
+                    <td className="num" style={{ color: m.matched > 0 ? 'var(--orange)' : 'var(--wf-text-dim)' }}>{fmtNum(m.matched)}</td>
                     <td className="num" style={{ color: m.emitted > 0 ? 'var(--orange)' : 'var(--wf-text-dim)' }}>{fmtNum(m.emitted)}</td>
                   </tr>
                 );
@@ -812,6 +817,7 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
               return (
                 <tr key={r.name}>
                   <td className="name">{r.name}</td>
+                  <td className="num" style={{ color: r.matched > 0 ? 'var(--orange)' : 'var(--wf-text-dim)' }}>{fmtNum(r.matched)}</td>
                   <td className="num" style={{ color: r.emitted > 0 ? 'var(--orange)' : 'var(--wf-text-dim)' }}>{fmtNum(r.emitted)}</td>
                   <td className="num">{cell}</td>
                 </tr>
@@ -944,12 +950,19 @@ function TrendChart({
 
 // ── Main WfMonitor ──
 
+const EMPTY_PIPELINE: WfPipelineResponse = {
+  generated_at: '',
+  receiver: { total_rows: 0, rate_rows_per_sec: 0, route_errors: 0, source_count: 0 },
+  window: { window_count: 0, total_rows: 0, total_memory_bytes: 0, late_dropped: 0 },
+  rule: { rule_count: 0, total_state_machines: 0, hit_rate_pct: 0, total_emitted: 0, send_failed: 0, e2e_p99_ms: 0, total_matched: 0 },
+};
+
 export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { startTime: string; endTime: string; refreshIntervalSec: number }) {
   const { t } = useTranslation();
   const { theme } = useTheme();
   const palette = useMemo(() => getPalette(theme), [theme]);
 
-  const [pipeline, setPipeline] = useState<WfPipelineResponse | null>(null);
+  const [pipeline, setPipeline] = useState<WfPipelineResponse>(EMPTY_PIPELINE);
   const [sources, setSources] = useState<WfSourceItem[]>([]);
   const [windows, setWindows] = useState<WfWindowItem[]>([]);
   const [rules, setRules] = useState<WfRuleItem[]>([]);
@@ -1048,19 +1061,12 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
     const e = new Date(now).toISOString();
     const s = new Date(now - (durationMs > 0 ? durationMs : 5 * 60 * 1000)).toISOString();
 
-    // 阶段 1：快照数据（instant query，快），批量更新减少 render 次数
-    const [pipelineRes, sourcesRes, windowsRes, rulesRes] = await Promise.allSettled([
-      fetchWfPipeline(s, e),
-      fetchWfSources(s, e),
-      fetchWfWindows(s, e),
-      fetchWfRules(s, e),
-    ]);
-    if (gen >= loadGenRef.current) {
-      if (pipelineRes.status === 'fulfilled') setPipeline(pipelineRes.value.data);
-      if (sourcesRes.status === 'fulfilled') setSources(sourcesRes.value.data);
-      if (windowsRes.status === 'fulfilled') setWindows(windowsRes.value.data);
-      if (rulesRes.status === 'fulfilled') setRules(rulesRes.value.data);
-    }
+    // 阶段 1：快照数据独立请求，每个到达即渲染，pipeline 最先到达则最快展示页面框架
+    const p1 = fetchWfPipeline(s, e).then((res) => { if (gen >= loadGenRef.current) setPipeline(res.data); }).catch(() => {});
+    const p2 = fetchWfSources(s, e).then((res) => { if (gen >= loadGenRef.current) setSources(res.data); }).catch(() => {});
+    const p3 = fetchWfWindows(s, e).then((res) => { if (gen >= loadGenRef.current) setWindows(res.data); }).catch(() => {});
+    const p4 = fetchWfRules(s, e).then((res) => { if (gen >= loadGenRef.current) setRules(res.data); }).catch(() => {});
+    await Promise.all([p1, p2, p3, p4]);
 
     // 阶段 2：时序数据（range query，可能较慢），批量更新
     const [tsRes, wsRes, asRes] = await Promise.allSettled([
@@ -1136,10 +1142,6 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
     }
     return { vf: fsValueFormatter, avf: fsAxisValueFormatter, unit: fsYAxisUnit };
   }, [fsChartKey, winFormatter, fsValueFormatter, fsAxisValueFormatter, fsYAxisUnit]);
-
-  if (!pipeline) {
-    return <div style={{ padding: 24, color: 'var(--wf-text-dim)' }}>{t('monitor.wf.loading')}</div>;
-  }
 
   return (
     <div className="main">

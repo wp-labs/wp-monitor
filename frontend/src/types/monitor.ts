@@ -167,6 +167,7 @@ export interface WfPipelineRule {
   rule_count: number;
   total_state_machines: number;
   hit_rate_pct: number;
+  total_matched: number;
   total_emitted: number;
   send_failed: number;
   e2e_p99_ms: number;
@@ -205,6 +206,7 @@ export interface WfWindowItem {
 
 export interface WfRuleItem {
   name: string;
+  matched: number;
   emitted: number;
   instances: number;
   state_machines?: WfStateMachineItem[];
@@ -212,11 +214,13 @@ export interface WfRuleItem {
 
 export interface WfStateMachineItem {
   scope_key: string;
+  matched: number;
   emitted: number;
 }
 
 export interface WfRuleMachineItem {
   machine: string;
+  matched: number;
   emitted: number;
   rule_count: number;
 }
