@@ -501,25 +501,25 @@ function WindowTable({ windows }: { windows: WfWindowItem[] }) {
 
 function SmPopover({
   ruleName,
-  totalEmitted,
   totalInstances,
   stateMachines,
   triggerEl,
+  startFullscreen,
   onClose,
   onClearCloseTimer,
 }: {
   ruleName: string;
-  totalEmitted: number;
   totalInstances: number;
   stateMachines: WfStateMachineItem[];
   triggerEl: HTMLElement;
+  startFullscreen?: boolean;
   onClose: () => void;
   onClearCloseTimer: () => void;
 }) {
   const { t } = useTranslation();
   const [pos, setPos] = useState<{ top: number; left: number; dir: 'above' | 'below'; arrowX: number }>({ top: 0, left: 0, dir: 'above', arrowX: 50 });
   const [visible, setVisible] = useState(false);
-  const [fsOpen, setFsOpen] = useState(false);
+  const [fsOpen, setFsOpen] = useState(Boolean(startFullscreen));
   const popRef = useRef<HTMLDivElement>(null);
   const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -566,6 +566,10 @@ function SmPopover({
     };
   }, [triggerEl]);
 
+  useEffect(() => {
+    if (startFullscreen) setFsOpen(true);
+  }, [startFullscreen]);
+
   const handleMouseEnter = () => {
     onClearCloseTimer();
     if (hideTimer.current !== null) {
@@ -575,11 +579,16 @@ function SmPopover({
   };
 
   const handleMouseLeave = () => {
+    if (fsOpen) return;
     hideTimer.current = setTimeout(onClose, 150);
   };
 
   const shown = allItems.slice(0, 4);
   const totalItems = allItems.length;
+  const closeFullscreen = () => {
+    setFsOpen(false);
+    onClose();
+  };
 
   return (
     <>
@@ -605,12 +614,6 @@ function SmPopover({
                   {shown.map((si) => (
                     <div className="pop-item" key={si.scope_key}>
                       <span className="pop-name">{si.scope_key}</span>
-                      <span className="pop-bar-wrap">
-                        <span
-                          className="pop-bar"
-                          style={{ width: `${totalEmitted > 0 ? Math.max(2, (si.emitted / totalEmitted) * 100).toFixed(0) : 0}%` }}
-                        />
-                      </span>
                       <span className="pop-val">{fmtNum(si.emitted)}</span>
                     </div>
                   ))}
@@ -629,25 +632,36 @@ function SmPopover({
       </div>
 
       {fsOpen && (
-        <div className="fullscreen-overlay show" style={{ background: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFsOpen(false)}>
-          <div style={{ maxWidth: 480, width: '100%', background: 'var(--surface-overlay)', borderRadius: '8px 8px 0 0', margin: '0 auto', borderBottom: '1px solid var(--wf-border-light)', padding: '12px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>{ruleName} · {t('monitor.wf.popover.instances', { count: totalItems })}</span>
-            <span style={{ fontSize: 14, width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--wf-text-dim)', cursor: 'pointer' }} onClick={() => setFsOpen(false)}>✕</span>
-          </div>
-          <div style={{ maxWidth: 480, width: '100%', background: 'var(--surface-overlay)', borderRadius: '0 0 8px 8px', margin: '0 auto', display: 'flex', flexDirection: 'column', maxHeight: '55vh', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
-            <div style={{ padding: '4px 0', overflowY: 'auto' }}>
-              {allItems.map((si) => (
-                <div className="pop-item" key={si.scope_key}>
-                  <span className="pop-name">{si.scope_key}</span>
-                  <span className="pop-bar-wrap">
-                    <span
-                      className="pop-bar"
-                      style={{ width: `${totalEmitted > 0 ? Math.max(2, (si.emitted / totalEmitted) * 100).toFixed(0) : 0}%` }}
-                    />
-                  </span>
-                  <span className="pop-val">{fmtNum(si.emitted)}</span>
+        <div className="fullscreen-overlay show sm-dialog-overlay" onClick={closeFullscreen}>
+          <div className="sm-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="sm-dialog-head">
+              <div className="sm-dialog-title-wrap">
+                <span className="sm-dialog-kicker">{t('monitor.wf.alertTable.colInstances')}</span>
+                <span className="sm-dialog-title" title={ruleName}>{ruleName}</span>
+              </div>
+              <div className="sm-dialog-head-actions">
+                <span className="sm-dialog-count">{t('monitor.wf.popover.instances', { count: totalItems })}</span>
+                <button className="sm-dialog-close" type="button" onClick={closeFullscreen} aria-label="Close">✕</button>
+              </div>
+            </div>
+            <div className="sm-dialog-columns">
+              <span>#</span>
+              <span>{t('monitor.wf.alertTable.colInstances')}</span>
+              <span>{t('monitor.wf.alertTable.colEmitted')}</span>
+            </div>
+            <div className="sm-dialog-list">
+              {allItems.map((si, index) => (
+                <div className="sm-dialog-row" key={si.scope_key}>
+                  <span className="sm-dialog-rank">{String(index + 1).padStart(2, '0')}</span>
+                  <div className="sm-dialog-instance">
+                    <span className="sm-dialog-name" title={si.scope_key}>{si.scope_key}</span>
+                  </div>
+                  <span className="sm-dialog-value">{fmtNum(si.emitted)}</span>
                 </div>
               ))}
+              {allItems.length === 0 && (
+                <div className="sm-dialog-empty">{t('monitor.wf.popover.noInstances')}</div>
+              )}
             </div>
           </div>
         </div>
@@ -667,6 +681,7 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
   const [machineData, setMachineData] = useState<WfRuleMachineItem[] | null>(null);
   const [hoverRule, setHoverRule] = useState<string | null>(null);
   const [hoverTrigger, setHoverTrigger] = useState<HTMLElement | null>(null);
+  const [openInstancesDirectly, setOpenInstancesDirectly] = useState(false);
   const hoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearHoverCloseTimer = () => {
@@ -677,6 +692,7 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
   };
 
   const scheduleHoverClose = () => {
+    if (openInstancesDirectly) return;
     clearHoverCloseTimer();
     hoverCloseTimerRef.current = setTimeout(() => setHoverRule(null), 150);
   };
@@ -764,14 +780,12 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
                   <>
                     {sortHeader(t('monitor.wf.alertTable.colMachine'), 'name', ps)}
                     {sortHeader(t('monitor.wf.alertTable.colRuleCount'), 'count', ps, true)}
-                    {sortHeader(t('monitor.wf.alertTable.colMatched'), 'matched', ps, true)}
                     {sortHeader(t('monitor.wf.alertTable.colEmitted'), 'emitted', ps, true)}
                   </>
                 )
                 : (
                   <>
                     {sortHeader(t('monitor.wf.alertTable.colName'), 'name', ps)}
-                    {sortHeader(t('monitor.wf.alertTable.colMatched'), 'matched', ps, true)}
                     {sortHeader(t('monitor.wf.alertTable.colEmitted'), 'emitted', ps, true)}
                     {sortHeader(t('monitor.wf.alertTable.colInstances'), 'instances', ps, true)}
                   </>
@@ -786,7 +800,6 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
                   <tr key={m.machine}>
                     <td className="name">{m.machine}</td>
                     <td className="num">{m.rule_count}</td>
-                    <td className="num" style={{ color: m.matched > 0 ? 'var(--orange)' : 'var(--wf-text-dim)' }}>{fmtNum(m.matched)}</td>
                     <td className="num" style={{ color: m.emitted > 0 ? 'var(--orange)' : 'var(--wf-text-dim)' }}>{fmtNum(m.emitted)}</td>
                   </tr>
                 );
@@ -799,11 +812,13 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
                     data-rule={r.name}
                     onClick={(e) => {
                       clearHoverCloseTimer();
+                      setOpenInstancesDirectly(true);
                       setHoverRule(r.name);
                       setHoverTrigger(e.currentTarget as HTMLElement);
                     }}
                     onMouseEnter={(e) => {
                       clearHoverCloseTimer();
+                      setOpenInstancesDirectly(false);
                       setHoverRule(r.name);
                       setHoverTrigger(e.currentTarget as HTMLElement);
                     }}
@@ -817,7 +832,6 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
               return (
                 <tr key={r.name}>
                   <td className="name">{r.name}</td>
-                  <td className="num" style={{ color: r.matched > 0 ? 'var(--orange)' : 'var(--wf-text-dim)' }}>{fmtNum(r.matched)}</td>
                   <td className="num" style={{ color: r.emitted > 0 ? 'var(--orange)' : 'var(--wf-text-dim)' }}>{fmtNum(r.emitted)}</td>
                   <td className="num">{cell}</td>
                 </tr>
@@ -837,11 +851,14 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
         return (
         <SmPopover
           ruleName={hoverRule}
-          totalEmitted={rule?.emitted || 0}
           totalInstances={rule?.instances || 0}
           stateMachines={rule?.state_machines || []}
           triggerEl={hoverTrigger}
-          onClose={() => setHoverRule(null)}
+          startFullscreen={openInstancesDirectly}
+          onClose={() => {
+            setHoverRule(null);
+            setOpenInstancesDirectly(false);
+          }}
           onClearCloseTimer={clearHoverCloseTimer}
         />
         );

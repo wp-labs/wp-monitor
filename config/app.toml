@@ -1,5 +1,5 @@
 # vm_base_url = "http://43.135.36.218:18429"
-vm_base_url = "http://10.168.1.145:30428"
+vm_base_url = "http://127.0.0.1:8428"
 log_level = "info"
 vlog_base_url = "http://127.0.0.1:9428"
 miss_file_path = "/Users/tangxiangyan/Documents/projects/warp-rule/data/out_dat/miss.dat"
