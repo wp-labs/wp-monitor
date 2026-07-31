@@ -1,6 +1,6 @@
 [package]
 name = "wp_monitor"
-version = "1.0.7" #@gxl:set(version)
+version = "1.0.8" #@gxl:set(version)
 edition = "2024"
 
 [dependencies]
