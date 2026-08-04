@@ -471,6 +471,21 @@ export default function TimeSeriesChart({
     };
   }, []);
 
+  // 修复：父级用 visibility:hidden 隐藏时 canvas 不绘制，变为可见后需手动重绘
+  useEffect(() => {
+    if (!chartRef.current || !instanceRef.current) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          instanceRef.current?.resize();
+        }
+      },
+      { threshold: 0 },
+    );
+    observer.observe(chartRef.current);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <div className="spark">
       <div ref={chartRef} className="spark-chart" />

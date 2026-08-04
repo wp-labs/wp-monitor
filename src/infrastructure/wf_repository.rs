@@ -53,6 +53,7 @@ struct VmRangeItem {
 struct VmSeriesValue {
     metric: HashMap<String, String>,
     value: f64,
+    ts: f64, // Unix timestamp of the sample, used for dedup
 }
 struct VmRangeSeries {
     metric: HashMap<String, String>,
@@ -116,6 +117,22 @@ impl WfVmRepository {
         series.first().map(|s| s.value).unwrap_or(0.0)
     }
 
+    /// 按 window_name 分组，每组取时间戳最新的那条的 value。
+    fn pick_latest_by_window_name(series: &[VmSeriesValue]) -> HashMap<&str, f64> {
+        let mut map: HashMap<&str, (f64, f64)> = HashMap::new();
+        for s in series {
+            let name = match s.metric.get("window_name") {
+                Some(n) => n.as_str(),
+                None => continue,
+            };
+            let entry = map.entry(name).or_default();
+            if s.ts > entry.0 {
+                *entry = (s.ts, s.value);
+            }
+        }
+        map.into_iter().map(|(k, (_, v))| (k, v)).collect()
+    }
+
     fn range_to_time_points(values: &[(i64, f64)]) -> Vec<TimePoint> {
         values
             .iter()
@@ -171,6 +188,7 @@ impl WfVmRepository {
             .map(|item| VmSeriesValue {
                 metric: item.metric,
                 value: Self::parse_value(item.value[1].as_str().unwrap_or("0")),
+                ts: item.value[0].as_f64().unwrap_or(0.0),
             })
             .collect())
     }
@@ -483,10 +501,11 @@ impl WfRepository for WfVmRepository {
         let w = Self::query_window(start, end);
         let at = end;
 
-        let q_rows = "sum by (window_name) (wf_window_rows_total{window_name!=\"\"})".to_string();
-        let q_mem = "sum by (window_name) (wf_window_memory_bytes{window_name!=\"\"})".to_string();
+        // 用 last_over_time 取全窗口内的最后值，不聚合，由代码按时间戳去重
+        let q_rows = format!("last_over_time(wf_window_rows_total{{window_name!=\"\"}}[{w}])");
+        let q_mem = format!("last_over_time(wf_window_memory_bytes{{window_name!=\"\"}}[{w}])");
         let q_cap =
-            "sum by (window_name) (wf_window_memory_capacity_bytes{window_name!=\"\"})".to_string();
+            format!("last_over_time(wf_window_memory_capacity_bytes{{window_name!=\"\"}}[{w}])");
         let q_late = format!(
             "sum by (window_name) (increase(wf_window_late_total{{window_name!=\"\"}}[{}]))",
             w
@@ -498,30 +517,24 @@ impl WfRepository for WfVmRepository {
             self.instant_query(&q_late, at),
         )?;
 
-        let mem_map: HashMap<&str, f64> = mem
-            .iter()
-            .filter_map(|s| Some((s.metric.get("window_name")?.as_str(), s.value)))
-            .collect();
-        let cap_map: HashMap<&str, f64> = cap
-            .iter()
-            .filter_map(|s| Some((s.metric.get("window_name")?.as_str(), s.value)))
-            .collect();
+        // 按 window_name 分组，取时间戳最新的值，去除重启产生的 stale 时间序列
+        let rows_map = Self::pick_latest_by_window_name(&rows);
+        let mem_map = Self::pick_latest_by_window_name(&mem);
+        let cap_map = Self::pick_latest_by_window_name(&cap);
         let late_map: HashMap<&str, f64> = late
             .iter()
             .filter_map(|s| Some((s.metric.get("window_name")?.as_str(), s.value)))
             .collect();
 
-        Ok(rows
-            .iter()
-            .filter_map(|s| {
-                let name = s.metric.get("window_name")?.clone();
-                Some(WfWindowItem {
-                    memory_bytes: mem_map.get(name.as_str()).copied().unwrap_or(0.0),
-                    capacity_bytes: cap_map.get(name.as_str()).copied().unwrap_or(0.0),
-                    late_dropped: late_map.get(name.as_str()).copied().unwrap_or(0.0),
-                    rows: s.value,
-                    name,
-                })
+        // 以 rows 窗口名称为基准（counter 最全），合并其余指标
+        Ok(rows_map
+            .into_iter()
+            .map(|(name, rows_val)| WfWindowItem {
+                memory_bytes: mem_map.get(name).copied().unwrap_or(0.0),
+                capacity_bytes: cap_map.get(name).copied().unwrap_or(0.0),
+                late_dropped: late_map.get(name).copied().unwrap_or(0.0),
+                rows: rows_val,
+                name: name.to_string(),
             })
             .collect())
     }

@@ -197,6 +197,9 @@ export const zhTW = {
       },
       loading: '載入中...',
       totalRecords: '共 {{total}} 條',
+      error: {
+        fetchFailed: 'wfusion 資料獲取失敗，請檢查後端服務或網路連線',
+      },
     },
     error: {
       invalidTimeRange: '開始時間必須早於結束時間',

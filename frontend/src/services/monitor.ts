@@ -41,11 +41,17 @@ function normalizeMaxDataPoints(maxDataPoints?: number) {
 /** 统一请求：成功返回 ApiResp<T>，失败抛出 ApiError（含 code/message/hints） */
 async function requestJson<T>(url: string) {
   const resp = await fetch(url);
-  const body = await resp.json();
   if (!resp.ok) {
-    const err = body as ApiErrorBody;
-    throw new ApiError(err);
+    const contentType = resp.headers.get('content-type') || '';
+    const isJson = contentType.includes('application/json');
+    const raw = await resp.text().catch(() => '');
+    let body: ApiErrorBody | null = null;
+    if (isJson && raw) {
+      try { body = JSON.parse(raw) as ApiErrorBody; } catch { /* use null */ }
+    }
+    throw new ApiError(body ?? { status: resp.status, code: String(resp.status), category: 'http', message: raw.slice(0, 200) || `HTTP ${resp.status}`, visibility: 'user', hints: [] });
   }
+  const body = await resp.json();
   return body as ApiResp<T>;
 }
 
@@ -74,11 +80,17 @@ async function requestPostJson<T>(url: string, body: unknown) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const json = await resp.json();
   if (!resp.ok) {
-    const err = json as ApiErrorBody;
-    throw new ApiError(err);
+    const contentType = resp.headers.get('content-type') || '';
+    const isJson = contentType.includes('application/json');
+    const raw = await resp.text().catch(() => '');
+    let errBody: ApiErrorBody | null = null;
+    if (isJson && raw) {
+      try { errBody = JSON.parse(raw) as ApiErrorBody; } catch { /* use null */ }
+    }
+    throw new ApiError(errBody ?? { status: resp.status, code: String(resp.status), category: 'http', message: raw.slice(0, 200) || `HTTP ${resp.status}`, visibility: 'user', hints: [] });
   }
+  const json = await resp.json();
   return json as ApiResp<T>;
 }
 

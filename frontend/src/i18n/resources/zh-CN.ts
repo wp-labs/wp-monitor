@@ -195,6 +195,9 @@ export const zhCN = {
       },
       loading: '加载中...',
       totalRecords: '共 {{total}} 条',
+      error: {
+        fetchFailed: 'wfusion 数据获取失败，请检查后端服务或网络连接',
+      },
     },
     error: {
       invalidTimeRange: '开始时间必须早于结束时间',

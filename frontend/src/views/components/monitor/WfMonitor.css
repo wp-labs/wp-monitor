@@ -8,6 +8,19 @@
   min-height: 0;
 }
 
+/* ── Error banner ── */
+.wf-error-banner {
+  background: rgba(220, 53, 69, 0.12);
+  border: 1px solid rgba(220, 53, 69, 0.35);
+  border-radius: 6px;
+  padding: 10px 14px;
+  color: var(--danger, #dc3545);
+  font-size: 13px;
+  font-family: var(--font-mono);
+  line-height: 1.5;
+  text-align: center;
+}
+
 /* ── Pipeline stages ── */
 .pipeline {
   display: flex;

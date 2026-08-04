@@ -197,6 +197,9 @@ export const enUS = {
       },
       loading: 'Loading...',
       totalRecords: '{{total}} total',
+      error: {
+        fetchFailed: 'Failed to load wfusion data. Check backend service or network.',
+      },
     },
     error: {
       invalidTimeRange: 'Start time must be earlier than end time',

@@ -365,11 +365,12 @@ export default function WpMonitorPage() {
   }
 
   async function refreshMetricsOnly() {
-    if (!snapshot) return;
+    const snap = snapshotRef.current;
+    if (!snap) return;
     triggerRefreshSpin();
     try {
-      const ids = collectAllNodeIds(snapshot);
-      const pkgFilters = filteredParses
+      const ids = collectAllNodeIds(snap);
+      const pkgFilters = filteredParsesRef.current
         .map((pkg) => ({
           packageName: pkg.package_name,
           ruleNames: filterLogsByMode(pkg.logs, parseFilterRef.current).map((log) => log.name),
@@ -380,7 +381,7 @@ export default function WpMonitorPage() {
       const nextEnd = nextRange.end;
       const data = await fetchMetrics(nextStart, nextEnd, ids, pkgFilters);
 
-      const prevVer = snapshot.meta.layer_versions;
+      const prevVer = snap.meta.layer_versions;
       const nextVer = data.layer_versions;
       if (
         prevVer.source_version !== nextVer.source_version ||
@@ -434,19 +435,17 @@ export default function WpMonitorPage() {
   }, []);
 
   useEffect(() => {
-    if (!autoRefreshEnabled || isTimeSelectionPending) return;
+    if (!autoRefreshEnabled || isTimeSelectionPending || activeTab !== 'pipeline') return;
     const timer = setInterval(() => {
       void refreshMetricsOnly();
     }, refreshIntervalSec * 1000);
     return () => clearInterval(timer);
   }, [
-    snapshot,
-    startTime,
-    endTime,
     autoRefreshEnabled,
     activeRangeKey,
     refreshIntervalSec,
     isTimeSelectionPending,
+    activeTab,
   ]);
 
   useEffect(() => {
@@ -572,6 +571,9 @@ export default function WpMonitorPage() {
     });
   }, [snapshot, parseFilter, parseQuery, isSearching, parseSearchTargetPkgIds]);
 
+  const filteredParsesRef = useRef(filteredParses);
+  filteredParsesRef.current = filteredParses;
+
   const parsePages = useMemo(() => {
     const pages: (typeof filteredParses)[] = [];
     let cur: typeof filteredParses = [];
@@ -634,7 +636,8 @@ export default function WpMonitorPage() {
       !detailTrendAutoRefresh ||
       !autoRefreshEnabled ||
       isTimeSelectionPending ||
-      drawerLoading
+      drawerLoading ||
+      activeTab !== 'pipeline'
     )
       return;
     const startMs = new Date(detailStartTime).getTime();
@@ -694,6 +697,7 @@ export default function WpMonitorPage() {
     detailTrendMetricMode,
     parseSeriesList,
     t,
+    activeTab,
   ]);
 
   useEffect(() => {
@@ -705,7 +709,8 @@ export default function WpMonitorPage() {
       !detailTrendAutoRefresh ||
       !autoRefreshEnabled ||
       isTimeSelectionPending ||
-      drawerLoading
+      drawerLoading ||
+      activeTab !== 'pipeline'
     )
       return;
     const startMs = new Date(detailStartTime).getTime();
@@ -792,6 +797,7 @@ export default function WpMonitorPage() {
     refreshIntervalSec,
     detailTrendMetricMode,
     t,
+    activeTab,
   ]);
 
   const parseSearchGroups = useMemo(() => {
@@ -1635,7 +1641,7 @@ export default function WpMonitorPage() {
         {(enginePreloaded || activeTab === 'engine') && (
           <Suspense fallback={<div style={{ padding: 24, color: 'var(--text-dim)' }}>加载中...</div>}>
             <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-              <WfMonitor startTime={startTime} endTime={endTime} refreshIntervalSec={refreshIntervalSec} />
+              <WfMonitor startTime={startTime} endTime={endTime} refreshIntervalSec={refreshIntervalSec} active={activeTab === 'engine'} />
             </div>
           </Suspense>
         )}

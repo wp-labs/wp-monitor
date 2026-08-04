@@ -221,14 +221,20 @@ function SourceTable({ sources, timeRange }: { sources: WfSourceItem[]; timeRang
   const [groupBy, setGroupBy] = useState<'source' | 'machine'>('source');
   const [machineData, setMachineData] = useState<WfSourceMachineItem[] | null>(null);
   const [machineLoading, setMachineLoading] = useState(false);
+  const machineGenRef = useRef(0);
 
   // lazy-load machine data, re-fetch on time change; only show loading on initial fetch
   useEffect(() => {
     if (groupBy === 'machine') {
+      const gen = ++machineGenRef.current;
       if (!machineData) setMachineLoading(true);
       fetchWfSourceMachines(timeRange.start, timeRange.end).then((r) => {
-        setMachineData(r.data);
-        setMachineLoading(false);
+        if (gen >= machineGenRef.current) {
+          setMachineData(r.data);
+          setMachineLoading(false);
+        }
+      }).catch(() => {
+        if (gen >= machineGenRef.current) setMachineLoading(false);
       });
     }
   }, [groupBy, timeRange.start, timeRange.end]);
@@ -697,9 +703,14 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
     hoverCloseTimerRef.current = setTimeout(() => setHoverRule(null), 150);
   };
 
+  const alertMachineGenRef = useRef(0);
+
   useEffect(() => {
     if (groupBy === 'machine') {
-      fetchWfRuleMachines(timeRange.start, timeRange.end).then((r) => setMachineData(r.data));
+      const gen = ++alertMachineGenRef.current;
+      fetchWfRuleMachines(timeRange.start, timeRange.end).then((r) => {
+        if (gen >= alertMachineGenRef.current) setMachineData(r.data);
+      }).catch(() => {});
     }
   }, [groupBy, timeRange.start, timeRange.end]);
 
@@ -884,6 +895,7 @@ function TrendChart({
   axisValueFormatter: avfProp,
   xMin,
   xMax,
+  loading,
 }: {
   title: string;
   seriesList: Array<{ name: string; points: TimePoint[]; color: string }>;
@@ -899,12 +911,13 @@ function TrendChart({
   axisValueFormatter?: (v: number) => string;
   xMin?: number;
   xMax?: number;
+  loading?: boolean;
 }) {
   const { t } = useTranslation();
   const multiSeries = seriesList.length > 0 ? seriesList : undefined;
   const singlePoints = seriesList.length === 1 ? seriesList[0].points : [];
   const color = seriesList.length === 1 ? seriesList[0].color : palette[0];
-  const ceil2 = (v: number) => (Math.ceil(v * 100) / 100).toString();
+  const ceil2 = useMemo(() => (v: number) => (Math.ceil(v * 100) / 100).toString(), []);
   const vf = vfProp ?? ceil2;
   const avf = avfProp ?? ceil2;
 
@@ -956,6 +969,8 @@ function TrendChart({
               xMin={xMin}
               xMax={xMax}
             />
+          ) : loading ? (
+            <div style={{ padding: 12, color: 'var(--wf-text-dim)', fontSize: 12 }}>{t('monitor.wf.loading')}</div>
           ) : (
             <div style={{ padding: 12, color: 'var(--wf-text-dim)', fontSize: 12 }}>{t('monitor.wf.chart.noData')}</div>
           )}
@@ -974,7 +989,7 @@ const EMPTY_PIPELINE: WfPipelineResponse = {
   rule: { rule_count: 0, total_state_machines: 0, hit_rate_pct: 0, total_emitted: 0, send_failed: 0, e2e_p99_ms: 0, total_matched: 0 },
 };
 
-export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { startTime: string; endTime: string; refreshIntervalSec: number }) {
+export default function WfMonitor({ startTime, endTime, refreshIntervalSec, active = true }: { startTime: string; endTime: string; refreshIntervalSec: number; active?: boolean }) {
   const { t } = useTranslation();
   const { theme } = useTheme();
   const palette = useMemo(() => getPalette(theme), [theme]);
@@ -983,6 +998,7 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
   const [sources, setSources] = useState<WfSourceItem[]>([]);
   const [windows, setWindows] = useState<WfWindowItem[]>([]);
   const [rules, setRules] = useState<WfRuleItem[]>([]);
+  const [fetchError, setFetchError] = useState('');
 
   const [throughputGroupBy] = useState<'source' | 'machine'>('source');
   const [throughputSeries, setThroughputSeries] = useState<NodeTimeSeries[]>([]);
@@ -992,6 +1008,7 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
 
   const [alertGroupBy] = useState<'rule' | 'machine'>('rule');
   const [alertSeries, setAlertSeries] = useState<NodeTimeSeries[]>([]);
+  const [timeseriesLoading, setTimeseriesLoading] = useState(false);
   const [fsOpen, setFsOpen] = useState(false);
   const [fsChartKey, setFsChartKey] = useState<'throughput' | 'window' | 'alerts'>('throughput');
   const [fsTitle, setFsTitle] = useState('');
@@ -1048,6 +1065,21 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshIntervalSec]);
 
+  // When the tab becomes visible (switching from wparse to wfusion),
+  // immediately fetch fresh data instead of waiting for the next auto-refresh.
+  // Skip the initial mount to avoid double-fetch with the [refreshIntervalSec] effect.
+  const activeFirstRenderRef = useRef(true);
+  useEffect(() => {
+    if (activeFirstRenderRef.current) {
+      activeFirstRenderRef.current = false;
+      return;
+    }
+    if (active) {
+      loadAll();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
+
   // When the user intentionally changes the time range (different duration),
   // trigger an immediate fetch. Auto-refresh keeps the same duration so this
   // does NOT fire on every parent update.
@@ -1060,14 +1092,16 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
   }, [startTime, endTime]);
 
   // 窗口指标切换时立即拉取时序
+  // Uses its own generation counter so it never invalidates in-flight loadAll responses.
+  const windowMetricGenRef = useRef(0);
   useEffect(() => {
-    const gen = ++loadGenRef.current;
+    const gen = ++windowMetricGenRef.current;
     const durationMs = durationMsRef.current;
     const now = Date.now();
     const e = new Date(now).toISOString();
     const s = new Date(now - (durationMs > 0 ? durationMs : 5 * 60 * 1000)).toISOString();
     fetchWfTimeseriesWindows(s, e, windowMetric)
-      .then((res) => { if (gen >= loadGenRef.current) setWindowSeries(res.data); })
+      .then((res) => { if (gen >= windowMetricGenRef.current) setWindowSeries(res.data); })
       .catch(() => {});
   }, [windowMetric]);
 
@@ -1078,14 +1112,23 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
     const e = new Date(now).toISOString();
     const s = new Date(now - (durationMs > 0 ? durationMs : 5 * 60 * 1000)).toISOString();
 
+    if (gen >= loadGenRef.current) setFetchError('');
+
     // 阶段 1：快照数据独立请求，每个到达即渲染，pipeline 最先到达则最快展示页面框架
-    const p1 = fetchWfPipeline(s, e).then((res) => { if (gen >= loadGenRef.current) setPipeline(res.data); }).catch(() => {});
-    const p2 = fetchWfSources(s, e).then((res) => { if (gen >= loadGenRef.current) setSources(res.data); }).catch(() => {});
-    const p3 = fetchWfWindows(s, e).then((res) => { if (gen >= loadGenRef.current) setWindows(res.data); }).catch(() => {});
-    const p4 = fetchWfRules(s, e).then((res) => { if (gen >= loadGenRef.current) setRules(res.data); }).catch(() => {});
+    let phase1Errors = 0;
+    const p1 = fetchWfPipeline(s, e).then((res) => { if (gen >= loadGenRef.current) setPipeline(res.data); }).catch(() => { phase1Errors++; });
+    const p2 = fetchWfSources(s, e).then((res) => { if (gen >= loadGenRef.current) setSources(res.data); }).catch(() => { phase1Errors++; });
+    const p3 = fetchWfWindows(s, e).then((res) => { if (gen >= loadGenRef.current) setWindows(res.data); }).catch(() => { phase1Errors++; });
+    const p4 = fetchWfRules(s, e).then((res) => { if (gen >= loadGenRef.current) setRules(res.data); }).catch(() => { phase1Errors++; });
     await Promise.all([p1, p2, p3, p4]);
 
+    if (gen >= loadGenRef.current && phase1Errors === 4) {
+      setFetchError(t('monitor.wf.error.fetchFailed'));
+      return;
+    }
+
     // 阶段 2：时序数据（range query，可能较慢），批量更新
+    if (gen >= loadGenRef.current) setTimeseriesLoading(true);
     const [tsRes, wsRes, asRes] = await Promise.allSettled([
       fetchWfTimeseriesThroughput(s, e, throughputGroupBy),
       fetchWfTimeseriesWindows(s, e, windowMetricRef.current),
@@ -1095,6 +1138,7 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
       if (tsRes.status === 'fulfilled') setThroughputSeries(tsRes.value.data);
       if (wsRes.status === 'fulfilled') setWindowSeries(wsRes.value.data);
       if (asRes.status === 'fulfilled') setAlertSeries(asRes.value.data);
+      setTimeseriesLoading(false);
     }
   }
 
@@ -1162,6 +1206,9 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
 
   return (
     <div className="main">
+      {fetchError && (
+        <div className="wf-error-banner">{fetchError}</div>
+      )}
       <PipelineStages pipeline={pipeline} />
 
       <div className="grid-3">
@@ -1181,6 +1228,7 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
           xMin={chartXRange.xMin}
           xMax={chartXRange.xMax}
           onExpand={() => { setFsChartKey('throughput'); setFsTitle(t('monitor.wf.chart.throughput')); setFsYAxisUnit('eps'); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsMetricTabs(undefined); setFsActiveMetric(undefined); setFsOpen(true); }}
+          loading={timeseriesLoading}
         />
         <TrendChart
           title={t('monitor.wf.chart.window')}
@@ -1201,6 +1249,7 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
           activeMetric={windowMetric}
           onMetricChange={setWindowMetric}
           onExpand={() => { setFsChartKey('window'); setFsTitle(t('monitor.wf.chart.window')); setFsYAxisUnit(winFormatter.unit); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsMetricTabs([{ key: 'rows', label: t('monitor.wf.chart.metricRows') }, { key: 'memory', label: t('monitor.wf.chart.metricMemory') }, { key: 'late', label: t('monitor.wf.chart.metricLate') }]); setFsActiveMetric(windowMetric); setFsOpen(true); }}
+          loading={timeseriesLoading}
         />
         <TrendChart
           title={t('monitor.wf.chart.alerts')}
@@ -1212,6 +1261,7 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec }: { 
           xMin={chartXRange.xMin}
           xMax={chartXRange.xMax}
           onExpand={() => { setFsChartKey('alerts'); setFsTitle(t('monitor.wf.chart.alerts')); setFsYAxisUnit(t('monitor.wf.unit.times')); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsMetricTabs(undefined); setFsActiveMetric(undefined); setFsOpen(true); }}
+          loading={timeseriesLoading}
         />
       </div>
 
