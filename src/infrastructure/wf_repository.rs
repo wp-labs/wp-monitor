@@ -80,6 +80,16 @@ impl WfVmRepository {
         (start < end).then_some((start, end))
     }
 
+    /// 子查询失败时 log warn 并降级为空列表，保证部分数据正常展示。
+    async fn guard(
+        res: impl std::future::Future<Output = Result<Vec<VmSeriesValue>, AppError>>,
+    ) -> Vec<VmSeriesValue> {
+        res.await.unwrap_or_else(|e| {
+            tracing::error!(error = %e, "wf sub-query failed, using default");
+            Vec::new()
+        })
+    }
+
     fn query_window(start: i64, end: i64) -> String {
         format!("{}s", (end - start).max(1))
     }
@@ -329,22 +339,22 @@ impl WfRepository for WfVmRepository {
             src_count,
             win_count,
             rule_count,
-        ) = tokio::try_join!(
-            self.instant_query(&q_receive, at),
-            self.instant_query(&q_rate, at),
-            self.instant_query(&q_route_errs, at),
-            self.instant_query(&q_win_rows, at),
-            self.instant_query(&q_win_mem, at),
-            self.instant_query(&q_win_late, at),
-            self.instant_query(&q_hit_rate, at),
-            self.instant_query(&q_instances, at),
-            self.instant_query(&q_emitted, at),
-            self.instant_query(&q_dispatch, at),
-            self.instant_query(&q_e2e, at),
-            self.instant_query(&q_src_count, at),
-            self.instant_query(&q_win_count, at),
-            self.instant_query(&q_rule_count, at),
-        )?;
+        ) = tokio::join!(
+            Self::guard(self.instant_query(&q_receive, at)),
+            Self::guard(self.instant_query(&q_rate, at)),
+            Self::guard(self.instant_query(&q_route_errs, at)),
+            Self::guard(self.instant_query(&q_win_rows, at)),
+            Self::guard(self.instant_query(&q_win_mem, at)),
+            Self::guard(self.instant_query(&q_win_late, at)),
+            Self::guard(self.instant_query(&q_hit_rate, at)),
+            Self::guard(self.instant_query(&q_instances, at)),
+            Self::guard(self.instant_query(&q_emitted, at)),
+            Self::guard(self.instant_query(&q_dispatch, at)),
+            Self::guard(self.instant_query(&q_e2e, at)),
+            Self::guard(self.instant_query(&q_src_count, at)),
+            Self::guard(self.instant_query(&q_win_count, at)),
+            Self::guard(self.instant_query(&q_rule_count, at)),
+        );
 
         Ok(WfPipelineResponse {
             generated_at: Utc::now().to_rfc3339(),
@@ -395,11 +405,11 @@ impl WfRepository for WfVmRepository {
             "max_over_time(sum by (source_name) (kafka_consumer_lag{{source_name!=\"\"}})[{}])",
             w
         );
-        let (rows_series, errs_series, lag_series) = tokio::try_join!(
-            self.instant_query(&q_rows, at),
-            self.instant_query(&q_errs, at),
-            self.instant_query(&q_lag, at)
-        )?;
+        let (rows_series, errs_series, lag_series) = tokio::join!(
+            Self::guard(self.instant_query(&q_rows, at)),
+            Self::guard(self.instant_query(&q_errs, at)),
+            Self::guard(self.instant_query(&q_lag, at)),
+        );
 
         let err_map: HashMap<&str, f64> = errs_series
             .iter()
@@ -465,10 +475,10 @@ impl WfRepository for WfVmRepository {
             "count by (machine_name) (count by (source_name, machine_name) (increase(wf_receive_total{{source_name!=\"\",machine_name!=\"\"}}[{}])))",
             w
         );
-        let (rows, counts) = tokio::try_join!(
-            self.instant_query(&q_rows, at),
-            self.instant_query(&q_counts, at)
-        )?;
+        let (rows, counts) = tokio::join!(
+            Self::guard(self.instant_query(&q_rows, at)),
+            Self::guard(self.instant_query(&q_counts, at)),
+        );
 
         let count_map: HashMap<&str, u32> = counts
             .iter()
@@ -510,12 +520,12 @@ impl WfRepository for WfVmRepository {
             "sum by (window_name) (increase(wf_window_late_total{{window_name!=\"\"}}[{}]))",
             w
         );
-        let (rows, mem, cap, late) = tokio::try_join!(
-            self.instant_query(&q_rows, at),
-            self.instant_query(&q_mem, at),
-            self.instant_query(&q_cap, at),
-            self.instant_query(&q_late, at),
-        )?;
+        let (rows, mem, cap, late) = tokio::join!(
+            Self::guard(self.instant_query(&q_rows, at)),
+            Self::guard(self.instant_query(&q_mem, at)),
+            Self::guard(self.instant_query(&q_cap, at)),
+            Self::guard(self.instant_query(&q_late, at)),
+        );
 
         // 按 window_name 分组，取时间戳最新的值，去除重启产生的 stale 时间序列
         let rows_map = Self::pick_latest_by_window_name(&rows);
@@ -566,12 +576,12 @@ impl WfRepository for WfVmRepository {
             "sum by (alert_name, scope_key) (increase(wf_alert_emitted_total{{alert_name!=\"\",scope_key!=\"-\"}}[{}]))",
             w
         );
-        let (matched, emitted, instances, scopes) = tokio::try_join!(
-            self.instant_query(&q_matched, at),
-            self.instant_query(&q_emitted, at),
-            self.instant_query(&q_instances, at),
-            self.instant_query(&q_scopes, at)
-        )?;
+        let (matched, emitted, instances, scopes) = tokio::join!(
+            Self::guard(self.instant_query(&q_matched, at)),
+            Self::guard(self.instant_query(&q_emitted, at)),
+            Self::guard(self.instant_query(&q_instances, at)),
+            Self::guard(self.instant_query(&q_scopes, at)),
+        );
 
         let matched_map: HashMap<&str, f64> = matched
             .iter()
@@ -667,10 +677,10 @@ impl WfRepository for WfVmRepository {
             "count by (machine_name) (count by (alert_name, machine_name) (increase(wf_alert_emitted_total{{alert_name!=\"\",machine_name!=\"\"}}[{}])))",
             w
         );
-        let (emitted, counts) = tokio::try_join!(
-            self.instant_query(&q_emitted, at),
-            self.instant_query(&q_counts, at)
-        )?;
+        let (emitted, counts) = tokio::join!(
+            Self::guard(self.instant_query(&q_emitted, at)),
+            Self::guard(self.instant_query(&q_counts, at)),
+        );
 
         let count_map: HashMap<&str, u32> = counts
             .iter()
