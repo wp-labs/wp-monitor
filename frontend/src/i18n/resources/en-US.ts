@@ -189,6 +189,8 @@ export const enUS = {
         metricRows: 'Data Volume',
         metricMemory: 'Memory',
         metricLate: 'Late',
+        metricEmitted: 'Emitted',
+        metricMatched: 'Matched',
       },
       unit: {
         rows: 'rows',

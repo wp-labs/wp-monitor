@@ -397,11 +397,12 @@ export async function fetchWfTimeseriesWindows(
 }
 
 export async function fetchWfTimeseriesAlerts(
-  startTime: string, endTime: string, groupBy: string, maxDataPoints?: number,
+  startTime: string, endTime: string, groupBy: string, metric?: string, maxDataPoints?: number,
 ) {
   const { start, end } = normalizeTimeRange(startTime, endTime);
   const dp = maxDataPoints ? `&max_data_points=${maxDataPoints}` : '';
+  const mp = metric ? `&metric=${encodeURIComponent(metric)}` : '';
   return requestJson<NodeTimeSeries[]>(
-    `${WF_BASE}/timeseries/alerts?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}&group_by=${encodeURIComponent(groupBy)}${dp}`,
+    `${WF_BASE}/timeseries/alerts?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}&group_by=${encodeURIComponent(groupBy)}${mp}${dp}`,
   );
 }

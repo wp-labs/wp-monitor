@@ -5,8 +5,8 @@
 //! 2. 委托 `AppState.wf` 应用服务执行查询
 //! 3. 包装为 `ApiResponse` 返回
 
-use crate::domain::model::TimeRangeQuery;
 use crate::domain::wf_repository::WfWindowMetric;
+use crate::domain::{model::TimeRangeQuery, wf_repository::WfAlertMetrics};
 use crate::interfaces::vm::handlers::TimeRangeRequest;
 use crate::shared::api::ApiResponse;
 use crate::shared::error::AppErrorResponse;
@@ -48,6 +48,8 @@ pub struct WfTimeseriesAlertsRequest {
     pub end_time: String,
     #[serde(default = "default_group_by_rule")]
     pub group_by: String,
+    #[serde(default)]
+    pub metric: WfAlertMetrics,
     pub max_data_points: Option<usize>,
 }
 
@@ -228,7 +230,7 @@ pub async fn get_wf_timeseries_alerts(
     })?;
     let data = state
         .wf
-        .get_timeseries_alerts(query, &req.group_by, req.max_data_points)
+        .get_timeseries_alerts(query, &req.group_by, req.metric, req.max_data_points)
         .await
         .map_err(AppErrorResponse::from)?;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))

@@ -187,6 +187,8 @@ export const zhCN = {
         metricRows: '数据量',
         metricMemory: '内存',
         metricLate: '迟到',
+        metricEmitted: '产出告警',
+        metricMatched: '命中数量',
       },
       unit: {
         rows: '条',

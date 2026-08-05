@@ -189,6 +189,8 @@ export const zhTW = {
         metricRows: '資料量',
         metricMemory: '記憶體',
         metricLate: '遲到',
+        metricEmitted: '產出告警',
+        metricMatched: '命中數量',
       },
       unit: {
         rows: '條',

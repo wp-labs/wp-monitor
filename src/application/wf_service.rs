@@ -1,6 +1,6 @@
 use crate::domain::model::{NodeTimeSeries, TimeRangeQuery};
 use crate::domain::wf_repository::{
-    WfPipelineResponse, WfRepository, WfRuleItem, WfRuleMachineItem, WfSourceItem,
+    WfAlertMetrics, WfPipelineResponse, WfRepository, WfRuleItem, WfRuleMachineItem, WfSourceItem,
     WfSourceMachineItem, WfStateMachineItem, WfTimeseriesQuery, WfWindowItem, WfWindowMetric,
 };
 use crate::shared::error::AppError;
@@ -64,6 +64,7 @@ impl WfService {
                 query,
                 group_by: group_by.to_string(),
                 metric: None,
+                alert_metric: None,
                 max_data_points,
             })
             .await
@@ -79,6 +80,7 @@ impl WfService {
                 query,
                 group_by: String::new(),
                 metric: Some(metric),
+                alert_metric: None,
                 max_data_points,
             })
             .await
@@ -87,6 +89,7 @@ impl WfService {
         &self,
         query: TimeRangeQuery,
         group_by: &str,
+        alert_metric: WfAlertMetrics,
         max_data_points: Option<usize>,
     ) -> Result<Vec<NodeTimeSeries>, AppError> {
         self.repo
@@ -94,6 +97,7 @@ impl WfService {
                 query,
                 group_by: group_by.to_string(),
                 metric: None,
+                alert_metric: Some(alert_metric),
                 max_data_points,
             })
             .await

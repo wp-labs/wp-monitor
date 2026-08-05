@@ -1,9 +1,9 @@
 use super::vm_utils::{align_points_to_grid, ts_to_rfc3339};
 use crate::domain::model::{NodeTimeSeries, TimePoint, TimeRangeQuery};
 use crate::domain::wf_repository::{
-    WfPipelineReceiver, WfPipelineResponse, WfPipelineRule, WfPipelineWindow, WfRepository,
-    WfRuleItem, WfRuleMachineItem, WfSourceItem, WfSourceMachineItem, WfStateMachineItem,
-    WfTimeseriesQuery, WfWindowItem, WfWindowMetric,
+    WfAlertMetrics, WfPipelineReceiver, WfPipelineResponse, WfPipelineRule, WfPipelineWindow,
+    WfRepository, WfRuleItem, WfRuleMachineItem, WfSourceItem, WfSourceMachineItem,
+    WfStateMachineItem, WfTimeseriesQuery, WfWindowItem, WfWindowMetric,
 };
 use crate::shared::error::{AppError, AppReason};
 use async_trait::async_trait;
@@ -562,7 +562,7 @@ impl WfRepository for WfVmRepository {
         let at = end;
 
         let q_matched = format!(
-            "sum by (rule_name) (increase(wf_rule_matches_total{{rule_name!=\"\"}}[{}]))",
+            "sum by (rule_name) (increase(wf_rule_events_total{{rule_name!=\"\"}}[{}]))",
             w
         );
 
@@ -796,15 +796,21 @@ impl WfRepository for WfVmRepository {
                 .with_detail("invalid time range for wf query")
         })?;
         let (step, rate_window, step_secs) = Self::auto_step(&ts.query, ts.max_data_points);
-        let by_labels = if ts.group_by == "machine" {
-            "machine_name"
-        } else {
-            "alert_name"
-        };
         // 用 increase / window_secs 手动算速率，替代 rate()，避免 VM 对稀疏 counter 返回全零
         let rw_secs: f64 = rate_window.trim_end_matches('s').parse().unwrap_or(1.0);
+        let is_matched = matches!(ts.alert_metric, Some(WfAlertMetrics::AlertMatched));
+        let (metric, label_key, by_labels) = if is_matched {
+            ("wf_rule_events_total", "rule_name", "rule_name")
+        } else {
+            let by = if ts.group_by == "machine" {
+                "machine_name"
+            } else {
+                "alert_name"
+            };
+            ("wf_alert_emitted_total", "alert_name", by)
+        };
         let promql = format!(
-            "sum by ({by_labels}) (increase(wf_alert_emitted_total{{alert_name!=\"\"}}[{rate_window}]) / {rw_secs})"
+            "sum by ({by_labels}) (increase({metric}{{{label_key}!=\"\"}}[{rate_window}]) / {rw_secs})"
         );
         let series = self.range_query(&promql, start, end, &step).await?;
         Ok(series

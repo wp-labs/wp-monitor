@@ -1,6 +1,7 @@
 use crate::domain::model::{NodeTimeSeries, TimeRangeQuery};
 use crate::shared::error::AppError;
 use async_trait::async_trait;
+use serde::Deserialize;
 
 // ── Pipeline ──
 
@@ -128,7 +129,17 @@ pub struct WfTimeseriesQuery {
     pub query: TimeRangeQuery,
     pub group_by: String,
     pub metric: Option<WfWindowMetric>,
+    pub alert_metric: Option<WfAlertMetrics>,
     pub max_data_points: Option<usize>,
+}
+
+/// 告警趋势指标类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WfAlertMetrics {
+    #[default]
+    AlertCount,
+    AlertMatched,
 }
 
 // ── Repository trait ──

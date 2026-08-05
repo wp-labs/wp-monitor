@@ -790,6 +790,7 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
                 ? (
                   <>
                     {sortHeader(t('monitor.wf.alertTable.colMachine'), 'name', ps)}
+                    {sortHeader(t('monitor.wf.alertTable.colMatched'), 'matched', ps, true)}
                     {sortHeader(t('monitor.wf.alertTable.colRuleCount'), 'count', ps, true)}
                     {sortHeader(t('monitor.wf.alertTable.colEmitted'), 'emitted', ps, true)}
                   </>
@@ -797,6 +798,7 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
                 : (
                   <>
                     {sortHeader(t('monitor.wf.alertTable.colName'), 'name', ps)}
+                    {sortHeader(t('monitor.wf.alertTable.colMatched'), 'matched', ps, true)}
                     {sortHeader(t('monitor.wf.alertTable.colEmitted'), 'emitted', ps, true)}
                     {sortHeader(t('monitor.wf.alertTable.colInstances'), 'instances', ps, true)}
                   </>
@@ -810,6 +812,7 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
                 return (
                   <tr key={m.machine}>
                     <td className="name">{m.machine}</td>
+                    <td className="num">{fmtNum(m.matched)}</td>
                     <td className="num">{m.rule_count}</td>
                     <td className="num" style={{ color: m.emitted > 0 ? 'var(--orange)' : 'var(--wf-text-dim)' }}>{fmtNum(m.emitted)}</td>
                   </tr>
@@ -843,6 +846,7 @@ function AlertTable({ rules, timeRange }: { rules: WfRuleItem[]; timeRange: { st
               return (
                 <tr key={r.name}>
                   <td className="name">{r.name}</td>
+                  <td className="num">{fmtNum(r.matched)}</td>
                   <td className="num" style={{ color: r.emitted > 0 ? 'var(--orange)' : 'var(--wf-text-dim)' }}>{fmtNum(r.emitted)}</td>
                   <td className="num">{cell}</td>
                 </tr>
@@ -1007,6 +1011,7 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec, acti
   const [windowSeries, setWindowSeries] = useState<NodeTimeSeries[]>([]);
 
   const [alertGroupBy] = useState<'rule' | 'machine'>('rule');
+  const [alertMetric, setAlertMetric] = useState('alertcount');
   const [alertSeries, setAlertSeries] = useState<NodeTimeSeries[]>([]);
   const [timeseriesLoading, setTimeseriesLoading] = useState(false);
   const [fsOpen, setFsOpen] = useState(false);
@@ -1032,6 +1037,8 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec, acti
 
   const windowMetricRef = useRef(windowMetric);
   windowMetricRef.current = windowMetric;
+  const alertMetricRef = useRef(alertMetric);
+  alertMetricRef.current = alertMetric;
 
   // Track the time-range duration in ms. Updated on every render from props,
   // but only changes meaningfully when the user picks a different range.
@@ -1049,10 +1056,12 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec, acti
 
   const loadGenRef = useRef(0);
 
-  const chartXRange = useMemo(() => ({
+  // 查询窗口和图表 x 轴保持一致：用 Date.now() 而非父组件 props，
+  // 避免 auto-refresh 时 props 更新滞后导致图表左侧出现空白。
+  const [chartXRange, setChartXRange] = useState(() => ({
     xMin: new Date(startTime).getTime(),
     xMax: new Date(endTime).getTime(),
-  }), [startTime, endTime]);
+  }));
 
   // Periodic refresh: the interval runs continuously without being reset
   // on every parent auto-refresh. loadAll always uses Date.now() for the
@@ -1105,6 +1114,12 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec, acti
       .catch(() => {});
   }, [windowMetric]);
 
+  // 告警指标切换时立即拉取时序（复用 loadAll 的 generation counter，避免竞态）
+  useEffect(() => {
+    loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alertMetric]);
+
   async function loadAll() {
     const gen = ++loadGenRef.current;
     const durationMs = durationMsRef.current;
@@ -1132,12 +1147,13 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec, acti
     const [tsRes, wsRes, asRes] = await Promise.allSettled([
       fetchWfTimeseriesThroughput(s, e, throughputGroupBy),
       fetchWfTimeseriesWindows(s, e, windowMetricRef.current),
-      fetchWfTimeseriesAlerts(s, e, alertGroupBy),
+      fetchWfTimeseriesAlerts(s, e, alertGroupBy, alertMetricRef.current),
     ]);
     if (gen >= loadGenRef.current) {
       if (tsRes.status === 'fulfilled') setThroughputSeries(tsRes.value.data);
       if (wsRes.status === 'fulfilled') setWindowSeries(wsRes.value.data);
       if (asRes.status === 'fulfilled') setAlertSeries(asRes.value.data);
+      setChartXRange({ xMin: now - (durationMs > 0 ? durationMs : 5 * 60 * 1000), xMax: now });
       setTimeseriesLoading(false);
     }
   }
@@ -1260,7 +1276,13 @@ export default function WfMonitor({ startTime, endTime, refreshIntervalSec, acti
           labelColor={chartColors.label}
           xMin={chartXRange.xMin}
           xMax={chartXRange.xMax}
-          onExpand={() => { setFsChartKey('alerts'); setFsTitle(t('monitor.wf.chart.alerts')); setFsYAxisUnit(t('monitor.wf.unit.times')); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsMetricTabs(undefined); setFsActiveMetric(undefined); setFsOpen(true); }}
+          metricTabs={[
+            { key: 'alertcount', label: t('monitor.wf.chart.metricEmitted') },
+            { key: 'alertmatched', label: t('monitor.wf.chart.metricMatched') },
+          ]}
+          activeMetric={alertMetric}
+          onMetricChange={setAlertMetric}
+          onExpand={() => { setFsChartKey('alerts'); setFsTitle(t('monitor.wf.chart.alerts')); setFsYAxisUnit(t('monitor.wf.unit.times')); setFsValueFormatter(undefined); setFsAxisValueFormatter(undefined); setFsMetricTabs([{ key: 'alertcount', label: t('monitor.wf.chart.metricEmitted') }, { key: 'alertmatched', label: t('monitor.wf.chart.metricMatched') }]); setFsActiveMetric(alertMetric); setFsOpen(true); }}
           loading={timeseriesLoading}
         />
       </div>
