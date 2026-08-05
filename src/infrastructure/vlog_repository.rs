@@ -15,7 +15,11 @@ impl VlogHttpRepository {
     /// 创建仓储实例，自动去掉 base_url 尾部 `/`，避免 URL 拼接重复分隔符。
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .build()
+                .expect("reqwest client build"),
             base_url: base_url.into().trim_end_matches('/').to_string(),
         }
     }

@@ -11,7 +11,7 @@ use chrono::Utc;
 use orion_error::{OperationContext, conversion::ToStructError, prelude::*};
 use reqwest::Client;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use tracing::debug;
 
 /// VictoriaMetrics HTTP 仓储，负责 wfusion 引擎指标的 PromQL 查询。
@@ -65,13 +65,18 @@ struct VmRangeSeries {
 impl WfVmRepository {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .build()
+                .expect("reqwest client build"),
             base_url: base_url.into().trim_end_matches('/').to_string(),
         }
     }
 
     fn parse_value(v: &str) -> f64 {
-        v.parse::<f64>().unwrap_or(0.0)
+        let v = v.parse::<f64>().unwrap_or(0.0);
+        if v.is_finite() { v } else { 0.0 }
     }
 
     fn effective_query_range(query: &TimeRangeQuery) -> Option<(i64, i64)> {
@@ -129,7 +134,7 @@ impl WfVmRepository {
 
     /// 按 window_name 分组，每组取时间戳最新的那条的 value。
     fn pick_latest_by_window_name(series: &[VmSeriesValue]) -> HashMap<&str, f64> {
-        let mut map: HashMap<&str, (f64, f64)> = HashMap::new();
+        let mut map: BTreeMap<&str, (f64, f64)> = BTreeMap::new();
         for s in series {
             let name = match s.metric.get("window_name") {
                 Some(n) => n.as_str(),
@@ -148,7 +153,11 @@ impl WfVmRepository {
             .iter()
             .map(|(ts, val)| TimePoint {
                 ts: ts_to_rfc3339(*ts),
-                value: Some(val.max(0.0)),
+                value: if val.is_finite() {
+                    Some(val.max(0.0))
+                } else {
+                    None
+                },
             })
             .collect()
     }

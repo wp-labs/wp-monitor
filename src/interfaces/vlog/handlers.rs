@@ -1,4 +1,4 @@
-use actix_web::{HttpResponse, Result, get, http::header, web};
+use actix_web::{HttpResponse, Result, delete, get, http::header, web};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tracing::{debug, error, info};
@@ -221,7 +221,7 @@ pub async fn export_missed_data(
     }
 }
 
-#[get("/vlog/missed/clear")]
+#[delete("/vlog/missed/clear")]
 pub async fn clear_miss_data(
     state: web::Data<AppState>,
     req: web::Query<VlogMissedExportQuery>,

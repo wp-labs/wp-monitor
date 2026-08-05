@@ -6,6 +6,7 @@ use crate::shared::error::{AppError, AppReason};
 use async_trait::async_trait;
 use orion_error::conversion::{SourceRawErr, ToStructError};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 const DEFAULT_MISS_QUERY: &str = "wp_stage:miss";
 const MAX_EXPORT_ROWS: u32 = 5000;
@@ -13,6 +14,7 @@ const MAX_EXPORT_ROWS: u32 = 5000;
 /// 基于文件的 Miss 仓储实现。
 pub struct FileMissRepository {
     file: Arc<FileRepository>,
+    lock: RwLock<()>,
 }
 
 impl FileMissRepository {
@@ -20,6 +22,7 @@ impl FileMissRepository {
         let file = FileRepository::new(file_path)?;
         Ok(Self {
             file: Arc::new(file),
+            lock: RwLock::new(()),
         })
     }
 }
@@ -27,6 +30,7 @@ impl FileMissRepository {
 #[async_trait]
 impl MissRepository for FileMissRepository {
     async fn fetch_records(&self, query: MissQuery) -> Result<Vec<MissRecord>, AppError> {
+        let _lock = self.lock.read().await; // Acquire read lock to ensure thread safety
         let file = Arc::clone(&self.file);
         let limit = query.limit;
         let records = tokio::task::spawn_blocking(move || file.tail_records(limit))
@@ -57,6 +61,7 @@ impl MissRepository for FileMissRepository {
     }
 
     async fn clear_miss_data(&self, _query: &str) -> Result<(), AppError> {
+        let _lock = self.lock.write().await; // Acquire write lock to ensure thread safety
         let file = Arc::clone(&self.file);
         tokio::task::spawn_blocking(move || {
             // 清空文件内容

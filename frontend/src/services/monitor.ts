@@ -39,8 +39,8 @@ function normalizeMaxDataPoints(maxDataPoints?: number) {
 }
 
 /** 统一请求：成功返回 ApiResp<T>，失败抛出 ApiError（含 code/message/hints） */
-async function requestJson<T>(url: string) {
-  const resp = await fetch(url);
+async function requestJson<T>(url: string, method: string = 'GET') {
+  const resp = await fetch(url, { method });
   if (!resp.ok) {
     const contentType = resp.headers.get('content-type') || '';
     const isJson = contentType.includes('application/json');
@@ -320,7 +320,7 @@ export async function clearMissedLogs(source?: string) {
   if (source) {
     url += `&source=${encodeURIComponent(source)}`;
   }
-  return requestJson<string>(url);
+  return requestJson<string>(url, 'DELETE');
 }
 
 // ── wfusion engine monitoring ──

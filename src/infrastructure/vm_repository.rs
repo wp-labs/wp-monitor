@@ -53,7 +53,11 @@ impl VmHttpRepository {
     /// 创建仓储实例，自动去掉 base_url 尾部 `/`，避免 URL 拼接重复分隔符。
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .build()
+                .expect("reqwest client build"),
             base_url: base_url.into().trim_end_matches('/').to_string(),
         }
     }
@@ -61,7 +65,11 @@ impl VmHttpRepository {
     /// VM 即时查询返回 value 为字符串，这里统一兜底解析为有限 f64。
     fn parse_value(v: &str) -> f64 {
         let x = v.parse::<f64>().unwrap_or(0.0);
-        (x * 100.0).round() / 100.0
+        if x.is_finite() {
+            (x * 100.0).round() / 100.0
+        } else {
+            0.0
+        }
     }
 
     /// VM 区间查询的点值可能返回 `NaN` / `Inf` / 非法字符串。
@@ -630,7 +638,6 @@ impl VmRepository for VmHttpRepository {
             let subqueries: Vec<String> = filters
                 .iter()
                 .map(|f| {
-                    let pkg_regex = escape_regex_chars(&f.package_name);
                     let rule_regex = if f.rule_names.is_empty() {
                         ".*".to_string()
                     } else {
@@ -641,8 +648,8 @@ impl VmRepository for VmHttpRepository {
                             .join("|")
                     };
                     let selector = format!(
-                        r#"wparse_parse_all{{package_name=~"{}", rule_name=~"{}"}}"#,
-                        pkg_regex, rule_regex
+                        r#"wparse_parse_all{{package_name="{}", rule_name=~"^{}$"}}"#,
+                        f.package_name, rule_regex
                     );
                     format!(
                         r#"sum by (package_name, rule_name) ({})"#,
