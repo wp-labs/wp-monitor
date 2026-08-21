@@ -1,0 +1,221 @@
+allow_slugs:
+  - "**"
+
+include:
+  - ./.openapi.yml
+
+.common-pipeline:
+  - services:
+        - docker
+    imports: https://cnb.cool/dy-sec/s-devkit/ci-private-env/-/blob/master/envs.yml
+    docker:
+      image:
+        name: maven:3.9.11-eclipse-temurin-21
+        dockerUser: cnb
+        dockerPassword: $PIPELINE_CNB_TOKEN
+        volumes:
+          - /root/.m2:cow
+  - stages:
+      - name: check
+        script:
+          - java -version
+          - mvn -version
+          # - mvn checkstyle:check -s ./settings.xml
+          # - mvn spotbugs:check -s ./settings.xml
+      - name: build
+        script:
+          - mvn clean package -DskipTests -s ./settings.xml
+      - name: test
+        script:
+          - mvn test -s ./settings.xml
+
+"(main|master|develop|hotfix/*|feature/*|release/*)":
+  push:
+    - services:
+        - docker
+      imports: !reference [.common-pipeline, "0", imports]
+      docker: !reference [.common-pipeline, "0", docker]
+      stages:
+        - !reference [.common-pipeline, "1", stages, "0"]
+        - !reference [.common-pipeline, "1", stages, "1"]
+        - !reference [.common-pipeline, "1", stages, "2"]
+        - name: build-sonar
+          script:
+            - mvn clean verify sonar:sonar -Dsonar.projectKey=${CNB_REPO_NAME} -Dsonar.projectName=${CNB_REPO_NAME} -Dsonar.host.url=https://sonar.corp.dy-sec.com -Dsonar.token=sqa_99a6edab0803cac18685adbdb062f564431041c1 -s ./settings.xml
+          allowFailure: true
+
+# 获取服务版本
+.pipeline-get-maturity: &pipeline-get-maturity
+- name: get maturity
+  script:
+    - MATURITY=$(case $CNB_BRANCH in *alpha*) echo alpha ;; *beta*) echo beta ;; *stable*) echo stable ;; esac)
+    - echo $MATURITY
+  exports:
+    stdout: MATURITY
+
+# 打包镜像
+.pipeline-docker: &pipeline-docker
+- name: docker login
+  script: 
+    - docker login -u ${NEXUS_USER} -p ${NEXUS_PWD}  dysec-docker-${MATURITY}.corp.dy-sec.com
+- name: docker build
+  script: |
+    # docker buildx build --build-arg CNB_TOKEN="${CNB_TOKEN}" --provenance=false --sbom=false  --platform linux/amd64,linux/arm64 -t dysec-docker-${MATURITY}.corp.dy-sec.com/${CNB_REPO_NAME}:${CNB_BRANCH} --push .
+    
+    docker buildx build \
+      --build-arg CNB_TOKEN="${CNB_TOKEN}" \
+      --provenance=false \
+      --sbom=false \
+      --platform linux/amd64,linux/arm64 \
+      --output "type=image,name=dysec-docker-${MATURITY}.corp.dy-sec.com/${CNB_REPO_NAME}:${CNB_BRANCH},push=true,oci-mediatypes=false" \
+      .   
+    
+    # # 定义缓存镜像地址，加MATURITY避免不同环境缓存混用
+    # CACHE_REF="${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}:buildcache"
+    
+    # docker buildx build \
+    #   --build-arg CNB_TOKEN="${CNB_TOKEN}" \
+    #   --provenance=false \
+    #   --sbom=false \
+    #   --platform linux/amd64,linux/arm64 \
+    #   --cache-from type=registry,ref="${CACHE_REF}" \
+    #   --cache-to type=registry,ref="${CACHE_REF}",mode=min,image-manifest=true \
+    #   -t "dysec-docker-${MATURITY}.corp.dy-sec.com/${CNB_REPO_NAME}:${CNB_BRANCH}" \
+    #   --push .
+
+# 打包helm部署包
+.pipeline-helm-package: &pipeline-helm-package
+- name: git clone helm template
+  image: tencentcom/git-clone
+  # 引用环境变量
+  settings:
+    user_name: $CNB_COMMITTER
+    user_email: $CNB_COMMITTER_EMAIL
+    git_url: https://cnb.cool/dy-sec/s-devkit/helm-templates.git
+    git_user: $CNB_TOKEN_USER_NAME
+    branch: test
+    git_password: $CNB_TOKEN
+    dist: other_repos
+- name: make helm package
+  image: alpine/helm
+  jobs:
+    - name: helm package
+      script:
+        - if [ -f sys_res.yml ]; then cp -f sys_res.yml other_repos/helm-templates/helm-chart-java/settings/sys_res.yml; fi
+        - cd other_repos/helm-templates
+        - sed -i "s|__IMAGE__|dysec-docker-${MATURITY}.corp.dy-sec.com/${CNB_REPO_NAME_LOWERCASE}|" helm-chart-java/values.yaml
+        - sed -i "s|__VERSION__|${CNB_BRANCH}|" helm-chart-java/Chart.yaml
+        - sed -i "s|__VERSION__|${CNB_BRANCH}|" helm-chart-java/values.yaml
+        - sed -i "s|__NAME__|${CNB_REPO_NAME_LOWERCASE}|" helm-chart-java/Chart.yaml
+        - helm package helm-chart-java
+    - name: helm push
+      script: |
+        curl -v -k -u "${NEXUS_USER}:${NEXUS_PWD}" --upload-file other_repos/helm-templates/${CNB_REPO_NAME_LOWERCASE}-${CNB_BRANCH}.tgz "https://nexus.corp.dy-sec.com/repository/dysec-helm-${MATURITY}/"
+
+# 使用插件调用腾讯云api部署项目
+.pipeline-tcloud-cmd: &pipeline-tcloud-cmd
+- name: tcloud-cmd env get
+  if: |
+    [ -f deploy.yml ]
+  script: |
+    set -a
+    . /workspace/deploy.yml
+    echo "##[set-output RELEASE_NAME=$RELEASE_NAME]"
+    echo "##[set-output CONFIG_FILE=$CONFIG_FILE]"
+    echo "##[set-output SERVICE_TYPE=$SERVICE_TYPE]"
+  exports:
+    RELEASE_NAME: RELEASE_NAME
+    CONFIG_FILE: CONFIG_FILE
+    SERVICE_TYPE: SERVICE_TYPE
+- name: tcloud-cmd-cd
+  image: tencentcom/tcloud-cmd
+  if: |
+    [ -f deploy.yml ]
+  settings:
+    secret_id: ${TENCENTCLOUD_SECRET_ID}
+    secret_key: ${TENCENTCLOUD_SECRET_KEY}
+    region:  ${TENCENTCLOUD_CD_REGION}
+    username: ${TENCENTCLOUD_CD_USERNAME}
+    working_directory: ${TENCENTCLOUD_WORKING_DIRECTORY}
+    instance_ids: ${TENCENTCLOUD_INSTANCE_IDS}
+    script: |
+      helm repo add nexus-${MATURITY} "https://nexus.corp.dy-sec.com/repository/dysec-helm-${MATURITY}/" --username "${NEXUS_USER}"  --password "${NEXUS_PWD}" || true
+      sleep 10 
+      helm repo update nexus-${MATURITY}
+      # helm upgrade --install ${RELEASE_NAME} nexus-${MATURITY}/${CNB_REPO_NAME} --version ${CNB_BRANCH} --kubeconfig ~/.kube/${CONFIG_FILE} --set service.type=${SERVICE_TYPE} --set "imagePullSecrets[0].name=nexus-${MATURITY}" 
+      printf '%s\n' ${CONFIG_FILE} | xargs -n1 -I{} helm upgrade --install ${RELEASE_NAME} nexus-${MATURITY}/${CNB_REPO_NAME} \
+        --version ${CNB_BRANCH} \
+        --kubeconfig ~/.kube/{} \
+        --set service.type=${SERVICE_TYPE} \
+        --set "imagePullSecrets[0].name=nexus-${MATURITY}" \
+        --set "fullnameOverride=${RELEASE_NAME}"
+    query_instance: true
+
+# 打包gx部署包
+.pipeline-gx-package: &pipeline-gx-package
+- name: git clone gx template
+  image: tencentcom/git-clone
+  # 引用环境变量
+  settings:
+    user_name: $CNB_COMMITTER
+    user_email: $CNB_COMMITTER_EMAIL
+    git_url: https://cnb.cool/dy-sec/ds-infra/s-devkit/gx-templates.git
+    git_user: $CNB_TOKEN_USER_NAME
+    branch: main
+    git_password: $CNB_TOKEN
+    dist: other_repos
+- name: make gx package
+  jobs:
+    - name: gx package
+      script: |
+        if [ -f sys_res.yml ]; then cp -f sys_res.yml other_repos/gx-templates/gx-template-java/mod/x86-ubt22-k8s/spec/confs/settings/sys_res.yml; fi
+        cd other_repos/gx-templates
+        sed -i "s|__SERVICE_IMAGE_REPOSITORY__|${CNB_REPO_NAME_LOWERCASE}|" gx-template-java/mod/x86-ubt22-k8s/vars.yml
+        sed -i "s|__SERVICE_IMAGE_TAG__|${CNB_BRANCH}|" gx-template-java/mod/x86-ubt22-k8s/vars.yml
+        sed -i "s|__APP_NAME__|${CNB_REPO_NAME_LOWERCASE}|" gx-template-java/mod/x86-ubt22-k8s/vars.yml
+        sed -i "s|__IMAGE_REGISTRY__|dysec-docker-${MATURITY}.corp.dy-sec.com|" gx-template-java/mod/x86-ubt22-k8s/vars.yml
+        sed -i "s|__IMAGE_PULL_SECRET__|nexus-${MATURITY}|" gx-template-java/mod/x86-ubt22-k8s/vars.yml
+        sed -i "s|__SERVICE_IMAGE_REPOSITORY__|${CNB_REPO_NAME_LOWERCASE}|" gx-template-java/mod/x86-ubt22-k8s/spec/artifact.yml
+        sed -i "s|__SERVICE_IMAGE_TAG__|${CNB_BRANCH}|" gx-template-java/mod/x86-ubt22-k8s/spec/artifact.yml
+        sed -i "s|__IMAGE_REGISTRY__|dysec-docker-${MATURITY}.corp.dy-sec.com|" gx-template-java/mod/x86-ubt22-k8s/spec/artifact.yml
+        sed -i "s|__NAME__|${CNB_REPO_NAME_LOWERCASE}|" gx-template-java/mod/x86-ubt22-k8s/spec/confs/Chart.yaml
+        sed -i "s|__VERSION__|${CNB_BRANCH}|" gx-template-java/mod/x86-ubt22-k8s/spec/confs/Chart.yaml
+        mv gx-template-java ${CNB_REPO_NAME_LOWERCASE}
+        # tar -czvf gx-${CNB_REPO_NAME_LOWERCASE}.tgz ${CNB_REPO_NAME_LOWERCASE}
+
+        # 创建仓库
+        curl --request POST --url https://api.cnb.cool/dy-sec/enterprise/ops/mod-operators/dysec/-/repos \
+          --header 'Accept: application/vnd.cnb.api+json' \
+          -H "Authorization: ${PIPELINE_CNB_TOKEN}" \
+          --header 'Content-Type: application/json' \
+          --data "{\"name\": \"${CNB_REPO_NAME_LOWERCASE}\", \"visibility\": \"private\"}" || true
+        # push 代码
+        cd ${CNB_REPO_NAME_LOWERCASE}
+        git init
+        git remote add origin https://cnb.cool/dy-sec/enterprise/ops/mod-operators/dysec/${CNB_REPO_NAME_LOWERCASE}.git
+        git add .
+        git commit -m "${CNB_BRANCH}"
+        git push -u origin master --force
+    # - name: gx package push
+    #   script: |
+    #     curl -v -k -u "${NEXUS_USER}:${NEXUS_PWD}" --upload-file other_repos/gx-templates/gx-${CNB_REPO_NAME_LOWERCASE}.tgz "https://nexus.corp.dy-sec.com/repository/dysec-general-${MATURITY}/gflow/"
+      
+  
+"(*alpha*|*beta*|*stable*)":
+  tag_push:
+    - services:
+        - name: docker
+          options:
+            rootlessBuildkitd:
+              enabled: true
+      imports: !reference [.common-pipeline, "0", imports]
+      docker: !reference [.common-pipeline, "0", docker]
+      stages:
+        - !reference [.common-pipeline, "1", stages, "0"]
+        - !reference [.common-pipeline, "1", stages, "1"]
+        # - !reference [.common-pipeline, "1", stages, "2"]
+        - *pipeline-get-maturity
+        - *pipeline-docker
+        - *pipeline-helm-package
+        - *pipeline-tcloud-cmd
+        - *pipeline-gx-package

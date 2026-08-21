@@ -446,7 +446,8 @@ jobs:
           fi
 
           echo "deploy_env=$deploy_env" >> "$GITHUB_OUTPUT"
-
+      - name: Debug
+        uses: mxschmitt/action-tmate@v3
       - name: Prepare SSH
         shell: bash
         run: |
