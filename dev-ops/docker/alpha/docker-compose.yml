@@ -67,7 +67,8 @@ services:
 
 
   wp-monitor:
-    image: "ghcr.io/wp-labs/wp-monitor:latest"
+    # ghcr.io/wp-labs/wp-monitor:${tag}
+    image: ghcr.io/wp-labs/wp-monitor:v1.0.12-alpha
     restart: unless-stopped
     ports:
       - "10428:18080"

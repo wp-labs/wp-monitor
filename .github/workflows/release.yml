@@ -403,6 +403,8 @@ jobs:
           files: artifacts/*
 
   deploy:
+    # 禁用
+    if: false
     needs: [docker-build]
     runs-on: ubuntu-22.04
     permissions:
@@ -446,8 +448,6 @@ jobs:
           fi
 
           echo "deploy_env=$deploy_env" >> "$GITHUB_OUTPUT"
-      - name: Debug
-        uses: mxschmitt/action-tmate@v3
       - name: Prepare SSH
         shell: bash
         run: |
