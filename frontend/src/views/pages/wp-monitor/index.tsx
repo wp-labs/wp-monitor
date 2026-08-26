@@ -2104,7 +2104,9 @@ export default function WpMonitorPage() {
                     </span>
                     <span className="detail-head-meta">
                       <span className="detail-head-meta-label">{t("monitor.metric.statWindow")}</span>
-                      <span className="detail-head-meta-value">{series.rate_window_secs}s</span>
+                      <span className="detail-head-meta-value">
+                        {(detailTrendMetricMode === "count" ? series.step_secs : series.rate_window_secs)}s
+                      </span>
                     </span>
                   </>
                 )}
@@ -2132,7 +2134,11 @@ export default function WpMonitorPage() {
                 </span>
                 <span className="detail-head-meta">
                   <span className="detail-head-meta-label">{t("monitor.metric.statWindow")}</span>
-                  <span className="detail-head-meta-value">{parseSeriesList[0].rate_window_secs ?? 0}s</span>
+                  <span className="detail-head-meta-value">
+                    {(detailTrendMetricMode === "count"
+                      ? parseSeriesList[0].step_secs
+                      : parseSeriesList[0].rate_window_secs) ?? 0}s
+                  </span>
                 </span>
               </>
             )}

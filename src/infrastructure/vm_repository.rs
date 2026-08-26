@@ -144,7 +144,11 @@ impl VmHttpRepository {
     /// - 2s 步长使用 4s，保持轻微平滑；
     /// - 5s 及以上默认与 step 一致，避免窗口被过度放大。
     fn rate_window_secs_for_step(step_secs: i64) -> i64 {
-        step_secs.max(1)
+        match step_secs {
+            0..=1 => 3,
+            2 => 4,
+            _ => step_secs.max(1),
+        }
     }
 
     /// 按时间范围与目标点数自动计算 query_range 的步长（Grafana 风格）。
@@ -152,7 +156,7 @@ impl VmHttpRepository {
     ///
     /// step 与 rate_window 必须分开：
     /// - step 决定返回的数据点密度，同时作为 count 模式的统计桶；
-    /// - rate 模式的 rate_window 与 step 保持一致，避免统计窗口不一致。
+    /// - rate 模式的 rate_window 在 1s/2s 步长下使用短窗口平滑采样抖动，较大步长与 step 一致。
     fn auto_step_for_timeseries(
         query: &TimeRangeQuery,
         max_data_points: Option<usize>,
@@ -581,6 +585,8 @@ impl VmHttpRepository {
         );
 
         let series = self.range_query(&query_prom, start, end, &step).await?;
+        // 数量曲线暂不区分“无事件”和“采样缺失”，网格空点按 0 展示，避免曲线断裂。
+        let fill_value = matches!(&metric_mode, TimeSeriesMetricMode::Count).then_some(0.0);
         let mut out = Vec::with_capacity(series.len());
         for s in series {
             let node_id = node_id_builder(&s.metric);
@@ -589,7 +595,7 @@ impl VmHttpRepository {
                 end,
                 step_secs,
                 Self::vm_points_to_time_points(&s.values),
-                None,
+                fill_value,
             );
             let (log_rate_eps, log_count) = match metric_mode {
                 TimeSeriesMetricMode::Rate => (points, Vec::new()),
@@ -878,8 +884,15 @@ impl VmRepository for VmHttpRepository {
             TimeSeriesMetricMode::Count => count_q,
         };
         let series = self.range_query(&query_prom, start, end, &step).await?;
-        let points =
-            align_points_to_grid(start, end, step_secs, Self::series_to_points(&series), None);
+        // 数量曲线暂不区分“无事件”和“采样缺失”，网格空点按 0 展示，避免曲线断裂。
+        let fill_value = matches!(&metric_mode, TimeSeriesMetricMode::Count).then_some(0.0);
+        let points = align_points_to_grid(
+            start,
+            end,
+            step_secs,
+            Self::series_to_points(&series),
+            fill_value,
+        );
 
         debug!(
             node_id = node_id,
@@ -1264,5 +1277,15 @@ mod tests {
         assert_eq!(points.len(), 2);
         assert_eq!(points[0].value, Some(400.0));
         assert_eq!(points[1].value, None);
+    }
+
+    /// 验证低步长速率查询使用平滑窗口，同时保持原有图表步长。
+    #[test]
+    fn rate_window_secs_for_step_smooths_short_intervals() {
+        assert_eq!(VmHttpRepository::rate_window_secs_for_step(0), 3);
+        assert_eq!(VmHttpRepository::rate_window_secs_for_step(1), 3);
+        assert_eq!(VmHttpRepository::rate_window_secs_for_step(2), 4);
+        assert_eq!(VmHttpRepository::rate_window_secs_for_step(5), 5);
+        assert_eq!(VmHttpRepository::rate_window_secs_for_step(60), 60);
     }
 }
