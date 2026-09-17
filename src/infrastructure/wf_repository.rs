@@ -133,7 +133,7 @@ impl WfVmRepository {
     }
 
     /// 按 window_name 分组，每组取时间戳最新的那条的 value。
-    fn pick_latest_by_window_name(series: &[VmSeriesValue]) -> HashMap<&str, f64> {
+    fn pick_latest_by_window_name(series: &[VmSeriesValue]) -> BTreeMap<&str, f64> {
         let mut map: BTreeMap<&str, (f64, f64)> = BTreeMap::new();
         for s in series {
             let name = match s.metric.get("window_name") {
@@ -420,12 +420,12 @@ impl WfRepository for WfVmRepository {
             Self::guard(self.instant_query(&q_lag, at)),
         );
 
-        let err_map: HashMap<&str, f64> = errs_series
+        let err_map: BTreeMap<&str, f64> = errs_series
             .iter()
             .filter_map(|s| Some((s.metric.get("source_name")?.as_str(), s.value)))
             .collect();
 
-        let lag_map: HashMap<&str, f64> = lag_series
+        let lag_map: BTreeMap<&str, f64> = lag_series
             .iter()
             .filter_map(|s| Some((s.metric.get("source_name")?.as_str(), s.value)))
             .collect();
@@ -489,7 +489,7 @@ impl WfRepository for WfVmRepository {
             Self::guard(self.instant_query(&q_counts, at)),
         );
 
-        let count_map: HashMap<&str, u32> = counts
+        let count_map: BTreeMap<&str, u32> = counts
             .iter()
             .filter_map(|s| Some((s.metric.get("machine_name")?.as_str(), s.value as u32)))
             .collect();
@@ -592,18 +592,18 @@ impl WfRepository for WfVmRepository {
             Self::guard(self.instant_query(&q_scopes, at)),
         );
 
-        let matched_map: HashMap<&str, f64> = matched
+        let matched_map: BTreeMap<&str, f64> = matched
             .iter()
             .filter_map(|f| Some((f.metric.get("rule_name")?.as_str(), f.value)))
             .collect();
 
-        let inst_map: HashMap<&str, f64> = instances
+        let inst_map: BTreeMap<&str, f64> = instances
             .iter()
             .filter_map(|s| Some((s.metric.get("rule_name")?.as_str(), s.value)))
             .collect();
 
         // 将 scope_key 数据按 alert_name 分组
-        let mut scopes_map: HashMap<&str, Vec<WfStateMachineItem>> = HashMap::new();
+        let mut scopes_map: BTreeMap<&str, Vec<WfStateMachineItem>> = BTreeMap::new();
         for s in &scopes {
             let alert_name = match s.metric.get("alert_name") {
                 Some(n) => n.as_str(),
