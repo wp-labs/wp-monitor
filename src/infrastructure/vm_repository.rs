@@ -45,6 +45,14 @@ pub struct VmHttpRepository {
     base_url: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotCountKind {
+    Source,
+    Parse,
+    SinkGroup,
+    Sink,
+}
+
 impl VmHttpRepository {
     /// 实时查询统一安全回退秒数，避免读取到尚未稳定写入的尾部点。
     const SAFE_LAG_SECS: i64 = 10;
@@ -266,6 +274,21 @@ impl VmHttpRepository {
         format!(
             r#"label_set(sum(increase(wparse_receive_data[{today_window_secs}s])), "metric", "today_log_total") or label_set(sum(increase(wparse_receive_data[{last_minute_window_secs}s])), "metric", "last_minute_increment") or label_set(sum(increase(wparse_parse_all[{today_window_secs}s])), "metric", "today_analyzed_total")"#
         )
+    }
+
+    /// 根据各聚合查询保留的分组标签识别快照计数类型。
+    fn snapshot_count_kind(metric: &HashMap<String, String>) -> Option<SnapshotCountKind> {
+        if metric.contains_key("source_type") && metric.contains_key("source_name") {
+            Some(SnapshotCountKind::Source)
+        } else if metric.contains_key("package_name") && metric.contains_key("rule_name") {
+            Some(SnapshotCountKind::Parse)
+        } else if metric.contains_key("sink_name") {
+            Some(SnapshotCountKind::Sink)
+        } else if metric.contains_key("sink_group") {
+            Some(SnapshotCountKind::SinkGroup)
+        } else {
+            None
+        }
     }
 
     /// 一次查询获取今日接收量、最近一分钟接收增量和今日解析量。
@@ -662,7 +685,7 @@ impl VmHttpRepository {
 impl VmRepository for VmHttpRepository {
     /// 查询分层快照：
     /// 1. 按业务指标构造 PromQL；
-    /// 2. 并发查询 source/parse/sink/cpu/mem；
+    /// 2. 合并 source/parse/sink 四类计数查询并执行一次 instant query；
     /// 3. 按层级聚合并返回统一结构。
     async fn fetch_snapshot_data(
         &self,
@@ -738,28 +761,33 @@ impl VmRepository for VmHttpRepository {
             )
         );
 
-        let (source_count, parse_count, sink_group_count, sink_count) = tokio::try_join!(
-            self.instant_query(&source_count_q, at_end),
-            self.instant_query(&parse_count_q, at_end),
-            self.instant_query(&sink_group_count_q, at_end),
-            self.instant_query(&sink_count_q, at_end),
-        )?;
+        let combined_query = [
+            source_count_q,
+            parse_count_q,
+            sink_group_count_q,
+            sink_count_q,
+        ]
+        .join(" or ");
+        let rows = self.instant_query(&combined_query, at_end).await?;
+
+        let mut source_count = Vec::new();
+        let mut parse_count = Vec::new();
+        let mut sink_group_count = Vec::new();
+        let mut sink_count = Vec::new();
+        for row in rows {
+            match Self::snapshot_count_kind(&row.metric) {
+                Some(SnapshotCountKind::Source) => source_count.push(row),
+                Some(SnapshotCountKind::Parse) => parse_count.push(row),
+                Some(SnapshotCountKind::SinkGroup) => sink_group_count.push(row),
+                Some(SnapshotCountKind::Sink) => sink_count.push(row),
+                None => {}
+            }
+        }
 
         let source_rate = Self::rate_from_count_rows(&source_count, window_secs);
         let parse_rate = Self::rate_from_count_rows(&parse_count, window_secs);
         let sink_group_rate = Self::rate_from_count_rows(&sink_group_count, window_secs);
         let sink_rate = Self::rate_from_count_rows(&sink_count, window_secs);
-
-        // 系统指标只取全局最大值，避免多序列场景出现重复。
-        let cpu_query = "max(wparse_cpu_usage)".to_string();
-        let mem_query = "max(wparse_memory_usage)".to_string();
-        let (cpu_rows, mem_rows) = tokio::try_join!(
-            self.instant_query(&cpu_query, at_end),
-            self.instant_query(&mem_query, at_end),
-        )?;
-
-        let cpu = cpu_rows.first().map(|x| x.value).unwrap_or(0.0000);
-        let mem = mem_rows.first().map(|x| x.value).unwrap_or(0.0000);
         debug!(
             source_rate_rows = source_rate.len(),
             source_count_rows = source_count.len(),
@@ -777,8 +805,8 @@ impl VmRepository for VmHttpRepository {
             parses: self.build_parse_nodes(parse_rate, parse_count),
             sinks: self.build_sink_groups(sink_group_rate, sink_group_count, sink_rate, sink_count),
             sys_metrics: SysMetrics {
-                cpu_usage_pct: cpu,
-                memory_used_mb: mem.round() as u64,
+                cpu_usage_pct: 0.0,
+                memory_used_mb: 0,
             },
         })
     }
@@ -1279,7 +1307,7 @@ struct VmPoint {
 
 #[cfg(test)]
 mod tests {
-    use super::{VmHttpRepository, VmPoint, VmRangeSeries};
+    use super::{SnapshotCountKind, VmHttpRepository, VmPoint, VmRangeSeries};
     use std::collections::HashMap;
 
     #[test]
@@ -1349,5 +1377,40 @@ mod tests {
             VmHttpRepository::layer_metrics_query(86_400, 60),
             r#"label_set(sum(increase(wparse_receive_data[86400s])), "metric", "today_log_total") or label_set(sum(increase(wparse_receive_data[60s])), "metric", "last_minute_increment") or label_set(sum(increase(wparse_parse_all[86400s])), "metric", "today_analyzed_total")"#
         );
+    }
+
+    #[test]
+    fn snapshot_count_kind_uses_query_group_labels() {
+        let source = HashMap::from([
+            ("source_type".to_string(), "syslog".to_string()),
+            ("source_name".to_string(), "local".to_string()),
+        ]);
+        let parse = HashMap::from([
+            ("package_name".to_string(), "nginx".to_string()),
+            ("rule_name".to_string(), "access".to_string()),
+        ]);
+        let sink_group = HashMap::from([("sink_group".to_string(), "infra".to_string())]);
+        let sink = HashMap::from([
+            ("sink_group".to_string(), "infra".to_string()),
+            ("sink_name".to_string(), "victoriametrics".to_string()),
+        ]);
+
+        assert_eq!(
+            VmHttpRepository::snapshot_count_kind(&source),
+            Some(SnapshotCountKind::Source)
+        );
+        assert_eq!(
+            VmHttpRepository::snapshot_count_kind(&parse),
+            Some(SnapshotCountKind::Parse)
+        );
+        assert_eq!(
+            VmHttpRepository::snapshot_count_kind(&sink_group),
+            Some(SnapshotCountKind::SinkGroup)
+        );
+        assert_eq!(
+            VmHttpRepository::snapshot_count_kind(&sink),
+            Some(SnapshotCountKind::Sink)
+        );
+        assert_eq!(VmHttpRepository::snapshot_count_kind(&HashMap::new()), None);
     }
 }
