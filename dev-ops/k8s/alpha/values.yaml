@@ -1,0 +1,71 @@
+# Default values for wp-monitor alpha deployment.
+
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  timezone: Asia/Shanghai
+  retentionPeriod: 15d
+
+victoriaMetrics:
+  enabled: true
+  image:
+    repository: victoriametrics/victoria-metrics
+    tag: v1.133.0
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8428
+  persistence:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    size: 20Gi
+    storageClassName: ""
+  resources: {}
+
+victoriaLogs:
+  enabled: true
+  image:
+    repository: victoriametrics/victoria-logs
+    tag: v1.43.0
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 9428
+  persistence:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    size: 50Gi
+    storageClassName: ""
+  maxDiskSpaceUsageBytes: 50GiB
+  resources: {}
+
+wpMonitor:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ghcr.io/wp-labs/wp-monitor
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: NodePort
+    nodePort: 30428
+    port: 18080
+  resources: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: wp-monitor.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []

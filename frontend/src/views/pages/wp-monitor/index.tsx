@@ -1,10 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  App, Button, DatePicker, Divider, Input, InputNumber, Space, Switch, Typography,
+  App, Button, DatePicker, Divider, Input, InputNumber, Pagination, Segmented, Space, Spin, Switch, Tabs, Typography,
 } from "antd";
-import { ChevronDown } from "lucide-react";
+import {
+  Ban,
+  CalendarRange,
+  ChartLine,
+  ChevronDown,
+  CodeXml,
+  Database,
+  FileText,
+  Inbox,
+  Maximize2,
+  Minimize2,
+  RadioTower,
+  SendHorizontal,
+} from "lucide-react";
+
+const WfMonitor = lazy(() => import('@/views/components/monitor/WfMonitor'));
+import { useTranslation } from "react-i18next";
 import dayjs, { type Dayjs } from "dayjs";
-import "dayjs/locale/zh-cn";
 
 import {
   applyMetricsToSnapshot,
@@ -15,17 +30,21 @@ import {
 import TimeSeriesChart from "@/views/components/monitor/TimeSeriesChart";
 import ScopeTrendPanel from "@/views/components/monitor/ScopeTrendPanel";
 import ThemeSwitcher from "@/views/components/monitor/ThemeSwitcher";
+import LanguageSwitcher from "@/views/components/monitor/LanguageSwitcher";
 import { getPalette } from "@/views/components/monitor/chartPalette";
 import {
+  clearMissedLogs,
   exportMissedLogs,
   fetchMissedLogs,
   fetchMetrics,
   fetchNodeDetail,
   fetchNodeTimeSeries,
+  fetchPackagesTimeSeries,
   fetchParseTimeSeries,
   fetchSnapshot,
   fetchVersion,
 } from "@/services/monitor";
+import type { TimeSeriesMetricMode } from "@/services/monitor";
 import type {
   LayerSnapshot,
   NodeDetail,
@@ -37,19 +56,29 @@ import logoDarkUrl from "@/assets/logo-dark.png";
 import logoLightUrl from "@/assets/logo-light.png";
 
 const QUICK_RANGES = [
-  { key: "1m", label: "最近 1 分钟", minutes: 1 },
-  { key: "5m", label: "最近 5 分钟", minutes: 5 },
-  { key: "1h", label: "最近 1 小时", minutes: 60 },
-  { key: "6h", label: "最近 6 小时", minutes: 360 },
-  { key: "24h", label: "最近 24 小时", minutes: 1440 },
-  // { key: "today", label: "今天" },
-  // { key: "yesterday", label: "昨天" },
-  { key: "week", label: "本周" },
+  { key: "5m", minutes: 5 },
+  { key: "30m", minutes: 30 },
+  { key: "1h", minutes: 60 },
+  { key: "6h", minutes: 360 },
+  { key: "today" },
+  { key: "week" },
 ] as const;
 const MISS_PAGE_SIZE = 10;
+const MISS_FULLSCREEN_PAGE_SIZE = 24;
 const REALTIME_END_LAG_MS = 5000;
+const PACKAGE_ICON_TONES = ["mint", "amber", "sky"] as const;
+
+function escapeSpecialChars(str: string): string {
+  return str
+    .replace(/\\/g, '\\\\')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t');
+}
+
 const { RangePicker } = DatePicker;
-dayjs.locale("zh-cn");
+type QuickRangeKey = (typeof QUICK_RANGES)[number]["key"];
+type TimeRangeKey = QuickRangeKey | "custom";
 
 type LegendType =
   | "source"
@@ -81,6 +110,8 @@ type ScopeSeriesRequest = {
   packageName?: string;
   sinkGroup?: string;
 };
+type DetailTrendMetricMode = TimeSeriesMetricMode;
+type RefreshRange = { start: string; end: string };
 
 function toIsoByMinutesAgo(minutes: number) {
   return new Date(Date.now() - REALTIME_END_LAG_MS - minutes * 60 * 1000).toISOString();
@@ -94,47 +125,53 @@ function nowWithLagIso() {
   return new Date(nowWithLagMs()).toISOString();
 }
 
-function estimateMaxDataPoints() {
-  if (typeof window === "undefined") return 720;
-  const panelWidth = Math.max(360, Math.floor(window.innerWidth * 0.58));
-  return Math.max(120, Math.min(1600, panelWidth));
-}
-
 function toDateFromIso(v: string) {
   const date = new Date(v);
   if (Number.isNaN(date.getTime())) return null;
   return date;
 }
 
-function formatLocalDateTime(iso: string) {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString("zh-CN", {
-    hour12: false,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-function formatLocalTime(iso: string) {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleTimeString("zh-CN", {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function normalizeNodePillText(name: string) {
-  if (name === "__source__") return "来源层";
-  if (name === "__parse__") return "Parse 层";
-  if (name === "__sink__") return "输出层";
+function normalizeNodePillText(
+  name: string,
+  labels: { source: string; parse: string; sink: string },
+) {
+  if (name === "__source__") return labels.source;
+  if (name === "__parse__") return labels.parse;
+  if (name === "__sink__") return labels.sink;
   return name;
+}
+
+function resolveTimeRange(currentStart: string, currentEnd: string) {
+  const startMs = new Date(currentStart).getTime();
+  const endMs = new Date(currentEnd).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs >= endMs) {
+    const end = nowWithLagIso();
+    const fallbackStart = new Date(new Date(end).getTime() - 5 * 60 * 1000).toISOString();
+    let start = Number.isFinite(startMs) ? currentStart : fallbackStart;
+    if (new Date(start).getTime() >= new Date(end).getTime()) start = fallbackStart;
+    return { start, end };
+  }
+  return { start: currentStart, end: currentEnd };
+}
+
+function toChartRangeMs(startIso: string, endIso: string) {
+  const startMs = new Date(startIso).getTime();
+  const endMs = new Date(endIso).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs >= endMs) {
+    return { xMin: undefined, xMax: undefined };
+  }
+  return { xMin: startMs, xMax: endMs };
+}
+
+function filterLogsByMode(
+  logs: Array<{ name: string; metrics: { log_rate_eps: number } }>,
+  mode: "withData" | "noData",
+) {
+  return logs.filter((log) =>
+    mode === "withData"
+      ? log.metrics.log_rate_eps > 0
+      : log.metrics.log_rate_eps === 0,
+  );
 }
 
 function buildQuickRange(key: string) {
@@ -153,12 +190,7 @@ function buildQuickRange(key: string) {
     return { start: start.toISOString(), end: end.toISOString() };
   }
   if (key === "week") {
-    const weekday = now.getDay() === 0 ? 7 : now.getDay();
-    const start = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate() - (weekday - 1),
-    );
+    const start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     return { start: start.toISOString(), end: now.toISOString() };
   }
   const selected = QUICK_RANGES.find((item) => item.key === key && "minutes" in item);
@@ -168,18 +200,46 @@ function buildQuickRange(key: string) {
   return { start: start.toISOString(), end: end.toISOString() };
 }
 
+function resolveAutoRefreshRange(
+  rangeKey: TimeRangeKey,
+  currentStart: string,
+  currentEnd: string,
+): RefreshRange {
+  if (rangeKey === "custom") {
+    return resolveTimeRange(currentStart, currentEnd);
+  }
+  return buildQuickRange(rangeKey) ?? resolveTimeRange(currentStart, currentEnd);
+}
+
 export default function WpMonitorPage() {
+  const { t } = useTranslation();
   const { theme, accentColor } = useTheme();
+
   const logoUrl = theme === 'light-modern' ? logoLightUrl : logoDarkUrl;
   const formatRate2 = useCallback((v: number) => `${v.toFixed(2)} e/s`, []);
+  const formatCount2 = useCallback((v: number) => `${Math.max(0, Math.round(v))}`, []);
+  const layerLabels = useMemo(
+    () => ({
+      source: t("monitor.layer.source"),
+      parse: t("monitor.layer.parse"),
+      sink: t("monitor.layer.sink"),
+    }),
+    [t],
+  );
+  const normalizeNodePill = useCallback(
+    (name: string) => normalizeNodePillText(name, layerLabels),
+    [layerLabels],
+  );
 
+  const [activeTab, setActiveTab] = useState<'pipeline' | 'engine'>('pipeline');
+  const [enginePreloaded, setEnginePreloaded] = useState(false);
+  useEffect(() => { setEnginePreloaded(true); }, []);
   const [appVersion, setAppVersion] = useState("");
   const [snapshot, setSnapshot] = useState<LayerSnapshot | null>(null);
   const [startTime, setStartTime] = useState(() => toIsoByMinutesAgo(5));
   const [endTime, setEndTime] = useState(() => nowWithLagIso());
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
 
   const [selectedNode, setSelectedNode] = useState("");
   const [hoveredNode, setHoveredNode] = useState("");
@@ -198,40 +258,59 @@ export default function WpMonitorPage() {
   );
   const [scopeSeriesRequest, setScopeSeriesRequest] =
     useState<ScopeSeriesRequest | null>(null);
-  const [parseSeriesTitle, setParseSeriesTitle] = useState("");
   const [detailStartTime, setDetailStartTime] = useState("");
   const [detailEndTime, setDetailEndTime] = useState("");
   const [drawerLoading, setDrawerLoading] = useState(false);
   const [drawerError, setDrawerError] = useState("");
   const [detailPanelHeight, setDetailPanelHeight] = useState(290);
+  const [detailFullscreen, setDetailFullscreen] = useState(false);
   const [missLogsLoading, setMissLogsLoading] = useState(false);
   const [missLogsError, setMissLogsError] = useState("");
   const [missLogs, setMissLogs] = useState<VlogRecord[]>([]);
-  const [missHasMore, setMissHasMore] = useState(false);
+  const [missTotal, setMissTotal] = useState(0);
   const [missPage, setMissPage] = useState(1);
   const [missExporting, setMissExporting] = useState(false);
-  const [missWindowStart, setMissWindowStart] = useState("");
-  const [missWindowEnd, setMissWindowEnd] = useState("");
+  const [missClearing, setMissClearing] = useState(false);
+  const [missSource, setMissSource] = useState<"vlog" | "file">(() => {
+    const saved = localStorage.getItem("missSource");
+    if (saved === "file" || saved === "vlog") return saved;
+    return "vlog";
+  });
 
   const [expandedPackages, setExpandedPackages] = useState<string[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
 
-  const [draftRange, setDraftRange] = useState("5m");
+  const [activeRangeKey, setActiveRangeKey] = useState<TimeRangeKey>("5m");
   const [draftStart, setDraftStart] = useState<Date | null>(() =>
     toDateFromIso(toIsoByMinutesAgo(5)),
   );
   const [draftEnd, setDraftEnd] = useState<Date | null>(() =>
     toDateFromIso(nowWithLagIso()),
   );
-  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [refreshIntervalSec, setRefreshIntervalSec] = useState(5);
   const [refreshIntervalInput, setRefreshIntervalInput] = useState("5");
   const [refreshSpin, setRefreshSpin] = useState(false);
   const [detailTrendAutoRefresh, setDetailTrendAutoRefresh] = useState(true);
+  const [detailTrendMetricMode, setDetailTrendMetricMode] =
+    useState<DetailTrendMetricMode>("rate");
+  const [isRangePickerOpen, setIsRangePickerOpen] = useState(false);
+  const [isTimeDraftDirty, setIsTimeDraftDirty] = useState(false);
 
+  const [parseFilter, setParseFilter] = useState<"withData" | "noData">("withData");
+  const PARSE_PAGE_SIZE = 20;
+  const [parsePage, setParsePage] = useState(1);
+  const scopeModeRef = useRef<"log" | "package">("log");
+  const initialScopeOpened = useRef(false);
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
+  const parseFilterRef = useRef(parseFilter);
+  parseFilterRef.current = parseFilter;
   const [parseQuery, setParseQuery] = useState("");
   const [parseSearchOpen, setParseSearchOpen] = useState(false);
   const [parseSearchActiveIndex, setParseSearchActiveIndex] = useState(0);
+  const [parseSearchTargetPkgIds, setParseSearchTargetPkgIds] = useState<
+    string[] | null
+  >(null);
   const parseSearchRef = useRef<HTMLDivElement | null>(null);
   const detailPanelRef = useRef<HTMLElement | null>(null);
   const refreshSpinTimerRef = useRef<number | null>(null);
@@ -240,7 +319,12 @@ export default function WpMonitorPage() {
   );
   const scopeSeriesColorMapRef = useRef<Map<string, string>>(new Map());
   const scopeSeriesColorCursorRef = useRef(0);
-
+  const detailRequestSeqRef = useRef(0);
+  const missScrollRef = useRef<HTMLDivElement | null>(null);
+  const isInitialMountRef = useRef(true);
+  const userTimeChangeRef = useRef(false);
+  const autoRefreshEnabled = refreshIntervalSec > 0 && activeRangeKey !== "custom";
+  const missPageSize = detailFullscreen ? MISS_FULLSCREEN_PAGE_SIZE : MISS_PAGE_SIZE;
   const clampDetailPanelHeight = useCallback((h: number) => {
     const isMobile = window.innerWidth <= 768;
     const minHeight = isMobile ? Math.floor(window.innerHeight * 0.56) : 220;
@@ -260,37 +344,54 @@ export default function WpMonitorPage() {
     }, 300);
   }, []);
 
-  async function loadSnapshot(start = startTime, end = endTime) {
+  const isTimeSelectionPending = isRangePickerOpen || isTimeDraftDirty;
+  const resetTimeDraft = useCallback(() => {
+    setDraftStart(toDateFromIso(startTime));
+    setDraftEnd(toDateFromIso(endTime));
+    setIsTimeDraftDirty(false);
+  }, [startTime, endTime]);
+
+  async function loadSnapshot(start = startTime, end = endTime, ms = missSource) {
     try {
-      setLoading(true);
       setError("");
-      const data = await fetchSnapshot(start, end);
+      const data = await fetchSnapshot(start, end, ms);
       setSnapshot(data);
       setExpandedPackages(data.parses.map((parseItem) => parseItem.id));
       setExpandedGroups(data.sinks.map((group) => group.id));
     } catch (err) {
       setError((err as Error).message);
     } finally {
-      setLoading(false);
     }
   }
 
   async function refreshMetricsOnly() {
-    if (!snapshot) return;
+    const snap = snapshotRef.current;
+    if (!snap) return;
     triggerRefreshSpin();
     try {
-      const ids = collectAllNodeIds(snapshot);
-      // 自动刷新时保持窗口长度恒定，避免仅更新 end_time 导致时间范围持续漂移。
-      const nowMs = nowWithLagMs();
-      const startMs = new Date(startTime).getTime();
-      const endMs = new Date(endTime).getTime();
-      const durationMs =
-        Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs
-          ? endMs - startMs
-          : 5 * 60 * 1000;
-      const nextEnd = new Date(nowMs).toISOString();
-      const nextStart = new Date(nowMs - durationMs).toISOString();
-      const data = await fetchMetrics(nextStart, nextEnd, ids);
+      const ids = collectAllNodeIds(snap);
+      const pkgFilters = filteredParsesRef.current
+        .map((pkg) => ({
+          packageName: pkg.package_name,
+          ruleNames: filterLogsByMode(pkg.logs, parseFilterRef.current).map((log) => log.name),
+        }))
+        .filter((f) => f.ruleNames.length > 0);
+      const nextRange = resolveAutoRefreshRange(activeRangeKey, startTime, endTime);
+      const nextStart = nextRange.start;
+      const nextEnd = nextRange.end;
+      const data = await fetchMetrics(nextStart, nextEnd, ids, pkgFilters);
+
+      const prevVer = snap.meta.layer_versions;
+      const nextVer = data.layer_versions;
+      if (
+        prevVer.source_version !== nextVer.source_version ||
+        prevVer.parse_version !== nextVer.parse_version ||
+        prevVer.sink_version !== nextVer.sink_version
+      ) {
+        await loadSnapshot(nextStart, nextEnd);
+        return;
+      }
+
       setSnapshot((prev) =>
         prev ? applyMetricsToSnapshot(prev, data.items) : prev,
       );
@@ -304,6 +405,14 @@ export default function WpMonitorPage() {
   useEffect(() => {
     void loadSnapshot();
   }, []);
+
+  // 默认打开 Parse 趋势图
+  useEffect(() => {
+    if (snapshot && !initialScopeOpened.current) {
+      initialScopeOpened.current = true;
+      void openParseScope();
+    }
+  }, [snapshot]);
 
   useEffect(() => {
     let cancelled = false;
@@ -326,37 +435,34 @@ export default function WpMonitorPage() {
   }, []);
 
   useEffect(() => {
-    if (!autoRefreshEnabled) return;
+    if (!autoRefreshEnabled || isTimeSelectionPending || activeTab !== 'pipeline') return;
     const timer = setInterval(() => {
       void refreshMetricsOnly();
     }, refreshIntervalSec * 1000);
     return () => clearInterval(timer);
   }, [
-    snapshot,
-    startTime,
     autoRefreshEnabled,
+    activeRangeKey,
     refreshIntervalSec,
+    isTimeSelectionPending,
+    activeTab,
   ]);
 
   useEffect(() => {
+    if (isTimeSelectionPending) return;
+    resetTimeDraft();
+  }, [resetTimeDraft, isTimeSelectionPending]);
+
+  useEffect(() => {
     function onDocClick(event: MouseEvent) {
-      const target = event.target as Node;
-      if (!parseSearchRef.current?.contains(target)) setParseSearchOpen(false);
-      if (
-        selectedNode &&
-        !detailPanelRef.current?.contains(target) &&
-        !(target as Element).closest(
-          ".node, .node__leaf, .lane-title",
-        )
-      ) {
-        setSelectedNode("");
-        setDetailNodePill("");
-        setScopeSeriesRequest(null);
+      const target = event.target;
+      if (!(target instanceof Node) || !parseSearchRef.current?.contains(target)) {
+        setParseSearchOpen(false);
       }
     }
     document.addEventListener("click", onDocClick);
     return () => document.removeEventListener("click", onDocClick);
-  }, [selectedNode]);
+  }, []);
 
   useEffect(() => {
     if (!sweepNode) return;
@@ -386,15 +492,25 @@ export default function WpMonitorPage() {
     };
   }, []);
 
-  const rateChartPoints = useMemo(
-    () => series?.log_rate_eps ?? [],
-    [series?.log_rate_eps],
+  const detailChartPoints = useMemo(
+    () =>
+      detailTrendMetricMode === "count"
+        ? (series?.log_count ?? [])
+        : (series?.log_rate_eps ?? []),
+    [detailTrendMetricMode, series?.log_count, series?.log_rate_eps],
+  );
+  const detailChartRange = useMemo(
+    () => toChartRangeMs(detailStartTime, detailEndTime),
+    [detailEndTime, detailStartTime],
   );
   const parseMultiSeries = useMemo(
     () =>
       (parseSeriesList ?? []).map((seriesItem) => ({
         name: seriesItem.node_id,
-        points: seriesItem.log_rate_eps ?? [],
+        points:
+          detailTrendMetricMode === "count"
+            ? (seriesItem.log_count ?? [])
+            : (seriesItem.log_rate_eps ?? []),
         color: (() => {
           const cached = scopeSeriesColorMapRef.current.get(seriesItem.node_id);
           if (cached) return cached;
@@ -408,7 +524,7 @@ export default function WpMonitorPage() {
           return color;
         })(),
       })),
-    [parseSeriesList, theme],
+    [detailTrendMetricMode, parseSeriesList, theme],
   );
   const visibleParseMultiSeries = useMemo(
     () =>
@@ -416,6 +532,10 @@ export default function WpMonitorPage() {
         (line) => !hiddenScopeSeriesNames.includes(line.name),
       ),
     [parseMultiSeries, hiddenScopeSeriesNames],
+  );
+  const scopeChartRange = useMemo(
+    () => toChartRangeMs(detailStartTime, detailEndTime),
+    [detailEndTime, detailStartTime],
   );
   const isMissSelected = useMemo(
     () =>
@@ -429,7 +549,58 @@ export default function WpMonitorPage() {
       snapshot.miss.metrics.log_rate_eps > 0
     );
   }, [snapshot]);
-  const missPageItems = useMemo(() => missLogs, [missLogs]);
+  const isSearching = useMemo(() => !!parseQuery.trim(), [parseQuery]);
+
+  const filteredParses = useMemo(() => {
+    if (!snapshot) return [];
+    if (parseSearchTargetPkgIds) {
+      const idSet = new Set(parseSearchTargetPkgIds);
+      return snapshot.parses.filter((p) => idSet.has(p.id));
+    }
+    if (isSearching) {
+      const terms = parseQuery.trim().toLowerCase().split(/\s*\/\s*/);
+      return snapshot.parses.filter((p) => {
+        if (terms.some((t) => p.package_name.toLowerCase().includes(t))) return true;
+        return p.logs.some((l) => terms.some((t) => l.name.toLowerCase().includes(t)));
+      });
+    }
+    return snapshot.parses.filter((p) => {
+      if (parseFilter === "withData") return p.metrics.log_rate_eps > 0;
+      if (parseFilter === "noData") return p.logs.some((l) => l.metrics.log_rate_eps === 0);
+      return true;
+    });
+  }, [snapshot, parseFilter, parseQuery, isSearching, parseSearchTargetPkgIds]);
+
+  const filteredParsesRef = useRef(filteredParses);
+  filteredParsesRef.current = filteredParses;
+
+  const parsePages = useMemo(() => {
+    const pages: (typeof filteredParses)[] = [];
+    let cur: typeof filteredParses = [];
+    let curCnt = 0;
+    for (const pkg of filteredParses) {
+      const cnt = (isSearching || parseSearchTargetPkgIds)
+        ? pkg.logs.length
+        : filterLogsByMode(pkg.logs, parseFilter).length;
+      if (curCnt >= PARSE_PAGE_SIZE && cur.length > 0) {
+        pages.push(cur);
+        cur = [];
+        curCnt = 0;
+      }
+      cur.push(pkg);
+      curCnt += cnt;
+    }
+    if (cur.length > 0) pages.push(cur);
+    return pages.length > 0 ? pages : [[]];
+  }, [filteredParses, parseFilter, isSearching, parseSearchTargetPkgIds]);
+
+  const parseTotalPages = parsePages.length;
+  const parsePageItems = parsePages[Math.min(parsePage - 1, parseTotalPages - 1)] || [];
+
+  const missPageItems = useMemo(() => {
+    const offset = (missPage - 1) * missPageSize;
+    return missLogs.slice(offset, offset + missPageSize);
+  }, [missLogs, missPage, missPageSize]);
   const detailNodePillType = useMemo(() => {
     if (!selectedNode) return "generic";
     if (snapshot?.miss.id === selectedNode) return "miss";
@@ -463,7 +634,10 @@ export default function WpMonitorPage() {
       isMissSelected ||
       Boolean(parseSeriesList) ||
       !detailTrendAutoRefresh ||
-      drawerLoading
+      !autoRefreshEnabled ||
+      isTimeSelectionPending ||
+      drawerLoading ||
+      activeTab !== 'pipeline'
     )
       return;
     const startMs = new Date(detailStartTime).getTime();
@@ -488,7 +662,7 @@ export default function WpMonitorPage() {
             selectedNode,
             nextStart,
             nextEnd,
-            estimateMaxDataPoints(),
+            detailTrendMetricMode,
           ),
         ]);
         if (cancelled) return;
@@ -499,7 +673,7 @@ export default function WpMonitorPage() {
         setDrawerError("");
       } catch (err) {
         if (cancelled) return;
-        setDrawerError((err as Error).message || "节点详情获取失败");
+        setDrawerError((err as Error).message || t("monitor.error.nodeDetailFetchFailed"));
       }
     };
 
@@ -514,11 +688,16 @@ export default function WpMonitorPage() {
     selectedNode,
     isMissSelected,
     detailTrendAutoRefresh,
+    autoRefreshEnabled,
+    isTimeSelectionPending,
     drawerLoading,
     detailStartTime,
     detailEndTime,
     refreshIntervalSec,
+    detailTrendMetricMode,
     parseSeriesList,
+    t,
+    activeTab,
   ]);
 
   useEffect(() => {
@@ -528,7 +707,10 @@ export default function WpMonitorPage() {
       !scopeSeriesRequest ||
       parseSeriesList === null ||
       !detailTrendAutoRefresh ||
-      drawerLoading
+      !autoRefreshEnabled ||
+      isTimeSelectionPending ||
+      drawerLoading ||
+      activeTab !== 'pipeline'
     )
       return;
     const startMs = new Date(detailStartTime).getTime();
@@ -544,17 +726,45 @@ export default function WpMonitorPage() {
 
     const refreshScopeTimeseries = async () => {
       try {
+        const filter = parseFilterRef.current;
         const nextEndMs = nowWithLagMs();
         const nextStart = new Date(nextEndMs - durationMs).toISOString();
         const nextEnd = new Date(nextEndMs).toISOString();
-        const timeseriesResp = await fetchParseTimeSeries(
-          scopeSeriesRequest.scope,
-          nextStart,
-          nextEnd,
-          estimateMaxDataPoints(),
-          scopeSeriesRequest.packageName,
-          scopeSeriesRequest.sinkGroup,
-        );
+        let timeseriesResp;
+        if (scopeModeRef.current === "package") {
+          const pkgFilters = filteredParses.map((pkg) => ({
+            packageName: pkg.package_name,
+            ruleNames: filterLogsByMode(pkg.logs, filter).map((log) => log.name),
+          }));
+          timeseriesResp = await fetchPackagesTimeSeries(
+            nextStart,
+            nextEnd,
+            detailTrendMetricMode,
+            undefined,
+            pkgFilters,
+          );
+        } else {
+          let logNodeIds: string[] | undefined;
+          const req = scopeSeriesRequest;
+          if (req.scope === "parse" && req.packageName) {
+            const snap = snapshotRef.current;
+            const pkg = snap?.parses.find((p) => p.package_name === req.packageName);
+            if (pkg) {
+              const logs = filterLogsByMode(pkg.logs, filter);
+              logNodeIds = logs.map((l) => l.name);
+            }
+          }
+          timeseriesResp = await fetchParseTimeSeries(
+            scopeSeriesRequest.scope,
+            nextStart,
+            nextEnd,
+            detailTrendMetricMode,
+            undefined,
+            scopeSeriesRequest.packageName,
+            scopeSeriesRequest.sinkGroup,
+            logNodeIds,
+          );
+        }
         if (cancelled) return;
         setParseSeriesList(timeseriesResp.data ?? []);
         setDetailStartTime(nextStart);
@@ -562,7 +772,7 @@ export default function WpMonitorPage() {
         setDrawerError("");
       } catch (err) {
         if (cancelled) return;
-        setDrawerError((err as Error).message || "范围时序获取失败");
+        setDrawerError((err as Error).message || t("monitor.error.scopeTimeseriesFetchFailed"));
       }
     };
 
@@ -579,10 +789,15 @@ export default function WpMonitorPage() {
     scopeSeriesRequest,
     parseSeriesList,
     detailTrendAutoRefresh,
+    autoRefreshEnabled,
+    isTimeSelectionPending,
     drawerLoading,
     detailStartTime,
     detailEndTime,
     refreshIntervalSec,
+    detailTrendMetricMode,
+    t,
+    activeTab,
   ]);
 
   const parseSearchGroups = useMemo(() => {
@@ -633,6 +848,56 @@ export default function WpMonitorPage() {
     setParseSearchActiveIndex(0);
   }, [parseQuery, parseSearchOpen]);
 
+  // 过滤切换或 parse lane 可见节点变化时，scope 趋势图同步刷新
+  const filteredScopeSignature = useMemo(
+    () =>
+      filteredParses
+        .map((pkg) => {
+          const logs = filterLogsByMode(pkg.logs, parseFilter)
+            .map((log) => log.name)
+            .join(",");
+          return `${pkg.package_name}:${logs}`;
+        })
+        .join("|"),
+    [filteredParses, parseFilter],
+  );
+  const prevFilteredScopeSignature = useRef(filteredScopeSignature);
+
+  useEffect(() => {
+    if (!snapshot || !initialScopeOpened.current || detailViewMode !== "scope") return;
+
+    const scopeChanged = filteredScopeSignature !== prevFilteredScopeSignature.current;
+    prevFilteredScopeSignature.current = filteredScopeSignature;
+
+    if (scopeModeRef.current === "package") {
+      if (scopeChanged) {
+        void openParseScope(false);
+      }
+    } else if (scopeModeRef.current === "log" && scopeSeriesRequest) {
+      const req = scopeSeriesRequest;
+      let logNodeIds: string[] | undefined;
+      if (req.scope === "parse" && req.packageName) {
+        const pkg = snapshot.parses.find((p) => p.package_name === req.packageName);
+        if (pkg) {
+          const logs = filterLogsByMode(pkg.logs, parseFilter);
+          logNodeIds = logs.map((l) => l.name);
+        }
+      }
+      void fetchParseTimeSeries(
+        req.scope,
+        detailStartTime,
+        detailEndTime,
+        detailTrendMetricMode,
+        undefined,
+        req.packageName, req.sinkGroup, logNodeIds,
+      ).then((resp) => {
+        setParseSeriesList(resp.data ?? []);
+      }).catch((err) => {
+        setDrawerError((err as Error).message || t("monitor.error.parseTimeseriesFetchFailed"));
+      });
+    }
+  }, [detailTrendMetricMode, filteredScopeSignature]);
+
   useEffect(() => {
     scopeSeriesColorMapRef.current.clear();
     scopeSeriesColorCursorRef.current = 0;
@@ -646,28 +911,50 @@ export default function WpMonitorPage() {
 
   const resolveNodePillById = useCallback(
     (nodeId: string) => {
-      if (!snapshot) return normalizeNodePillText(nodeId);
+      if (!snapshot) return normalizeNodePill(nodeId);
       if (snapshot.miss.id === nodeId) {
-        return normalizeNodePillText(snapshot.miss.name);
+        return normalizeNodePill(snapshot.miss.name);
       }
       const sourceNode = snapshot.sources.find((node) => node.id === nodeId);
-      if (sourceNode) return normalizeNodePillText(sourceNode.name);
+      if (sourceNode) return normalizeNodePill(sourceNode.name);
       const parseNode = snapshot.parses.find((parseItem) => parseItem.id === nodeId);
-      if (parseNode) return normalizeNodePillText(parseNode.package_name);
+      if (parseNode) return normalizeNodePill(parseNode.package_name);
       for (const parse of snapshot.parses) {
         const logNode = parse.logs.find((logItem) => logItem.id === nodeId);
-        if (logNode) return normalizeNodePillText(logNode.name);
+        if (logNode) return normalizeNodePill(logNode.name);
       }
       const sinkGroup = snapshot.sinks.find((group) => group.id === nodeId);
-      if (sinkGroup) return normalizeNodePillText(sinkGroup.sink_group);
+      if (sinkGroup) return normalizeNodePill(sinkGroup.sink_group);
       for (const group of snapshot.sinks) {
         const sinkNode = group.sinks.find((sinkItem) => sinkItem.id === nodeId);
-        if (sinkNode) return normalizeNodePillText(sinkNode.sink_name);
+        if (sinkNode) return normalizeNodePill(sinkNode.sink_name);
       }
-      return normalizeNodePillText(nodeId);
+      return normalizeNodePill(nodeId);
     },
-    [snapshot],
+    [normalizeNodePill, snapshot],
   );
+
+  useEffect(() => {
+    if (!selectedNode || !detailNodePill) return;
+    setDetailNodePill(resolveNodePillById(selectedNode));
+  }, [detailNodePill, resolveNodePillById, selectedNode]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && detailFullscreen) {
+        setDetailFullscreen(false);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [detailFullscreen]);
+
+  useEffect(() => {
+    setMissPage((prev) => {
+      const maxPage = Math.max(1, Math.ceil(missLogs.length / missPageSize));
+      return Math.min(prev, maxPage);
+    });
+  }, [missLogs.length, missPageSize]);
 
   function nodeClass(
     base: string,
@@ -681,22 +968,50 @@ export default function WpMonitorPage() {
     return classes.join(" ");
   }
 
-  async function loadMissedLogs(start: string, end: string, page: number) {
+  async function loadMissedLogs(resetPage = true, ms = missSource) {
     try {
       setMissLogsLoading(true);
       setMissLogsError("");
-      const data = await fetchMissedLogs(start, end, page, MISS_PAGE_SIZE);
+      const data = await fetchMissedLogs(ms);
       setMissLogs(data.items);
-      setMissHasMore(data.has_more);
-      setMissPage(data.page);
+      setMissTotal(data.total ?? data.items.length);
+      setSnapshot((prev) =>
+        prev
+          ? {
+              ...prev,
+              miss: {
+                ...prev.miss,
+                metrics: { ...prev.miss.metrics, log_count: data.total ?? data.items.length },
+              },
+            }
+          : prev,
+      );
+      if (resetPage) {
+        setMissPage(1);
+      } else {
+        setMissPage((prev) => {
+          const maxPage = Math.max(1, Math.ceil(data.items.length / missPageSize));
+          return Math.min(prev, maxPage);
+        });
+      }
       return true;
     } catch (err) {
       setMissLogs([]);
-      setMissHasMore(false);
-      setMissLogsError((err as Error).message || "MISS 日志获取失败");
+      setMissTotal(0);
+      setMissLogsError((err as Error).message || t("monitor.error.missedLogsFetchFailed"));
       return false;
     } finally {
       setMissLogsLoading(false);
+    }
+  }
+
+  async function handleMissSourceChange(val: "vlog" | "file") {
+    setMissSource(val);
+    localStorage.setItem("missSource", val);
+    // 重新加载 snapshot（更新 miss count）和 miss 日志
+    await loadSnapshot(startTime, endTime, val);
+    if (isMissSelected) {
+      await loadMissedLogs(true, val);
     }
   }
 
@@ -704,9 +1019,7 @@ export default function WpMonitorPage() {
     if (!isMissSelected) return;
     try {
       setMissExporting(true);
-      const exportStart = missWindowStart || detailStartTime;
-      const exportEnd = missWindowEnd || detailEndTime;
-      const resp = await exportMissedLogs(exportStart, exportEnd);
+      const resp = await exportMissedLogs(missSource);
       const blob = await resp.blob();
       const contentDisposition = resp.headers.get("content-disposition") || "";
       const matched = contentDisposition.match(/filename="([^"]+)"/i);
@@ -724,113 +1037,119 @@ export default function WpMonitorPage() {
       );
       URL.revokeObjectURL(url);
     } catch (err) {
-      setMissLogsError((err as Error).message || "MISS 日志导出失败");
+      setMissLogsError((err as Error).message || t("monitor.error.missedLogsExportFailed"));
     } finally {
       setMissExporting(false);
     }
   }
 
-  async function onPrevMissPage() {
-    if (missPage <= 1) return;
-    const pageStart = missWindowStart || detailStartTime;
-    const pageEnd = missWindowEnd || detailEndTime;
-    await loadMissedLogs(pageStart, pageEnd, missPage - 1);
+  function onClearMissed() {
+    modal.confirm({
+      title: t("monitor.miss.clearConfirm"),
+      okText: t("common.confirm"),
+      cancelText: t("common.cancel"),
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          setMissClearing(true);
+          await clearMissedLogs(missSource);
+          message.success(t("monitor.miss.clearSuccess"));
+          await loadSnapshot();
+          if (isMissSelected) {
+            await loadMissedLogs(true);
+          }
+        } catch (err) {
+          message.error((err as Error).message || t("monitor.miss.clearFailed"));
+        } finally {
+          setMissClearing(false);
+        }
+      },
+    });
   }
 
-  async function onNextMissPage() {
-    if (!missHasMore) return;
-    const pageStart = missWindowStart || detailStartTime;
-    const pageEnd = missWindowEnd || detailEndTime;
-    await loadMissedLogs(pageStart, pageEnd, missPage + 1);
+  function onMissPageChange(page: number) {
+    setMissPage(page);
+    missScrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
   }
 
-  async function openDetail(nodeId: string) {
+  async function openDetail(nodeId: string, showLoading = true) {
+    return openDetailWithMetricMode(nodeId, detailTrendMetricMode, showLoading);
+  }
+
+  async function openDetailWithMetricMode(
+    nodeId: string,
+    metricMode: DetailTrendMetricMode,
+    showLoading = true,
+  ): Promise<boolean> {
+    const seq = ++detailRequestSeqRef.current;
     setDetailViewMode("node");
     setDetailNodePill(resolveNodePillById(nodeId));
     setHiddenScopeSeriesNames([]);
     setScopeSeriesRequest(null);
+    setParseSeriesList(null);
     const missNodeId = snapshot?.miss.id ?? "";
     const isMissNode = nodeId === missNodeId;
-    let currentStart = startTime;
-    let currentEnd = endTime || nowWithLagIso();
-    const startMs = new Date(currentStart).getTime();
-    const endMs = new Date(currentEnd).getTime();
-    if (
-      !Number.isFinite(startMs) ||
-      !Number.isFinite(endMs) ||
-      startMs >= endMs
-    ) {
-      currentEnd = nowWithLagIso();
-      const fallbackStart = new Date(
-        new Date(currentEnd).getTime() - 5 * 60 * 1000,
-      ).toISOString();
-      currentStart = Number.isFinite(startMs) ? currentStart : fallbackStart;
-      if (new Date(currentStart).getTime() >= new Date(currentEnd).getTime()) {
-        currentStart = fallbackStart;
-      }
-    }
-    const detailRange = { start: currentStart, end: currentEnd };
+    const detailRange = resolveTimeRange(startTime, endTime || nowWithLagIso());
     setSelectedNode(nodeId);
     setDetailStartTime(detailRange.start);
     setDetailEndTime(detailRange.end);
-    setDrawerLoading(true);
+    if (showLoading) setDrawerLoading(true);
     setDrawerError("");
-    setDetail(null);
-    setSeries(null);
-    setParseSeriesList(null);
-    setParseSeriesTitle("");
     setMissLogs([]);
-    setMissHasMore(false);
+    setMissTotal(0);
     setMissLogsError("");
     setMissLogsLoading(false);
-    setMissWindowStart("");
-    setMissWindowEnd("");
     try {
       const detailPromise = fetchNodeDetail(
         nodeId,
         detailRange.start,
         detailRange.end,
+        missSource,
       );
       const seriesPromise = fetchNodeTimeSeries(
         nodeId,
         detailRange.start,
         detailRange.end,
-        estimateMaxDataPoints(),
+        metricMode,
       );
       if (isMissNode) {
         setMissLogsLoading(true);
-        setMissWindowStart(currentStart);
-        setMissWindowEnd(currentEnd);
         const [detailResp, seriesResp, missedResp] = await Promise.all([
           detailPromise,
           seriesPromise,
-          fetchMissedLogs(currentStart, currentEnd, 1, MISS_PAGE_SIZE),
+          fetchMissedLogs(missSource),
         ]);
+        if (detailRequestSeqRef.current !== seq) return false;
         setMissLogs(missedResp.items);
-        setMissHasMore(missedResp.has_more);
-        setMissPage(missedResp.page);
+        setMissTotal(missedResp.total ?? missedResp.items.length);
+        setMissPage(1);
         setMissLogsError("");
         setMissLogsLoading(false);
         setDetail(detailResp.data);
-        setDetailNodePill(normalizeNodePillText(detailResp.data.name));
+        setDetailNodePill(normalizeNodePill(detailResp.data.name));
         setSeries(seriesResp.data);
-        return;
+        return true;
       }
       const [detailResp, seriesResp] = await Promise.all([
         detailPromise,
         seriesPromise,
       ]);
+      if (detailRequestSeqRef.current !== seq) return false;
       setDetail(detailResp.data);
-      setDetailNodePill(normalizeNodePillText(detailResp.data.name));
+      setDetailNodePill(normalizeNodePill(detailResp.data.name));
       setSeries(seriesResp.data);
+      return true;
     } catch (err) {
+      if (detailRequestSeqRef.current !== seq) return false;
       if (isMissNode) {
         setMissLogs([]);
-        setMissLogsError((err as Error).message || "MISS 日志获取失败");
+        setMissLogsError((err as Error).message || t("monitor.error.missedLogsFetchFailed"));
         setMissLogsLoading(false);
       }
-      setDrawerError((err as Error).message || "节点详情获取失败");
+      setDrawerError((err as Error).message || t("monitor.error.nodeDetailFetchFailed"));
+      return false;
     } finally {
+      if (detailRequestSeqRef.current !== seq) return false;
       setDrawerLoading(false);
     }
   }
@@ -838,57 +1157,184 @@ export default function WpMonitorPage() {
   async function openParseTimeseries(
     scope: "parse" | "source" | "sink",
     selectedId: string,
-    title: string,
+    pillName: string,
     packageName?: string,
     sinkGroup?: string,
+    showLoading = true,
   ) {
+    return openParseTimeseriesWithMetricMode(
+      detailTrendMetricMode,
+      scope,
+      selectedId,
+      pillName,
+      packageName,
+      sinkGroup,
+      showLoading,
+    );
+  }
+
+  async function openParseTimeseriesWithMetricMode(
+    metricMode: DetailTrendMetricMode,
+    scope: "parse" | "source" | "sink",
+    selectedId: string,
+    pillName: string,
+    packageName?: string,
+    sinkGroup?: string,
+    showLoading = true,
+  ): Promise<boolean> {
+    const seq = ++detailRequestSeqRef.current;
+    scopeModeRef.current = "log";
     setDetailViewMode("scope");
-    setDetailNodePill(normalizeNodePillText(title.replace(/ 节点趋势$/, "")));
+    setDetailNodePill(normalizeNodePill(pillName));
     setHiddenScopeSeriesNames([]);
     setScopeSeriesRequest({ scope, packageName, sinkGroup });
-    let currentStart = startTime;
-    let currentEnd = endTime || nowWithLagIso();
-    const startMs = new Date(currentStart).getTime();
-    const endMs = new Date(currentEnd).getTime();
-    if (
-      !Number.isFinite(startMs) ||
-      !Number.isFinite(endMs) ||
-      startMs >= endMs
-    ) {
-      currentEnd = nowWithLagIso();
-      const fallbackStart = new Date(
-        new Date(currentEnd).getTime() - 5 * 60 * 1000,
-      ).toISOString();
-      currentStart = Number.isFinite(startMs) ? currentStart : fallbackStart;
-      if (new Date(currentStart).getTime() >= new Date(currentEnd).getTime()) {
-        currentStart = fallbackStart;
-      }
-    }
+    const range = resolveTimeRange(startTime, endTime || nowWithLagIso());
     setSelectedNode(selectedId);
-    setDetailStartTime(currentStart);
-    setDetailEndTime(currentEnd);
-    setDrawerLoading(true);
+    setDetailStartTime(range.start);
+    setDetailEndTime(range.end);
+    if (showLoading) setDrawerLoading(true);
     setDrawerError("");
-    setDetail(null);
-    setSeries(null);
-    setParseSeriesList(null);
-    setParseSeriesTitle(title);
     try {
+      // 按活跃/静默收集应查询的 log node_ids
+      let logNodeIds: string[] | undefined;
+      if (scope === "parse" && packageName) {
+        const pkg = snapshot?.parses.find((p) => p.package_name === packageName);
+        if (pkg) {
+          const logs = filterLogsByMode(pkg.logs, parseFilter);
+          logNodeIds = logs.map((l) => l.name);
+        }
+      }
       const timeseriesResp = await fetchParseTimeSeries(
         scope,
-        currentStart,
-        currentEnd,
-        estimateMaxDataPoints(),
+        range.start,
+        range.end,
+        metricMode,
+        undefined,
         packageName,
         sinkGroup,
+        logNodeIds,
       );
+      if (detailRequestSeqRef.current !== seq) return false;
       setParseSeriesList(timeseriesResp.data ?? []);
+      return true;
     } catch (err) {
-      setDrawerError((err as Error).message || "Parse 时间序列获取失败");
+      if (detailRequestSeqRef.current !== seq) return false;
+      setDrawerError((err as Error).message || t("monitor.error.parseTimeseriesFetchFailed"));
+      return false;
     } finally {
+      if (detailRequestSeqRef.current !== seq) return false;
       setDrawerLoading(false);
     }
   }
+
+  async function openParseScope(showLoading = true) {
+    return openParseScopeWithMetricMode(detailTrendMetricMode, showLoading);
+  }
+
+  async function openParseScopeWithMetricMode(
+    metricMode: DetailTrendMetricMode,
+    showLoading = true,
+  ): Promise<boolean> {
+    const seq = ++detailRequestSeqRef.current;
+    scopeModeRef.current = "package";
+    setDetailViewMode("scope");
+    setDetailNodePill(normalizeNodePill("__parse__"));
+    setHiddenScopeSeriesNames([]);
+    setScopeSeriesRequest({ scope: "parse" });
+    const range = resolveTimeRange(startTime, endTime || nowWithLagIso());
+    setSelectedNode("__parse__");
+    setDetailStartTime(range.start);
+    setDetailEndTime(range.end);
+    if (showLoading) setDrawerLoading(true);
+    setDrawerError("");
+    try {
+      if (filteredParses.length === 0) {
+        if (detailRequestSeqRef.current !== seq) return false;
+        setParseSeriesList([]);
+        return true;
+      } else {
+        const pkgFilters = filteredParses.map((pkg) => ({
+          packageName: pkg.package_name,
+          ruleNames: filterLogsByMode(pkg.logs, parseFilter).map((log) => log.name),
+        }));
+        const timeseriesResp = await fetchPackagesTimeSeries(
+          range.start,
+          range.end,
+          metricMode,
+          undefined,
+          pkgFilters,
+        );
+        if (detailRequestSeqRef.current !== seq) return false;
+        setParseSeriesList(timeseriesResp.data ?? []);
+        return true;
+      }
+    } catch (err) {
+      if (detailRequestSeqRef.current !== seq) return false;
+      setDrawerError((err as Error).message || t("monitor.error.parseTimeseriesFetchFailed"));
+      return false;
+    } finally {
+      if (detailRequestSeqRef.current !== seq) return false;
+      setDrawerLoading(false);
+    }
+  }
+
+  async function switchDetailTrendMetricMode(nextMode: DetailTrendMetricMode) {
+    if (nextMode === detailTrendMetricMode) return;
+    if (!selectedNode) {
+      setDetailTrendMetricMode(nextMode);
+      return;
+    }
+    if (detailViewMode === "node") {
+      const ok = await openDetailWithMetricMode(selectedNode, nextMode, false);
+      if (ok) setDetailTrendMetricMode(nextMode);
+      return;
+    }
+    if (detailViewMode === "scope" && scopeSeriesRequest) {
+      if (scopeModeRef.current === "package") {
+        const ok = await openParseScopeWithMetricMode(nextMode, false);
+        if (ok) setDetailTrendMetricMode(nextMode);
+        return;
+      }
+      const ok = await openParseTimeseriesWithMetricMode(
+        nextMode,
+        scopeSeriesRequest.scope,
+        selectedNode,
+        detailNodePill || selectedNode,
+        scopeSeriesRequest.packageName,
+        scopeSeriesRequest.sinkGroup,
+        false,
+      );
+      if (ok) setDetailTrendMetricMode(nextMode);
+    }
+  }
+
+  // 用户主动修改时间范围时，同步刷新详情面板趋势图
+  useEffect(() => {
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      return;
+    }
+    if (!selectedNode) return;
+    const isUserChange = userTimeChangeRef.current;
+    userTimeChangeRef.current = false;
+    if (!isUserChange) return;
+    if (detailViewMode === "node") {
+      void openDetail(selectedNode, false);
+    } else if (detailViewMode === "scope") {
+      if (scopeModeRef.current === "package") {
+        void openParseScope(false);
+      } else if (scopeModeRef.current === "log" && scopeSeriesRequest) {
+        void openParseTimeseries(
+          scopeSeriesRequest.scope,
+          selectedNode,
+          detailNodePill ?? "",
+          scopeSeriesRequest.packageName,
+          scopeSeriesRequest.sinkGroup,
+          false,
+        );
+      }
+    }
+  }, [startTime, endTime]);
 
   function togglePackage(pkgId: string) {
     setExpandedPackages((prev) =>
@@ -906,40 +1352,52 @@ export default function WpMonitorPage() {
     );
   }
 
-  async function applyTimeRange(
-    nextStart: string,
-    nextEnd: string,
-    enableAutoRefresh: boolean,
-  ) {
+  async function applyTimeRange(nextStart: string, nextEnd: string) {
     if (new Date(nextStart).getTime() >= new Date(nextEnd).getTime()) {
-      setError("开始时间必须早于结束时间");
-      return;
+      setError(t("monitor.error.invalidTimeRange"));
+      return false;
     }
     setError("");
+    userTimeChangeRef.current = true;
+    setIsTimeDraftDirty(false);
     setStartTime(nextStart);
     setEndTime(nextEnd);
-    setAutoRefreshEnabled(enableAutoRefresh);
+    setIsRangePickerOpen(false);
     await loadSnapshot(nextStart, nextEnd);
+    return true;
   }
 
-  async function onPickRange(key: string) {
-    setDraftRange(key);
+  async function onPickRange(key: QuickRangeKey) {
     const range = buildQuickRange(key);
     if (!range) return;
+    setActiveRangeKey(key);
     setDraftStart(new Date(range.start));
     setDraftEnd(new Date(range.end));
-    await applyTimeRange(range.start, range.end, true);
+    setIsTimeDraftDirty(false);
+    setIsRangePickerOpen(false);
+    await applyTimeRange(range.start, range.end);
   }
 
-  async function onApplyTime() {
-    if (!draftStart || !draftEnd) {
-      setError("时间格式无效");
+  async function onApplyTime(dates?: [Dayjs | null, Dayjs | null]) {
+    const effectiveStart = dates?.[0]?.toDate() ?? draftStart;
+    const effectiveEnd = dates?.[1]?.toDate() ?? draftEnd;
+    if (!effectiveStart || !effectiveEnd) {
+      setError(t("monitor.error.invalidTimeFormat"));
       return;
     }
-    const nextStart = draftStart.toISOString();
-    const nextEnd = draftEnd.toISOString();
-    // 手动点击“查询”视为自定义时间查询，固定关闭自动刷新，避免选定窗口被改写。
-    await applyTimeRange(nextStart, nextEnd, false);
+    const nextStart = effectiveStart.toISOString();
+    const nextEnd = effectiveEnd.toISOString();
+    setActiveRangeKey("custom");
+    setIsRangePickerOpen(false);
+    const ok = await applyTimeRange(nextStart, nextEnd);
+    if (!ok) return;
+  }
+
+  function onAbsoluteRangeOpenChange(open: boolean) {
+    setIsRangePickerOpen(open);
+    if (open) {
+      resetTimeDraft();
+    }
   }
 
   function onRefreshIntervalChange(raw: string) {
@@ -951,13 +1409,13 @@ export default function WpMonitorPage() {
     setRefreshIntervalInput(raw);
     const parsed = Number.parseInt(raw, 10);
     if (!Number.isNaN(parsed)) {
-      setRefreshIntervalSec(Math.max(1, parsed));
+      setRefreshIntervalSec(Math.max(0, parsed));
     }
   }
 
   function commitRefreshIntervalInput() {
     const parsed = Number.parseInt(refreshIntervalInput, 10);
-    const normalized = Number.isNaN(parsed) ? 1 : Math.max(1, parsed);
+    const normalized = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
     setRefreshIntervalSec(normalized);
     setRefreshIntervalInput(String(normalized));
   }
@@ -971,22 +1429,24 @@ export default function WpMonitorPage() {
   async function onSelectParsePackage(packageId: string, packageName: string) {
     setParseQuery(packageName);
     setParseSearchOpen(false);
+    setParseSearchTargetPkgIds([packageId]);
     await openParseTimeseries(
       "parse",
       packageId,
-      `Package ${packageName} 节点趋势`,
+      packageName,
       packageName,
     );
   }
 
   async function onSelectParseLog(
-    _packageId: string,
+    packageId: string,
     logId: string,
     packageName: string,
     logName: string,
   ) {
     setParseQuery(`${packageName} / ${logName}`);
     setParseSearchOpen(false);
+    setParseSearchTargetPkgIds([packageId]);
     await openDetail(logId);
   }
 
@@ -1070,10 +1530,9 @@ export default function WpMonitorPage() {
     <div
       className="app"
       id="app"
-      style={
-        selectedNode
-          ? { paddingBottom: `${detailPanelHeight + 22}px` }
-          : undefined
+      style={(selectedNode && activeTab === 'pipeline')
+          ? { position: 'relative', paddingBottom: `${detailPanelHeight + 22}px` }
+          : { position: 'relative' }
       }
     >
       <div className="title-wrap">
@@ -1082,19 +1541,29 @@ export default function WpMonitorPage() {
             <img
               className="title-logo"
               src={logoUrl}
-              alt="WP Monitor logo"
+              alt={t("monitor.appLogoAlt")}
             />
           </div>
           <div className="title-brand">
             <div className="title-row">
               <div className="title">Monitor</div>
               {appVersion ? (
-                <span className="title-version-inline" aria-label={`当前版本 v${appVersion}`}>
+                <span className="title-version-inline" aria-label={t("monitor.versionAria", { version: appVersion })}>
                   <span className="title-version-inline-text">v{appVersion}</span>
                 </span>
               ) : null}
             </div>
           </div>
+          <Tabs
+            activeKey={activeTab}
+            onChange={(k) => setActiveTab(k as 'pipeline' | 'engine')}
+            className="wf-tabs"
+            tabBarStyle={{ marginBottom: 0 }}
+            items={[
+              { key: 'pipeline', label: 'wparse' },
+              { key: 'engine', label: 'wfusion' },
+            ]}
+          />
         </div>
         <div className="toolbar-right">
           <div className="wd-quick-inline">
@@ -1102,59 +1571,47 @@ export default function WpMonitorPage() {
               <Button
                 key={range.key}
                 size="small"
-                type={draftRange === range.key ? "primary" : "default"}
+                type={activeRangeKey === range.key ? "primary" : "default"}
                 onClick={() => void onPickRange(range.key)}
               >
-                {range.label}
+                {t(`monitor.quickRanges.${range.key}`)}
               </Button>
             ))}
-            <Button
-              size="small"
-              type={draftRange === "custom" ? "primary" : "default"}
-              onClick={() => setDraftRange("custom")}
-            >
-              自定义
-            </Button>
           </div>
-          <div className="wd-chip wd-time-field wd-time-range-field">
-            <span className="wd-time-field-label">时间范围</span>
-            <RangePicker
-              className="wd-ant-range"
-              classNames={{ popup: { root: "wd-ant-range-popup" } }}
-              style={{ width: "336px", maxWidth: "100%" }}
-              value={[
-                draftStart ? dayjs(draftStart) : null,
-                draftEnd ? dayjs(draftEnd) : null,
-              ]}
-              onChange={(dates: null | [Dayjs | null, Dayjs | null]) => {
-                setDraftRange("custom");
-                setDraftStart(dates?.[0]?.toDate() ?? null);
-                setDraftEnd(dates?.[1]?.toDate() ?? null);
-              }}
-              onCalendarChange={() => {
-                setDraftRange("custom");
-              }}
-              onOpenChange={(open) => {
-                if (open) setDraftRange("custom");
-              }}
-              showTime={{ format: "HH:mm:ss", minuteStep: 1, secondStep: 1 }}
-              format="YYYY-MM-DD HH:mm:ss"
-              allowClear={false}
-              separator="→"
-              suffixIcon={null}
-              placeholder={["开始时间", "结束时间"]}
-            />
-          </div>
-          <Button
-            type="primary"
-            size="small"
-            onClick={() => void onApplyTime()}
-            loading={loading}
-          >
-            查询
-          </Button>
+          <RangePicker
+            className={`wd-ant-range wd-time-range-direct ${activeRangeKey === "custom" ? "active" : ""}`}
+            classNames={{ popup: { root: "wd-ant-range-popup" } }}
+            getPopupContainer={(node) => node.parentElement ?? document.body}
+            open={isRangePickerOpen}
+            onOpenChange={onAbsoluteRangeOpenChange}
+            value={[
+              draftStart ? dayjs(draftStart) : null,
+              draftEnd ? dayjs(draftEnd) : null,
+            ]}
+            onChange={(dates: null | [Dayjs | null, Dayjs | null]) => {
+              const nextStart = dates?.[0]?.toDate() ?? null;
+              const nextEnd = dates?.[1]?.toDate() ?? null;
+              const appliedStartMs = new Date(startTime).getTime();
+              const appliedEndMs = new Date(endTime).getTime();
+              setDraftStart(nextStart);
+              setDraftEnd(nextEnd);
+              setIsTimeDraftDirty(
+                !nextStart ||
+                  !nextEnd ||
+                  nextStart.getTime() !== appliedStartMs ||
+                  nextEnd.getTime() !== appliedEndMs,
+              );
+            }}
+            showTime={{ format: "HH:mm:ss", minuteStep: 1, secondStep: 1 }}
+            format="YYYY-MM-DD HH:mm:ss"
+            allowClear={false}
+            separator="→"
+            suffixIcon={<CalendarRange size={14} />}
+            placeholder={[t("monitor.toolbar.startTime"), t("monitor.toolbar.endTime")]}
+            onOk={(dates) => void onApplyTime(dates as [Dayjs | null, Dayjs | null])}
+          />
           <span className="wd-chip wd-refresh-chip">
-            <span className="wd-time-field-label">自动刷新</span>
+            <span className="wd-time-field-label">{t("monitor.toolbar.autoRefresh")}</span>
             <span
               className={`refresh-live-dot ${autoRefreshEnabled ? "on" : "off"} ${refreshSpin ? "spin" : ""}`}
               aria-hidden="true"
@@ -1162,18 +1619,35 @@ export default function WpMonitorPage() {
             <InputNumber
               size="small"
               className="refresh-interval-input"
-              min={1}
+              min={0}
               value={Number(refreshIntervalInput)}
-              onChange={(value) => onRefreshIntervalChange(String(value ?? 1))}
+              onChange={(value) => onRefreshIntervalChange(String(value ?? 0))}
               onBlur={commitRefreshIntervalInput}
               onKeyDown={onRefreshIntervalKeyDown}
-              style={{ width: 56 }}
+              style={{ width: 72 }}
             />
-            <span className="wd-refresh-unit">s</span>
+            <span className="wd-refresh-unit">{t("monitor.toolbar.secondsShort")}</span>
           </span>
+          <LanguageSwitcher />
           <ThemeSwitcher />
         </div>
       </div>
+
+      <div style={{
+        position: activeTab === 'engine' ? 'static' : 'absolute',
+        visibility: activeTab === 'engine' ? 'visible' : 'hidden',
+        ...(activeTab === 'engine' ? { flex: 1, overflowY: 'auto' as const, minHeight: 0 } : { inset: 0 }),
+      }}>
+        {(enginePreloaded || activeTab === 'engine') && (
+          <Suspense fallback={<div style={{ padding: 24, color: 'var(--text-dim)' }}>加载中...</div>}>
+            <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+              <WfMonitor startTime={startTime} endTime={endTime} refreshIntervalSec={refreshIntervalSec} active={activeTab === 'engine'} />
+            </div>
+          </Suspense>
+        )}
+      </div>
+      {activeTab !== 'engine' && (
+      <>
       <div className="canvas" id="canvas">
         {!snapshot && (
           <div className="loading-skeleton" aria-hidden="true">
@@ -1193,16 +1667,20 @@ export default function WpMonitorPage() {
             <section className="lane">
               <div className="lane-head">
                 <div
-                  className={`lane-title lane-title-clickable ${selectedNode === "__source__" ? "selected" : ""}`}
+                  className={`lane-title lane-title-clickable lane-title--with-icon ${selectedNode === "__source__" ? "selected" : ""}`}
                   onClick={() =>
                     void openParseTimeseries(
                       "source",
                       "__source__",
-                      "来源层全部节点趋势",
+                      "__source__",
                     )
                   }
                 >
-                  来源层
+                  <span className="lane-title__label">
+                    <Database className="lane-title__icon" size={14} strokeWidth={2.1} aria-hidden="true" />
+                    <span>{t("monitor.layer.source")}</span>
+                  </span>
+                  <span className="lane-count">{snapshot.sources.length}</span>
                 </div>
               </div>
               <div className="lane-scroll">
@@ -1214,10 +1692,13 @@ export default function WpMonitorPage() {
                     onMouseLeave={() => { setHoveredNode(""); setSweepNode(""); }}
                     onClick={() => void openDetail(node.id)}
                   >
-                    <div className="node__title">{node.name}</div>
+                    <div className="node__title node__title--with-icon">
+                      <RadioTower className="node__title-icon" size={15} strokeWidth={2.1} aria-hidden="true" />
+                      <span>{node.name}</span>
+                    </div>
                     <div className="metric-badges">
-                      <span className="metric-badge">速率 {fmtRate(node.metrics.log_rate_eps)}</span>
-                      <span className="metric-badge">数量 {fmtCount(node.metrics.log_count)}</span>
+                      <span className="metric-badge">{t("monitor.metric.rate")} {fmtRate(node.metrics.log_rate_eps)}</span>
+                      <span className="metric-badge">{t("monitor.metric.count")} {fmtCount(node.metrics.log_count)}</span>
                     </div>
                   </article>
                 ))}
@@ -1226,24 +1707,37 @@ export default function WpMonitorPage() {
 
             <section className="lane">
               <div className="lane-head">
-                <div
-                  className={`lane-title lane-title-clickable ${selectedNode === "__parse__" ? "selected" : ""}`}
-                  onClick={() =>
-                    void openParseTimeseries(
-                      "parse",
-                      "__parse__",
-                      "Parse 层全部节点趋势",
-                    )
-                  }
-                >
-                  Parse
+                <div className="filter-toggle" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div
+                    className={`lane-title lane-title-clickable lane-title--with-icon lane-title--parse ${selectedNode === "__parse__" ? "selected" : ""}`}
+                    onClick={() => void openParseScope()}
+                  >
+                    <span className="lane-title__label">
+                      <CodeXml className="lane-title__icon lane-title__icon--parse" size={16} strokeWidth={2.1} aria-hidden="true" />
+                      <span>Parse</span>
+                    </span>
+                  </div>
+                  <Button
+                    size="small"
+                    type={parseFilter === "withData" ? "primary" : "default"}
+                    onClick={() => { setParseFilter("withData"); setParsePage(1); }}
+                  >
+                    {t("monitor.parse.active")}
+                  </Button>
+                  <Button
+                    size="small"
+                    type={parseFilter === "noData" ? "primary" : "default"}
+                    onClick={() => { setParseFilter("noData"); setParsePage(1); }}
+                  >
+                    {t("monitor.parse.silent")}
+                  </Button>
                 </div>
                 <div className="lane-actions">
                   <Button size="small" onClick={() => setExpandedPackages(snapshot.parses.map((parseItem) => parseItem.id))}>
-                    全部展开
+                    {t("common.expandAll")}
                   </Button>
                   <Button size="small" onClick={() => setExpandedPackages([])}>
-                    全部收起
+                    {t("common.collapseAll")}
                   </Button>
                   <div ref={parseSearchRef} className="parse-search">
                     <div className="parse-search-controls">
@@ -1254,10 +1748,11 @@ export default function WpMonitorPage() {
                         onChange={(event) => {
                           setParseQuery(event.target.value);
                           setParseSearchOpen(true);
+                          if (!event.target.value) setParseSearchTargetPkgIds(null);
                         }}
                         onFocus={() => setParseSearchOpen(true)}
                         onKeyDown={(event) => void onParseSearchKeyDown(event)}
-                        placeholder="搜索 package 或日志类型"
+                        placeholder={t("monitor.parse.searchPlaceholder")}
                         allowClear
                       />
                     </div>
@@ -1265,7 +1760,7 @@ export default function WpMonitorPage() {
                       className={`parse-search-results ${parseSearchOpen && parseQuery.trim() ? "" : "hidden"}`}
                     >
                       {parseSearchGroups.length === 0 && (
-                        <div className="parse-search-item">无匹配结果</div>
+                        <div className="parse-search-item">{t("monitor.parse.noSearchResults")}</div>
                       )}
                       {parseSearchGroups.map((group) => (
                         <div key={group.pkg.id} className="parse-search-group">
@@ -1278,7 +1773,7 @@ export default function WpMonitorPage() {
                               )
                             }
                           >
-                            {group.pkg.package_name} package{" "}
+                            {group.pkg.package_name} {t("monitor.parse.packageLabel")}{" "}
                             {group.logsMatched.length
                               ? `(${group.logsMatched.length})`
                               : ""}
@@ -1296,7 +1791,7 @@ export default function WpMonitorPage() {
                                 )
                               }
                             >
-                              {group.pkg.package_name} log_type {logItem.name}
+                              {group.pkg.package_name} {t("monitor.parse.logTypeLabel")} {logItem.name}
                             </div>
                           ))}
                         </div>
@@ -1306,42 +1801,58 @@ export default function WpMonitorPage() {
                 </div>
               </div>
               <div className="lane-scroll">
-                {snapshot.parses.map((parseItem) => {
+                {parsePageItems.map((parseItem, index) => {
                   const isExpanded = expandedPackages.includes(parseItem.id);
-                  const handlePackageClick = () => {
-                    void openParseTimeseries(
-                      "parse",
-                      parseItem.id,
-                      `Package ${parseItem.package_name} 节点趋势`,
-                      parseItem.package_name,
-                    );
-                  };
+                  const showLogs = parseQuery.trim()
+                    ? parseItem.logs
+                    : parseFilter === "withData"
+                      ? parseItem.logs.filter((l) => l.metrics.log_rate_eps > 0)
+                      : parseFilter === "noData"
+                        ? parseItem.logs.filter((l) => l.metrics.log_rate_eps === 0)
+                        : parseItem.logs;
+                  const packageTone = PACKAGE_ICON_TONES[index % PACKAGE_ICON_TONES.length];
                   return (
                     <section
                       key={parseItem.id}
                       className={nodeClass("node node--package", parseItem.id, "package")}
                       onMouseEnter={(e) => {
                         setHoveredNode(parseItem.id);
-                        const related = e.relatedTarget as Element | null;
-                        if (!related || !e.currentTarget.contains(related)) {
+                        const related = e.relatedTarget;
+                        if (!(related instanceof Node) || !e.currentTarget.contains(related)) {
                           setSweepNode(parseItem.id);
                         }
                       }}
                       onMouseLeave={() => { setHoveredNode(""); setSweepNode(""); }}
-                      onClick={handlePackageClick}
                     >
                       <div className="node__header">
-                        <div>
-                          <div className="node__title">
-                            {parseItem.package_name}
+                        <div
+                          className="node__parse-row"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void openParseTimeseries(
+                              "parse",
+                              parseItem.id,
+                              parseItem.package_name,
+                              parseItem.package_name,
+                            );
+                          }}
+                        >
+                          <div className="node__title node__title--with-icon">
+                            <span className={`node__package-icon-chip node__package-icon-chip--${packageTone}`} aria-hidden="true">
+                              <Database className="node__package-icon" size={16} strokeWidth={2.1} />
+                            </span>
+                            <span>{parseItem.package_name}</span>
                           </div>
-                          <div className="node__summary">
-                            {fmtRate(parseItem.metrics.log_rate_eps)} /{" "}
-                            {fmtCount(parseItem.metrics.log_count)} (汇总) ·{" "}
-                            {parseItem.logs.length} 个日志类型
-                          </div>
+                          <Typography.Text className="node__summary" type="secondary">
+                            {t("monitor.parse.packageSummary", {
+                              rate: fmtRate(parseItem.metrics.log_rate_eps),
+                              count: fmtCount(parseItem.metrics.log_count),
+                              logs: showLogs.length,
+                            })}
+                          </Typography.Text>
                         </div>
                         <Button
+                          className="node__collapse-btn"
                           size="small"
                           type="text"
                           style={{ opacity: 0.45 }}
@@ -1354,7 +1865,7 @@ export default function WpMonitorPage() {
                       </div>
                       {isExpanded && (
                         <div className="node__children">
-                          {parseItem.logs.map((logItem) => (
+                          {showLogs.map((logItem) => (
                             <article
                               key={logItem.id}
                               className={nodeClass(
@@ -1370,13 +1881,16 @@ export default function WpMonitorPage() {
                               }}
                             >
                               <div className="node__leaf-head">
-                                <div className="node__title">{logItem.name}</div>
+                                <div className="node__title node__title--with-icon node__title--leaf">
+                                  <FileText className="node__leaf-title-icon" size={14} strokeWidth={2} aria-hidden="true" />
+                                  <span>{logItem.name}</span>
+                                </div>
                                 <div className="metric-inline-badges">
                                   <span className="metric-inline-badge">
-                                    速率 {fmtRate(logItem.metrics.log_rate_eps)}
+                                    {t("monitor.metric.rate")} {fmtRate(logItem.metrics.log_rate_eps)}
                                   </span>
                                   <span className="metric-inline-badge">
-                                    数量 {fmtCount(logItem.metrics.log_count)}
+                                    {t("monitor.metric.count")} {fmtCount(logItem.metrics.log_count)}
                                   </span>
                                 </div>
                               </div>
@@ -1387,7 +1901,45 @@ export default function WpMonitorPage() {
                     </section>
                   );
                 })}
+                {parseTotalPages > 1 && (
+                  <div style={{ display: "flex", justifyContent: "center", gap: 8, padding: "8px 0" }}>
+                    <Button size="small" disabled={parsePage <= 1} onClick={() => setParsePage((p) => p - 1)}>◀</Button>
+                    <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-sub)", padding: "2px 0" }}>
+                      {t("monitor.parse.pageInfo", { page: parsePage, total: parseTotalPages })}
+                    </span>
+                    <Button size="small" disabled={parsePage >= parseTotalPages} onClick={() => setParsePage((p) => p + 1)}>▶</Button>
+                  </div>
+                )}
+              </div>
+            </section>
 
+            <section className="lane">
+              <div className="lane-head">
+                <div
+                  className={`lane-title lane-title-clickable lane-title--with-icon ${selectedNode === "__sink__" ? "selected" : ""}`}
+                  onClick={() =>
+                    void openParseTimeseries(
+                      "sink",
+                      "__sink__",
+                      "__sink__",
+                    )
+                  }
+                >
+                  <span className="lane-title__label">
+                    <SendHorizontal className="lane-title__icon" size={14} strokeWidth={2.1} aria-hidden="true" />
+                    <span>{t("monitor.layer.sink")}</span>
+                  </span>
+                </div>
+                <div className="lane-actions">
+                  <Button size="small" onClick={() => setExpandedGroups(snapshot.sinks.map((group) => group.id))}>
+                    {t("common.expandAll")}
+                  </Button>
+                  <Button size="small" onClick={() => setExpandedGroups([])}>
+                    {t("common.collapseAll")}
+                  </Button>
+                </div>
+              </div>
+              <div className="lane-scroll">
                 <article
                   className={nodeClass(
                     `node node--miss ${missHasData ? "node--miss-alert" : "node--miss-muted"}`,
@@ -1399,48 +1951,25 @@ export default function WpMonitorPage() {
                   onClick={() => void openDetail(snapshot.miss.id)}
                 >
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                    <div className="node__title" style={{ marginBottom: 0 }}>{snapshot.miss.name}</div>
+                    <div className="node__title node__title--with-icon" style={{ marginBottom: 0 }}>
+                      <Ban className="node__miss-title-icon" size={15} strokeWidth={2} aria-hidden="true" />
+                      <span>{snapshot.miss.name}</span>
+                    </div>
                     <div className="metric-badges" style={{ marginTop: 0 }}>
-                      <span className="metric-badge">速率 {fmtRate(snapshot.miss.metrics.log_rate_eps)}</span>
-                      <span className="metric-badge">数量 {fmtCount(snapshot.miss.metrics.log_count)}</span>
+                      <span className="metric-badge">
+                        {t("monitor.metric.total")} {fmtCount(snapshot.miss.metrics.log_count)}
+                      </span>
                     </div>
                   </div>
-                  <div className="node__sub">未命中任何 WPL 规则 · 不流向任何输出</div>
+                  <div className="node__sub">{t("monitor.miss.description")}</div>
                 </article>
-              </div>
-            </section>
-
-            <section className="lane">
-              <div className="lane-head">
-                <div
-                  className={`lane-title lane-title-clickable ${selectedNode === "__sink__" ? "selected" : ""}`}
-                  onClick={() =>
-                    void openParseTimeseries(
-                      "sink",
-                      "__sink__",
-                      "输出层全部节点趋势",
-                    )
-                  }
-                >
-                  输出层
-                </div>
-                <div className="lane-actions">
-                  <Button size="small" onClick={() => setExpandedGroups(snapshot.sinks.map((group) => group.id))}>
-                    全部展开
-                  </Button>
-                  <Button size="small" onClick={() => setExpandedGroups([])}>
-                    全部收起
-                  </Button>
-                </div>
-              </div>
-              <div className="lane-scroll">
                 {snapshot.sinks.map((group) => {
                   const isExpanded = expandedGroups.includes(group.id);
                   const handleGroupClick = () => {
                     void openParseTimeseries(
                       "sink",
                       group.id,
-                      `Sink Group ${group.sink_group} 节点趋势`,
+                      group.sink_group,
                       undefined,
                       group.sink_group,
                     );
@@ -1451,8 +1980,8 @@ export default function WpMonitorPage() {
                       className={nodeClass("node node--group", group.id, "group")}
                       onMouseEnter={(e) => {
                         setHoveredNode(group.id);
-                        const related = e.relatedTarget as Element | null;
-                        if (!related || !e.currentTarget.contains(related)) {
+                        const related = e.relatedTarget;
+                        if (!(related instanceof Node) || !e.currentTarget.contains(related)) {
                           setSweepNode(group.id);
                         }
                       }}
@@ -1460,17 +1989,22 @@ export default function WpMonitorPage() {
                       onClick={handleGroupClick}
                     >
                       <div className="node__header">
-                        <div>
-                          <div className="node__title">
-                            {group.sink_group}
-                          </div>
-                          <div className="node__summary">
-                            {fmtRate(group.metrics.log_rate_eps)} /{" "}
-                            {fmtCount(group.metrics.log_count)} · {group.sinks.length}{" "}
-                            个输出目标
+                        <div className="node__group-row">
+                          <span className="node__package-icon-chip node__package-icon-chip--amber" aria-hidden="true">
+                            <Inbox className="node__package-icon" size={16} strokeWidth={2.1} />
+                          </span>
+                          <div>
+                            <div className="node__title">
+                              {group.sink_group}
+                            </div>
+                            <Typography.Text className="node__summary" type="secondary">
+                              {fmtRate(group.metrics.log_rate_eps)} /{" "}
+                              {fmtCount(group.metrics.log_count)} · {t("monitor.sink.outputTargets", { count: group.sinks.length })}
+                            </Typography.Text>
                           </div>
                         </div>
                         <Button
+                          className="node__collapse-btn"
                           size="small"
                           type="text"
                           style={{ opacity: 0.45 }}
@@ -1493,16 +2027,19 @@ export default function WpMonitorPage() {
                               )}
                               onMouseEnter={() => setHoveredNode(sinkItem.id)}
                               onMouseLeave={() => setHoveredNode("")}
-                              onClick={() => void openDetail(sinkItem.id)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void openDetail(sinkItem.id);
+                              }}
                             >
                               <div className="node__leaf-head">
                                 <div className="node__title">{sinkItem.sink_name}</div>
                                 <div className="metric-inline-badges">
                                   <span className="metric-inline-badge">
-                                    速率 {fmtRate(sinkItem.metrics.log_rate_eps)}
+                                    {t("monitor.metric.rate")} {fmtRate(sinkItem.metrics.log_rate_eps)}
                                   </span>
                                   <span className="metric-inline-badge">
-                                    数量 {fmtCount(sinkItem.metrics.log_count)}
+                                    {t("monitor.metric.count")} {fmtCount(sinkItem.metrics.log_count)}
                                   </span>
                                 </div>
                               </div>
@@ -1521,33 +2058,138 @@ export default function WpMonitorPage() {
 
       <aside
         ref={detailPanelRef}
-        className={`detail-panel card ${selectedNode ? "open" : ""}`}
-        style={{ height: `${detailPanelHeight}px` }}
+        className={`detail-panel card ${selectedNode ? "open" : ""} ${detailFullscreen ? "fullscreen" : ""}`}
+        style={{ height: detailFullscreen ? undefined : `${detailPanelHeight}px` }}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="detail-resize-bar">
           <div
             className="detail-drag-handle"
             onPointerDown={onDetailPanelResizeStart}
-            title="拖拽调整高度"
+            title={t("monitor.detail.dragResize")}
           />
         </div>
         <div className="detail-panel-head">
           <div className="detail-panel-head-left">
-            <Typography.Text style={{ fontSize: 13, fontWeight: 600, fontFamily: "var(--font-mono)", color: "var(--detail-heading-color, var(--accent))" }}>节点详情</Typography.Text>
+            <span className="detail-heading-label">
+              <ChartLine className="detail-heading-icon" size={16} strokeWidth={2} aria-hidden="true" />
+              <Typography.Text style={{ fontSize: 13, fontWeight: 600, fontFamily: "var(--font-mono)", color: "var(--detail-heading-color, var(--accent))" }}>{t("monitor.detail.nodeDetail")}</Typography.Text>
+            </span>
             {detailNodePill && (
               <span className={`detail-node-pill detail-node-pill--${detailNodePillType}`}>
                 {detailNodePill}
               </span>
             )}
+            {detailViewMode === "node" && detail && (
+              <>
+                <span className="detail-type-badge">{detail.node_type}</span>
+                {!isMissSelected && (
+                  <span className="detail-head-meta">
+                    <span className="detail-head-meta-label">{t("monitor.metric.rate")}</span>
+                    <span className="detail-head-meta-value">{fmtRate(detail.metrics.log_rate_eps)}</span>
+                  </span>
+                )}
+                <span className="detail-head-meta">
+                  <span className="detail-head-meta-label">
+                    {isMissSelected ? t("monitor.metric.total") : t("monitor.metric.count")}
+                  </span>
+                  <span className="detail-head-meta-value">{fmtCount(detail.metrics.log_count)}</span>
+                </span>
+                {!isMissSelected && series && (
+                  <>
+                    <Divider orientation="vertical" style={{ margin: "0 2px", borderColor: "rgba(228,77,38,0.18)" }} />
+                    <span className="detail-head-meta">
+                      <span className="detail-head-meta-label">{t("monitor.metric.sampleInterval")}</span>
+                      <span className="detail-head-meta-value">{series.step_secs}s</span>
+                    </span>
+                    <span className="detail-head-meta">
+                      <span className="detail-head-meta-label">{t("monitor.metric.statWindow")}</span>
+                      <span className="detail-head-meta-value">
+                        {(detailTrendMetricMode === "count" ? series.step_secs : series.rate_window_secs)}s
+                      </span>
+                    </span>
+                  </>
+                )}
+              </>
+            )}
+            {detailViewMode === "node" && !detail && series && (
+              <>
+                <Divider orientation="vertical" style={{ margin: "0 2px", borderColor: "rgba(228,77,38,0.18)" }} />
+                <span className="detail-head-meta">
+                  <span className="detail-head-meta-label">{t("monitor.metric.sampleInterval")}</span>
+                  <span className="detail-head-meta-value">{series.step_secs}s</span>
+                </span>
+                <span className="detail-head-meta">
+                  <span className="detail-head-meta-label">{t("monitor.metric.statWindow")}</span>
+                  <span className="detail-head-meta-value">{detailTrendMetricMode === "count" ? series.step_secs : series.rate_window_secs}s</span>
+                </span>
+              </>
+            )}
+            {detailViewMode === "scope" && parseSeriesList && parseSeriesList.length > 0 && (
+              <>
+                <Divider orientation="vertical" style={{ margin: "0 2px", borderColor: "rgba(228,77,38,0.18)" }} />
+                <span className="detail-head-meta">
+                  <span className="detail-head-meta-label">{t("monitor.metric.sampleInterval")}</span>
+                  <span className="detail-head-meta-value">{parseSeriesList[0].step_secs ?? 0}s</span>
+                </span>
+                <span className="detail-head-meta">
+                  <span className="detail-head-meta-label">{t("monitor.metric.statWindow")}</span>
+                  <span className="detail-head-meta-value">
+                    {(detailTrendMetricMode === "count"
+                      ? parseSeriesList[0].step_secs
+                      : parseSeriesList[0].rate_window_secs) ?? 0}s
+                  </span>
+                </span>
+              </>
+            )}
+            {drawerLoading && (
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>{t("common.loading")}</Typography.Text>
+            )}
           </div>
           <div className="detail-panel-head-right">
+            {(detail || parseSeriesList) && (
+              <Space>
+                {((detailViewMode === "node" && !isMissSelected) ||
+                  detailViewMode === "scope") && (
+                  <div style={{ display: "inline-flex", gap: 6 }}>
+                    <Button
+                      size="small"
+                      type={detailTrendMetricMode === "rate" ? "primary" : "default"}
+                      onClick={() => void switchDetailTrendMetricMode("rate")}
+                    >
+                      {t("monitor.metric.rate")}
+                    </Button>
+                    <Button
+                      size="small"
+                      type={detailTrendMetricMode === "count" ? "primary" : "default"}
+                      onClick={() => void switchDetailTrendMetricMode("count")}
+                    >
+                      {t("monitor.metric.count")}
+                    </Button>
+                  </div>
+                )}
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t("monitor.detail.realtimeRefresh")}</Typography.Text>
+                <Switch
+                  size="small"
+                  checked={detailTrendAutoRefresh}
+                  onChange={setDetailTrendAutoRefresh}
+                  disabled={!autoRefreshEnabled || isTimeSelectionPending}
+                />
+              </Space>
+            )}
+            <button
+              className="detail-fullscreen-btn"
+              title={detailFullscreen ? t("monitor.detail.exitFullscreen") : t("monitor.detail.fullscreen")}
+              onClick={() => setDetailFullscreen((v) => !v)}
+            >
+              {detailFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+            </button>
             <button
               className="drawer-close"
               onClick={() => {
+                setDetailFullscreen(false);
                 setSelectedNode("");
                 setParseSeriesList(null);
-                setParseSeriesTitle("");
                 setDetailNodePill("");
                 setHiddenScopeSeriesNames([]);
                 setScopeSeriesRequest(null);
@@ -1560,28 +2202,18 @@ export default function WpMonitorPage() {
         </div>
 
         <div className="detail-panel-body">
-          {drawerLoading && <p>详情加载中...</p>}
-          {!drawerLoading && drawerError && (
-            <p className="error">错误: {drawerError}</p>
+          {drawerError && (
+            <p className="error">{t("common.errorWithMessage", { message: drawerError })}</p>
           )}
-          {!drawerLoading &&
-            !drawerError &&
+          {!drawerError &&
             detailViewMode === "scope" &&
             parseSeriesList && (
               <ScopeTrendPanel
-                title={parseSeriesTitle}
-                parseSeriesList={parseSeriesList}
+                loading={drawerLoading}
                 parseMultiSeries={parseMultiSeries}
                 visibleParseMultiSeries={visibleParseMultiSeries}
                 hiddenScopeSeriesNames={hiddenScopeSeriesNames}
-                detailTrendAutoRefresh={detailTrendAutoRefresh}
-                detailStartTime={detailStartTime}
-                detailEndTime={detailEndTime}
                 accentColor={accentColor}
-                onToggleAutoRefresh={() =>
-                  setDetailTrendAutoRefresh((prev) => !prev)
-                }
-
                 onToggleSeries={(name) =>
                   setHiddenScopeSeriesNames((prev) =>
                     prev.includes(name)
@@ -1590,156 +2222,140 @@ export default function WpMonitorPage() {
                   )
                 }
                 formatRate2={formatRate2}
-                formatLocalTime={formatLocalTime}
+                formatCount2={formatCount2}
+                metricMode={detailTrendMetricMode}
+                xMin={scopeChartRange.xMin}
+                xMax={scopeChartRange.xMax}
               />
             )}
-          {!drawerLoading &&
-            !drawerError &&
+          {!drawerError &&
             detailViewMode === "node" &&
             detail && (
-              <div className={`detail-grid ${isMissSelected ? "miss-mode" : ""}`}>
-                <section className="panel card detail-col">
-                  <div className="panel-title">基本信息</div>
-                  <div className="detail-name-type-row">
-                    <span
-                      className="detail-kv-value detail-name-only"
-                      title={detail.name}
-                    >
-                      {detail.name}
-                    </span>
-                    <span className="detail-type-badge">{detail.node_type}</span>
-                  </div>
-                  <div className="detail-metric-badges">
-                    <span className="detail-metric-badge">
-                      速率 {fmtRate(detail.metrics.log_rate_eps)}
-                    </span>
-                    <span className="detail-metric-badge">
-                      数量 {fmtCount(detail.metrics.log_count)}
-                    </span>
-                  </div>
-                  <div className="detail-time-row">
-                    <span className="detail-kv-label">时间窗口</span>
-                    <span className="detail-kv-value detail-time-value">
-                      {formatLocalDateTime(detailStartTime)} -{" "}
-                      {formatLocalDateTime(detailEndTime)}
-                    </span>
-                  </div>
-                </section>
-
+              <>
                 {!isMissSelected && (
-                  <section className="panel card detail-col">
-                    <div className="panel-head">
-                      <div className="panel-head-main">
-                        <Typography.Text strong style={{ fontSize: 13, color: "var(--text-sub)" }}>速率趋势</Typography.Text>
-                        <Divider orientation="vertical" style={{ margin: "0 2px", borderColor: "rgba(228,77,38,0.18)" }} />
-                        <Space size={4}>
-                          <Typography.Text type="secondary" style={{ fontSize: 11 }}>采样间隔</Typography.Text>
-                          <Typography.Text style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--text-sub)" }}>
-                            {series?.step_secs ?? 0}s
-                          </Typography.Text>
-                        </Space>
-                        <Space size={4}>
-                          <Typography.Text type="secondary" style={{ fontSize: 11 }}>统计窗口</Typography.Text>
-                          <Typography.Text style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--text-sub)" }}>
-                            {series?.rate_window_secs ?? 0}s
-                          </Typography.Text>
-                        </Space>
-                      </div>
-                      <Space>
-                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>实时刷新</Typography.Text>
-                        <Switch
-                          size="small"
-                          checked={detailTrendAutoRefresh}
-                          onChange={setDetailTrendAutoRefresh}
-                        />
-                      </Space>
-                    </div>
-                    <TimeSeriesChart
-                      title="速率趋势"
-                      points={rateChartPoints}
-                      color={accentColor}
-                      showTitleValue={false}
-                      valueFormatter={formatRate2}
-                      axisValueFormatter={formatRate2}
-                      minY={0}
-                      yTickAmount={6}
-                      rangeStartLabel={formatLocalTime(detailStartTime)}
-                      rangeEndLabel={formatLocalTime(detailEndTime)}
-                      showRangeMeta={false}
-                    />
+                  <section className="detail-col">
+                    <Spin spinning={drawerLoading}>
+                      <TimeSeriesChart
+                        key={`node-${detailTrendMetricMode}`}
+                        title={
+                          detailTrendMetricMode === "count"
+                            ? t("monitor.detail.countTrend")
+                            : t("monitor.detail.rateTrend")
+                        }
+                        points={[]}
+                        multiSeries={
+                          detailChartPoints.length > 0
+                            ? [{ name: detailNodePill || selectedNode, points: detailChartPoints }]
+                            : undefined
+                        }
+                        color={accentColor}
+                        legendPosition="bottom"
+                        legendAlign="center"
+                        legendFontSize="10px"
+                        legendMarkerSize={5}
+                        valueFormatter={
+                          detailTrendMetricMode === "count" ? formatCount2 : formatRate2
+                        }
+                        axisValueFormatter={
+                          detailTrendMetricMode === "count" ? formatCount2 : formatRate2
+                        }
+                        minY={0}
+                        yTickAmount={6}
+                        xMin={detailChartRange.xMin}
+                        xMax={detailChartRange.xMax}
+                      />
+                    </Spin>
                   </section>
                 )}
 
                 {isMissSelected && (
-                  <section className="panel card detail-col detail-miss-col">
-                    <div className="panel-title">MISS 原始日志</div>
-                    <div className="miss-query-toolbar">
-                      <Button
-                        size="small"
-                        onClick={() =>
-                          void loadMissedLogs(
-                            missWindowStart || detailStartTime,
-                            missWindowEnd || detailEndTime,
-                            missPage,
-                          )
-                        }
-                        disabled={missLogsLoading}
-                      >
-                        刷新本页
-                      </Button>
-                      <Button size="small" onClick={() => void onExportMissed()} disabled={missExporting}>
-                        {missExporting ? "导出中..." : "数据导出"}
-                      </Button>
-                    </div>
-                    {missLogsLoading && <p>MISS 日志加载中...</p>}
-                    {!missLogsLoading && missLogsError && (
-                      <p className="error">错误: {missLogsError}</p>
-                    )}
-                    {!missLogsLoading &&
-                      !missLogsError &&
-                      missLogs.length === 0 && <p>当前时间窗口无 MISS 日志</p>}
-                    {!missLogsLoading &&
-                      !missLogsError &&
-                      missLogs.length > 0 && (
-                        <>
-                          <p className="miss-page-meta">
-                            第 {missPage} 页 / 每页 10 条
-                            {missHasMore ? "（可继续翻页）" : "（已到末页）"}
-                          </p>
-                          <div className="miss-scroll">
-                            <div className="miss-list">
-                              {missPageItems.map((item, index) => {
-                                const offset = (missPage - 1) * MISS_PAGE_SIZE;
-                                const rowNo = offset + index + 1;
-                                return (
-                                  <article
-                                    key={`${item.time}-${item.stream_id}-${rowNo}`}
-                                    className="miss-record"
-                                  >
-                                    <div className="miss-record-head">
-                                      #{rowNo} | {formatLocalDateTime(item.time)}
-                                    </div>
-                                    <pre className="miss-record-raw">
-                                      {item.raw}
-                                    </pre>
-                                  </article>
-                                );
-                              })}
-                            </div>
+                  <section className={`detail-col detail-miss-col ${detailFullscreen ? "detail-miss-col--fullscreen" : ""}`}>
+                    <div className="miss-shell">
+                      <div className="miss-panel-head">
+                        <div className="miss-panel-meta">
+                          <div className="panel-title">{t("monitor.miss.rawLogs")}</div>
+                          <div className="miss-page-meta">
+                            {missTotal > missLogs.length
+                              ? t("monitor.miss.latestHint", { total: missTotal })
+                              : `${t("monitor.metric.total")} ${fmtCount(missLogs.length)}`}
                           </div>
-                          <div className="miss-pager">
-                            <Button size="small" disabled={missPage <= 1 || missLogsLoading} onClick={() => void onPrevMissPage()}>
-                              上一页
-                            </Button>
-                            <Button size="small" disabled={missLogsLoading || !missHasMore} onClick={() => void onNextMissPage()}>
-                              下一页
-                            </Button>
-                          </div>
-                        </>
+                        </div>
+                        <div className="miss-query-toolbar">
+                          {snapshot && snapshot.miss.available_sources.includes("file") && snapshot.miss.available_sources.includes("vlog") && (
+                            <Segmented
+                              size="small"
+                              value={missSource}
+                              onChange={(val) => void handleMissSourceChange(val as "vlog" | "file")}
+                              options={[
+                                { label: "File", value: "file" },
+                                { label: "Vlog", value: "vlog" },
+                              ]}
+                            />
+                          )}
+                          <Button
+                            size="small"
+                            onClick={() => void loadMissedLogs(false)}
+                            disabled={missLogsLoading}
+                          >
+                            {t("monitor.miss.refreshCurrentPage")}
+                          </Button>
+                          <Button size="small" onClick={() => void onExportMissed()} disabled={missExporting}>
+                            {missExporting ? t("monitor.miss.exporting") : t("monitor.miss.exportData")}
+                          </Button>
+                          <Button size="small" danger onClick={onClearMissed} disabled={missClearing}>
+                            {missClearing ? t("monitor.miss.clearing") : t("monitor.miss.clearData")}
+                          </Button>
+                        </div>
+                      </div>
+                      {missLogsLoading && <p>{t("monitor.miss.loading")}</p>}
+                      {!missLogsLoading && missLogsError && (
+                        <p className="error">{t("common.errorWithMessage", { message: missLogsError })}</p>
                       )}
+                      {!missLogsLoading &&
+                        !missLogsError &&
+                        missLogs.length === 0 && <p>{t("monitor.miss.empty")}</p>}
+                      {!missLogsLoading &&
+                        !missLogsError &&
+                        missLogs.length > 0 && (
+                          <>
+                            <div className="miss-log-viewer">
+                              <div ref={missScrollRef} className="miss-scroll">
+                                <div className="miss-list">
+                                  {missPageItems.map((item, index) => {
+                                    const offset = (missPage - 1) * missPageSize;
+                                    const rowNo = offset + index + 1;
+                                    return (
+                                      <article
+                                        key={rowNo}
+                                        className="miss-record"
+                                      >
+                                        <span className="miss-record-lineno">{rowNo}</span>
+                                        <pre className="miss-record-raw">
+                                          {escapeSpecialChars(item.content)}
+                                        </pre>
+                                      </article>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="miss-pager">
+                              <Pagination
+                                size="small"
+                                current={missPage}
+                                total={missLogs.length}
+                                pageSize={missPageSize}
+                                showSizeChanger={false}
+                                showQuickJumper
+                                onChange={onMissPageChange}
+                              />
+                            </div>
+                          </>
+                        )}
+                    </div>
                   </section>
                 )}
-              </div>
+              </>
             )}
 
           {!drawerLoading &&
@@ -1747,14 +2363,16 @@ export default function WpMonitorPage() {
             !detail &&
             detailViewMode === "node" &&
             (!parseSeriesList || parseSeriesList.length === 0) && (
-              <p>点击节点查看详情</p>
+              <p>{t("monitor.detail.clickNodeForDetail")}</p>
             )}
           {!drawerLoading &&
             !drawerError &&
             detailViewMode === "scope" &&
-            parseSeriesList === null && <p>请选择范围以查看时序</p>}
+            parseSeriesList === null && <p>{t("monitor.detail.selectScopeForTimeseries")}</p>}
         </div>
       </aside>
+      </>
+      )}
     </div>
   );
 }

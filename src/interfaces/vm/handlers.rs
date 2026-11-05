@@ -1,12 +1,12 @@
-use crate::application::layer_service::LayerService;
+use crate::application::miss_service::MissSource;
 use crate::domain::model::TimeRangeQuery;
+use crate::domain::vm_repository::{PackageFilter, TimeSeriesMetricMode};
 use crate::shared::api::{ApiResponse, ReadyResponse, VersionResponse};
-use actix_web::{
-    HttpResponse, Result,
-    error::{ErrorBadRequest, ErrorInternalServerError},
-    get, web,
-};
+use crate::shared::error::AppErrorResponse;
+use crate::state::AppState;
+use actix_web::{HttpResponse, Result, get, post, web};
 use serde::Deserialize;
+use std::str::FromStr;
 use tracing::{debug, error};
 
 /// HTTP 查询参数：通用时间窗口。
@@ -15,6 +15,7 @@ use tracing::{debug, error};
 pub struct TimeRangeRequest {
     pub start_time: String,
     pub end_time: String,
+    pub miss_source: Option<String>,
 }
 
 /// HTTP 查询参数：指标增量刷新请求。
@@ -23,6 +24,8 @@ pub struct MetricsRequest {
     pub start_time: String,
     pub end_time: String,
     pub node_ids: Option<String>,
+    pub filters: Option<Vec<PackageFilter>>,
+    pub miss_source: Option<String>,
 }
 
 /// HTTP 查询参数：节点时序请求。
@@ -34,12 +37,19 @@ pub struct TimeSeriesRequest {
     #[allow(dead_code)]
     pub step: Option<String>,
     pub max_data_points: Option<usize>,
+    pub metric_mode: Option<TimeSeriesMetricMode>,
+}
+
+fn parse_miss_source(raw: &Option<String>) -> MissSource {
+    raw.as_ref()
+        .and_then(|s| MissSource::from_str(s).ok())
+        .unwrap_or(MissSource::Vlog)
 }
 
 /// 获取全量分层快照。
 #[get("/layers/snapshot")]
 pub async fn get_layers_snapshot(
-    svc: web::Data<LayerService>,
+    state: web::Data<AppState>,
     req: web::Query<TimeRangeRequest>,
 ) -> Result<HttpResponse> {
     debug!(
@@ -47,6 +57,7 @@ pub async fn get_layers_snapshot(
         end_time = %req.end_time,
         "vm.handlers.layers_snapshot.request"
     );
+    let miss_source = parse_miss_source(&req.miss_source);
     let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
         error!(
             start_time = %req.start_time,
@@ -54,27 +65,33 @@ pub async fn get_layers_snapshot(
             error = %e,
             "vm.handlers.layers_snapshot.invalid_params"
         );
-        ErrorBadRequest(e.to_string())
+        AppErrorResponse::from(e)
     })?;
-    let data = svc.get_layers_snapshot(query).await.map_err(|e| {
-        error!(error = %e, "vm.handlers.layers_snapshot.failed");
-        ErrorInternalServerError(e.to_string())
-    })?;
+    let data = state
+        .layer
+        .get_layers_snapshot(query, None, miss_source)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "vm.handlers.layers_snapshot.failed");
+            AppErrorResponse::from(e)
+        })?;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }
 
 /// 获取分层指标快照（可按 node_ids 过滤）。
-#[get("/layers/metrics")]
+#[post("/layers/metrics")]
 pub async fn get_layers_metrics(
-    svc: web::Data<LayerService>,
-    req: web::Query<MetricsRequest>,
+    state: web::Data<AppState>,
+    req: web::Json<MetricsRequest>,
 ) -> Result<HttpResponse> {
+    let req = req.into_inner();
     debug!(
         start_time = %req.start_time,
         end_time = %req.end_time,
         has_node_ids = req.node_ids.is_some(),
         "vm.handlers.layers_metrics.request"
     );
+    let miss_source = parse_miss_source(&req.miss_source);
     let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
         error!(
             start_time = %req.start_time,
@@ -82,7 +99,7 @@ pub async fn get_layers_metrics(
             error = %e,
             "vm.handlers.layers_metrics.invalid_params"
         );
-        ErrorBadRequest(e.to_string())
+        AppErrorResponse::from(e)
     })?;
     let node_ids = req.node_ids.as_ref().map(|s| {
         s.split(',')
@@ -90,17 +107,21 @@ pub async fn get_layers_metrics(
             .collect::<Vec<_>>()
     });
 
-    let data = svc.get_layers_metrics(query, node_ids).await.map_err(|e| {
-        error!(error = %e, "vm.handlers.layers_metrics.failed");
-        ErrorInternalServerError(e.to_string())
-    })?;
+    let data = state
+        .layer
+        .get_layers_metrics(query, node_ids, req.filters, miss_source)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "vm.handlers.layers_metrics.failed");
+            AppErrorResponse::from(e)
+        })?;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }
 
 /// 获取单节点详情。
 #[get("/nodes/{node_id}/detail")]
 pub async fn get_node_detail(
-    svc: web::Data<LayerService>,
+    state: web::Data<AppState>,
     path: web::Path<String>,
     req: web::Query<TimeRangeRequest>,
 ) -> Result<HttpResponse> {
@@ -111,6 +132,7 @@ pub async fn get_node_detail(
         end_time = %req.end_time,
         "vm.handlers.node_detail.request"
     );
+    let miss_source = parse_miss_source(&req.miss_source);
     let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
         error!(
             node_id = %node_id,
@@ -119,19 +141,23 @@ pub async fn get_node_detail(
             error = %e,
             "vm.handlers.node_detail.invalid_params"
         );
-        ErrorBadRequest(e.to_string())
+        AppErrorResponse::from(e)
     })?;
-    let data = svc.get_node_detail(node_id, query).await.map_err(|e| {
-        error!(node_id = %node_id, error = %e, "vm.handlers.node_detail.failed");
-        ErrorInternalServerError(e.to_string())
-    })?;
+    let data = state
+        .layer
+        .get_node_detail(node_id, query, miss_source)
+        .await
+        .map_err(|e| {
+            error!(node_id = %node_id, error = %e, "vm.handlers.node_detail.failed");
+            AppErrorResponse::from(e)
+        })?;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }
 
 /// 获取单节点时间序列。
 #[get("/nodes/{node_id}/timeseries")]
 pub async fn get_node_timeseries(
-    svc: web::Data<LayerService>,
+    state: web::Data<AppState>,
     path: web::Path<String>,
     req: web::Query<TimeSeriesRequest>,
 ) -> Result<HttpResponse> {
@@ -151,10 +177,16 @@ pub async fn get_node_timeseries(
             error = %e,
             "vm.handlers.node_timeseries.invalid_params"
         );
-        ErrorBadRequest(e.to_string())
+        AppErrorResponse::from(e)
     })?;
-    let data = svc
-        .get_node_timeseries(node_id, query, req.max_data_points)
+    let data = state
+        .layer
+        .get_node_timeseries(
+            node_id,
+            query,
+            req.max_data_points,
+            req.metric_mode.unwrap_or(TimeSeriesMetricMode::Rate),
+        )
         .await
         .map_err(|e| {
             error!(
@@ -162,7 +194,7 @@ pub async fn get_node_timeseries(
                 error = %e,
                 "vm.handlers.node_timeseries.failed"
             );
-            ErrorInternalServerError(e.to_string())
+            AppErrorResponse::from(e)
         })?;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }
@@ -181,18 +213,62 @@ pub enum TimeSeriesScope {
 #[derive(Debug, Deserialize)]
 pub struct NodesTimeSeriesRequest {
     pub scope: Option<TimeSeriesScope>,
-    pub package_name: Option<String>,
-    pub rule_name: Option<String>,
+    pub package_name: Vec<String>,
+    pub rule_name: Vec<String>,
     pub sink_group: Option<String>,
     pub start_time: String,
     pub end_time: String,
     pub max_data_points: Option<usize>,
+    pub metric_mode: Option<TimeSeriesMetricMode>,
 }
 
-#[get("/nodes/timeseries")]
+#[derive(Debug, Deserialize)]
+pub struct PackagesTimeSeriesRequest {
+    pub start_time: String,
+    pub end_time: String,
+    pub max_data_points: Option<usize>,
+    pub filters: Vec<PackageFilter>,
+    pub metric_mode: Option<TimeSeriesMetricMode>,
+}
+
+#[post("/packages/timeseries")]
+pub async fn get_packages_timeseries(
+    state: web::Data<AppState>,
+    req: web::Json<PackagesTimeSeriesRequest>,
+) -> Result<HttpResponse> {
+    let query = TimeRangeQuery::new(&req.start_time, &req.end_time).map_err(|e| {
+        error!(
+            start_time = %req.start_time,
+            end_time = %req.end_time,
+            error = %e,
+            "vm.handlers.packages_timeseries.invalid_params"
+        );
+        AppErrorResponse::from(e)
+    })?;
+    let req = req.into_inner();
+    let data = state
+        .layer
+        .get_packages_timeseries(
+            query,
+            req.max_data_points,
+            req.filters,
+            req.metric_mode.unwrap_or(TimeSeriesMetricMode::Rate),
+        )
+        .await
+        .map_err(|e| {
+            error!(
+                error = %e,
+                "vm.handlers.packages_timeseries.failed"
+            );
+            AppErrorResponse::from(e)
+        })?;
+    Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
+}
+
+#[post("/nodes/timeseries")]
 pub async fn get_nodes_timeseries(
-    svc: web::Data<LayerService>,
-    req: web::Query<NodesTimeSeriesRequest>,
+    state: web::Data<AppState>,
+    req: web::Json<NodesTimeSeriesRequest>,
 ) -> Result<HttpResponse> {
     debug!(
         start_time = %req.start_time,
@@ -207,35 +283,45 @@ pub async fn get_nodes_timeseries(
             error = %e,
             "vm.handlers.node_timeseries.invalid_params"
         );
-        ErrorBadRequest(e.to_string())
+        AppErrorResponse::from(e)
     })?;
     let scope = req.scope.as_ref().unwrap_or(&TimeSeriesScope::Parse);
+    let metric_mode = req.metric_mode.unwrap_or(TimeSeriesMetricMode::Rate);
     let data = match scope {
-        TimeSeriesScope::Source => svc
-            .get_source_timeseries(query, req.max_data_points)
+        TimeSeriesScope::Source => state
+            .layer
+            .get_source_timeseries(query, req.max_data_points, metric_mode)
             .await
             .map_err(|e| {
                 error!(error = %e, "vm.handlers.source_timeseries.failed");
-                ErrorInternalServerError(e.to_string())
+                AppErrorResponse::from(e)
             })?,
-        TimeSeriesScope::Sink => svc
-            .get_sink_timeseries(query, req.sink_group.clone(), req.max_data_points)
+        TimeSeriesScope::Sink => state
+            .layer
+            .get_sink_timeseries(
+                query,
+                req.sink_group.clone(),
+                req.max_data_points,
+                metric_mode,
+            )
             .await
             .map_err(|e| {
                 error!(error = %e, "vm.handlers.sink_timeseries.failed");
-                ErrorInternalServerError(e.to_string())
+                AppErrorResponse::from(e)
             })?,
-        TimeSeriesScope::Parse => svc
+        TimeSeriesScope::Parse => state
+            .layer
             .get_parse_timeseries(
                 query,
                 req.package_name.clone(),
                 req.rule_name.clone(),
                 req.max_data_points,
+                metric_mode,
             )
             .await
             .map_err(|e| {
                 error!(error = %e, "vm.handlers.parse_timeseries.failed");
-                ErrorInternalServerError(e.to_string())
+                AppErrorResponse::from(e)
             })?,
     };
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
@@ -243,9 +329,9 @@ pub async fn get_nodes_timeseries(
 
 /// 获取前端初始化配置。
 #[get("/meta/config")]
-pub async fn get_meta_config(svc: web::Data<LayerService>) -> Result<HttpResponse> {
+pub async fn get_meta_config(state: web::Data<AppState>) -> Result<HttpResponse> {
     debug!("vm.handlers.meta_config.request");
-    let data = svc.get_meta_config().await;
+    let data = state.layer.get_meta_config().await;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }
 

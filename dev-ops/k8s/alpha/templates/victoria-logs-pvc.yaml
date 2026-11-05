@@ -1,0 +1,17 @@
+{{- if and .Values.victoriaLogs.enabled .Values.victoriaLogs.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "wp-monitor.componentFullname" (dict "context" . "name" "victoria-logs-data") }}
+  labels:
+    {{- include "wp-monitor.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.victoriaLogs.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.victoriaLogs.persistence.size }}
+  {{- with .Values.victoriaLogs.persistence.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}

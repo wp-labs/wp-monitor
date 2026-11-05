@@ -1,4 +1,6 @@
+use crate::shared::error::{AppError, AppReason};
 use chrono::{DateTime, FixedOffset};
+use orion_error::{conversion::ToStructError, prelude::*};
 
 /// 单个节点在某一时刻的指标快照。
 #[derive(Debug, Clone, serde::Serialize)]
@@ -60,8 +62,8 @@ pub struct SinkGroupNode {
 pub struct MissNode {
     pub id: String,
     pub name: String,
-    pub fixed: bool,
     pub metrics: MetricsSnapshot,
+    pub available_sources: Vec<String>,
 }
 
 /// 各层结构版本（由稳定哈希生成）。
@@ -111,6 +113,7 @@ pub struct NodeMetricsItem {
 pub struct LayersMetricsResponse {
     pub generated_at: String,
     pub items: Vec<NodeMetricsItem>,
+    pub layer_versions: LayerVersions,
 }
 
 /// 节点详情响应。
@@ -127,7 +130,8 @@ pub struct NodeDetail {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TimePoint {
     pub ts: String,
-    pub value: f64,
+    /// `None` 表示该步点在存储中没有样本，用于在前端保留完整时间轴但断开折线。
+    pub value: Option<f64>,
 }
 
 /// 节点时间序列响应。
@@ -135,9 +139,9 @@ pub struct TimePoint {
 pub struct NodeTimeSeries {
     pub node_id: String,
     pub log_rate_eps: Vec<TimePoint>,
+    pub log_count: Vec<TimePoint>,
     pub step_secs: i64,
     pub rate_window_secs: i64,
-    pub log_count: Vec<TimePoint>,
 }
 
 /// 标准化时间窗口查询对象。
@@ -147,27 +151,17 @@ pub struct TimeRangeQuery {
     pub end_time: DateTime<FixedOffset>,
 }
 
-/// 时间窗口解析错误。
-#[allow(clippy::enum_variant_names)]
-#[derive(Debug, thiserror::Error)]
-pub enum QueryParseError {
-    #[error("invalid start_time format")]
-    InvalidStart,
-    #[error("invalid end_time format")]
-    InvalidEnd,
-    #[error("start_time must be earlier than end_time")]
-    InvalidRange,
-}
-
 impl TimeRangeQuery {
     /// 从 RFC3339 字符串构造时间窗口，并校验 start < end。
-    pub fn new(start_time: &str, end_time: &str) -> Result<Self, QueryParseError> {
-        let start =
-            DateTime::parse_from_rfc3339(start_time).map_err(|_| QueryParseError::InvalidStart)?;
-        let end =
-            DateTime::parse_from_rfc3339(end_time).map_err(|_| QueryParseError::InvalidEnd)?;
+    pub fn new(start_time: &str, end_time: &str) -> Result<Self, AppError> {
+        let start = DateTime::parse_from_rfc3339(start_time)
+            .source_raw_err(AppReason::InvalidTimeRange, "parse start_time")?;
+        let end = DateTime::parse_from_rfc3339(end_time)
+            .source_raw_err(AppReason::InvalidTimeRange, "parse end_time")?;
         if start >= end {
-            return Err(QueryParseError::InvalidRange);
+            return Err(AppReason::InvalidTimeRange
+                .to_err()
+                .with_detail("start_time must be earlier than end_time"));
         }
         Ok(Self {
             start_time: start,

@@ -1,0 +1,22 @@
+{{- if .Values.victoriaLogs.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wp-monitor.componentFullname" (dict "context" . "name" "victoria-logs") }}
+  labels:
+    {{- include "wp-monitor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: victoria-logs
+spec:
+  type: {{ .Values.victoriaLogs.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.victoriaLogs.service.port }}
+      targetPort: http
+      protocol: TCP
+      {{- if and (eq .Values.victoriaLogs.service.type "NodePort") .Values.victoriaLogs.service.nodePort }}
+      nodePort: {{ .Values.victoriaLogs.service.nodePort }}
+      {{- end }}
+  selector:
+    {{- include "wp-monitor.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: victoria-logs
+{{- end }}

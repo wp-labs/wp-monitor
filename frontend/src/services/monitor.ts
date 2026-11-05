@@ -1,4 +1,5 @@
 import type {
+  ApiErrorBody,
   ApiResp,
   LayerSnapshot,
   LayersMetricsResponse,
@@ -6,7 +7,17 @@ import type {
   NodeDetail,
   NodeTimeSeries,
   VersionInfo,
+  WfPipelineResponse,
+  WfSourceItem,
+  WfSourceMachineItem,
+  WfWindowItem,
+  WfRuleItem,
+  WfStateMachineItem,
+  WfRuleMachineItem,
 } from "@/types/monitor";
+import { ApiError } from "@/types/monitor";
+
+export type TimeSeriesMetricMode = "rate" | "count";
 
 function normalizeIsoToSecondBoundary(iso: string) {
   const date = new Date(iso);
@@ -27,10 +38,21 @@ function normalizeMaxDataPoints(maxDataPoints?: number) {
   return Math.max(60, Math.min(2000, Math.floor(maxDataPoints)));
 }
 
-async function requestJson<T>(url: string, errorMessage: string) {
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(errorMessage);
-  return (await resp.json()) as ApiResp<T>;
+/** 统一请求：成功返回 ApiResp<T>，失败抛出 ApiError（含 code/message/hints） */
+async function requestJson<T>(url: string, method: string = 'GET') {
+  const resp = await fetch(url, { method });
+  if (!resp.ok) {
+    const contentType = resp.headers.get('content-type') || '';
+    const isJson = contentType.includes('application/json');
+    const raw = await resp.text().catch(() => '');
+    let body: ApiErrorBody | null = null;
+    if (isJson && raw) {
+      try { body = JSON.parse(raw) as ApiErrorBody; } catch { /* use null */ }
+    }
+    throw new ApiError(body ?? { status: resp.status, code: String(resp.status), category: 'http', message: raw.slice(0, 200) || `HTTP ${resp.status}`, visibility: 'user', hints: [] });
+  }
+  const body = await resp.json();
+  return body as ApiResp<T>;
 }
 
 function isoMinutesAgo(min: number) {
@@ -51,10 +73,32 @@ function mergeTimePoints(groups: Array<{ ts: string; value: number }[]>) {
   return merged;
 }
 
+/** 统一 POST 请求：成功返回 ApiResp<T>，失败抛出 ApiError */
+async function requestPostJson<T>(url: string, body: unknown) {
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const contentType = resp.headers.get('content-type') || '';
+    const isJson = contentType.includes('application/json');
+    const raw = await resp.text().catch(() => '');
+    let errBody: ApiErrorBody | null = null;
+    if (isJson && raw) {
+      try { errBody = JSON.parse(raw) as ApiErrorBody; } catch { /* use null */ }
+    }
+    throw new ApiError(errBody ?? { status: resp.status, code: String(resp.status), category: 'http', message: raw.slice(0, 200) || `HTTP ${resp.status}`, visibility: 'user', hints: [] });
+  }
+  const json = await resp.json();
+  return json as ApiResp<T>;
+}
+
 async function requestNodeTimeSeriesOnce(
   nodeId: string,
   startTime: string,
   endTime: string,
+  metricMode: TimeSeriesMetricMode,
   maxDataPoints?: number,
 ) {
   const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(
@@ -62,53 +106,75 @@ async function requestNodeTimeSeriesOnce(
     endTime,
   );
   const safeMaxDataPoints = normalizeMaxDataPoints(maxDataPoints);
-  const url = `/api/v1/wp-monitor/nodes/${encodeURIComponent(nodeId)}/timeseries?start_time=${encodeURIComponent(normalizedStart)}&end_time=${encodeURIComponent(normalizedEnd)}${safeMaxDataPoints ? `&max_data_points=${safeMaxDataPoints}` : ""}`;
-  return requestJson<NodeTimeSeries>(url, "timeseries request failed");
+  const url = `/api/v1/wp-monitor/nodes/${encodeURIComponent(nodeId)}/timeseries?start_time=${encodeURIComponent(normalizedStart)}&end_time=${encodeURIComponent(normalizedEnd)}&metric_mode=${encodeURIComponent(metricMode)}${safeMaxDataPoints ? `&max_data_points=${safeMaxDataPoints}` : ""}`;
+  return requestJson<NodeTimeSeries>(url);
 }
 
 export async function fetchParseTimeSeries(
   scope: "parse" | "source" | "sink",
   startTime: string,
   endTime: string,
+  metricMode: TimeSeriesMetricMode = "rate",
   maxDataPoints?: number,
   packageName?: string,
   sinkGroup?: string,
+  ruleNames?: string[],
 ) {
   const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(
     startTime,
     endTime,
   );
   const safeMaxDataPoints = normalizeMaxDataPoints(maxDataPoints);
-  const params = new URLSearchParams({
+  const body: Record<string, unknown> = {
     scope,
     start_time: normalizedStart,
     end_time: normalizedEnd,
-  });
-  if (safeMaxDataPoints) {
-    params.set("max_data_points", String(safeMaxDataPoints));
-  }
-  if (packageName) {
-    params.set("package_name", packageName);
-  }
-  if (sinkGroup) {
-    params.set("sink_group", sinkGroup);
-  }
-  const url = `/api/v1/wp-monitor/nodes/timeseries?${params.toString()}`;
-  return requestJson<NodeTimeSeries[]>(url, "parse timeseries request failed");
+    metric_mode: metricMode,
+    package_name: packageName ? [packageName] : [],
+    rule_name: ruleNames ?? [],
+  };
+  if (safeMaxDataPoints) body.max_data_points = safeMaxDataPoints;
+  if (sinkGroup) body.sink_group = sinkGroup;
+  return requestPostJson<NodeTimeSeries[]>("/api/v1/wp-monitor/nodes/timeseries", body);
 }
 
-export async function fetchSnapshot(startTime?: string, endTime?: string) {
+/** 获取 package 级别时序数据 */
+export async function fetchPackagesTimeSeries(
+  startTime: string,
+  endTime: string,
+  metricMode: TimeSeriesMetricMode = "rate",
+  maxDataPoints?: number,
+  filters?: Array<{ packageName: string; ruleNames: string[] }>,
+) {
+  const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(startTime, endTime);
+  const safeMaxDataPoints = normalizeMaxDataPoints(maxDataPoints);
+  const body: Record<string, unknown> = {
+    start_time: normalizedStart,
+    end_time: normalizedEnd,
+    metric_mode: metricMode,
+    filters: (filters ?? []).map((f) => ({
+      package_name: f.packageName,
+      rule_names: f.ruleNames,
+    })),
+  };
+  if (safeMaxDataPoints) body.max_data_points = safeMaxDataPoints;
+  return requestPostJson<NodeTimeSeries[]>("/api/v1/wp-monitor/packages/timeseries", body);
+}
+
+export async function fetchSnapshot(startTime?: string, endTime?: string, missSource?: string) {
   const start = normalizeIsoToSecondBoundary(startTime ?? isoMinutesAgo(15));
   const end = normalizeIsoToSecondBoundary(endTime ?? new Date().toISOString());
-  const url = `/api/v1/wp-monitor/layers/snapshot?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`;
-  const data = await requestJson<LayerSnapshot>(url, "snapshot request failed");
+  let url = `/api/v1/wp-monitor/layers/snapshot?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`;
+  if (missSource) {
+    url += `&miss_source=${encodeURIComponent(missSource)}`;
+  }
+  const data = await requestJson<LayerSnapshot>(url);
   return data.data;
 }
 
 export async function fetchVersion() {
   const data = await requestJson<VersionInfo>(
     "/api/v1/wp-monitor/meta/version",
-    "version request failed",
   );
   return data.data;
 }
@@ -117,23 +183,26 @@ export async function fetchMetrics(
   startTime: string,
   endTime: string,
   nodeIds?: string[],
+  filters?: Array<{ packageName: string; ruleNames: string[] }>,
 ) {
   const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(
     startTime,
     endTime,
   );
-  const params = new URLSearchParams({
+  const body: Record<string, unknown> = {
     start_time: normalizedStart,
     end_time: normalizedEnd,
-  });
+  };
   if (nodeIds && nodeIds.length > 0) {
-    params.set("node_ids", nodeIds.join(","));
+    body.node_ids = nodeIds.join(",");
   }
-  const url = `/api/v1/wp-monitor/layers/metrics?${params.toString()}`;
-  const data = await requestJson<LayersMetricsResponse>(
-    url,
-    "metrics request failed",
-  );
+  if (filters && filters.length > 0) {
+    body.filters = filters.map((f) => ({
+      package_name: f.packageName,
+      rule_names: f.ruleNames,
+    }));
+  }
+  const data = await requestPostJson<LayersMetricsResponse>("/api/v1/wp-monitor/layers/metrics", body);
   return data.data;
 }
 
@@ -141,19 +210,24 @@ export async function fetchNodeDetail(
   nodeId: string,
   startTime: string,
   endTime: string,
+  missSource?: string,
 ) {
   const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(
     startTime,
     endTime,
   );
-  const url = `/api/v1/wp-monitor/nodes/${encodeURIComponent(nodeId)}/detail?start_time=${encodeURIComponent(normalizedStart)}&end_time=${encodeURIComponent(normalizedEnd)}`;
-  return requestJson<NodeDetail>(url, "detail request failed");
+  let url = `/api/v1/wp-monitor/nodes/${encodeURIComponent(nodeId)}/detail?start_time=${encodeURIComponent(normalizedStart)}&end_time=${encodeURIComponent(normalizedEnd)}`;
+  if (missSource) {
+    url += `&miss_source=${encodeURIComponent(missSource)}`;
+  }
+  return requestJson<NodeDetail>(url);
 }
 
 export async function fetchNodeTimeSeries(
   nodeId: string,
   startTime: string,
   endTime: string,
+  metricMode: TimeSeriesMetricMode = "rate",
   maxDataPoints?: number,
 ) {
   const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(
@@ -166,6 +240,7 @@ export async function fetchNodeTimeSeries(
       nodeId,
       normalizedStart,
       normalizedEnd,
+      metricMode,
       safeMaxDataPoints,
     );
   } catch (err) {
@@ -175,7 +250,6 @@ export async function fetchNodeTimeSeries(
     if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || durationMs <= 0) {
       throw err;
     }
-    // 仅在大窗口失败时回退为分段请求，尽量保持原有性能与行为。
     const fallbackThresholdMs = 24 * 60 * 60 * 1000;
     if (durationMs <= fallbackThresholdMs) {
       throw err;
@@ -197,6 +271,7 @@ export async function fetchNodeTimeSeries(
         nodeId,
         new Date(chunkStartMs).toISOString(),
         new Date(chunkEndMs).toISOString(),
+        metricMode,
         perChunkPoints,
       );
       chunks.push(chunkResp.data);
@@ -218,33 +293,116 @@ export async function fetchNodeTimeSeries(
   }
 }
 
-export async function fetchMissedLogs(
-  startTime: string,
-  endTime: string,
-  page = 1,
-  pageSize = 10,
-) {
-  const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(
-    startTime,
-    endTime,
-  );
-  const safePage = Math.max(1, Math.floor(page || 1));
-  const safePageSize = Math.max(1, Math.min(100, Math.floor(pageSize || 10)));
-  const url = `/api/v1/wp-monitor/vlog/missed?query=${encodeURIComponent("wp_stage:miss")}&start=${encodeURIComponent(normalizedStart)}&end=${encodeURIComponent(normalizedEnd)}&page=${safePage}&page_size=${safePageSize}`;
-  const data = await requestJson<MissedLogsPage>(
-    url,
-    "missed logs request failed",
-  );
+export async function fetchMissedLogs(source?: string) {
+  let url = `/api/v1/wp-monitor/vlog/missed?query=${encodeURIComponent("wp_stage:miss")}`;
+  if (source) {
+    url += `&source=${encodeURIComponent(source)}`;
+  }
+  const data = await requestJson<MissedLogsPage>(url);
   return data.data;
 }
 
-export async function exportMissedLogs(startTime: string, endTime: string) {
-  const { start: normalizedStart, end: normalizedEnd } = normalizeTimeRange(
-    startTime,
-    endTime,
-  );
-  const url = `/api/v1/wp-monitor/vlog/missed/export?query=${encodeURIComponent("wp_stage:miss")}&start=${encodeURIComponent(normalizedStart)}&end=${encodeURIComponent(normalizedEnd)}`;
+export async function exportMissedLogs(source?: string) {
+  let url = `/api/v1/wp-monitor/vlog/missed/export?query=${encodeURIComponent("wp_stage:miss")}`;
+  if (source) {
+    url += `&source=${encodeURIComponent(source)}`;
+  }
   const resp = await fetch(url);
-  if (!resp.ok) throw new Error("missed logs export failed");
+  if (!resp.ok) {
+    const body = await resp.json() as ApiErrorBody;
+    throw new ApiError(body);
+  }
   return resp;
+}
+
+export async function clearMissedLogs(source?: string) {
+  let url = `/api/v1/wp-monitor/vlog/missed/clear?query=${encodeURIComponent("wp_stage:miss")}`;
+  if (source) {
+    url += `&source=${encodeURIComponent(source)}`;
+  }
+  return requestJson<string>(url, 'DELETE');
+}
+
+// ── wfusion engine monitoring ──
+
+const WF_BASE = '/api/v1/wp-monitor/wf';
+
+export async function fetchWfPipeline(startTime: string, endTime: string) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  return requestJson<WfPipelineResponse>(
+    `${WF_BASE}/pipeline?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`,
+  );
+}
+
+export async function fetchWfSources(startTime: string, endTime: string) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  return requestJson<WfSourceItem[]>(
+    `${WF_BASE}/sources?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`,
+  );
+}
+
+export async function fetchWfSourceMachines(startTime: string, endTime: string) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  return requestJson<WfSourceMachineItem[]>(
+    `${WF_BASE}/sources/machines?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`,
+  );
+}
+
+export async function fetchWfWindows(startTime: string, endTime: string) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  return requestJson<WfWindowItem[]>(
+    `${WF_BASE}/windows?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`,
+  );
+}
+
+export async function fetchWfRules(startTime: string, endTime: string) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  return requestJson<WfRuleItem[]>(
+    `${WF_BASE}/rules?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`,
+  );
+}
+
+export async function fetchWfStateMachines(ruleName: string, startTime: string, endTime: string) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  return requestJson<WfStateMachineItem[]>(
+    `${WF_BASE}/rules/${encodeURIComponent(ruleName)}/state-machines?start_time=${start}&end_time=${end}`,
+  );
+}
+
+export async function fetchWfRuleMachines(startTime: string, endTime: string) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  return requestJson<WfRuleMachineItem[]>(
+    `${WF_BASE}/rules/machines?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`,
+  );
+}
+
+export async function fetchWfTimeseriesThroughput(
+  startTime: string, endTime: string, groupBy: string, maxDataPoints?: number,
+) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  const dp = maxDataPoints ? `&max_data_points=${maxDataPoints}` : '';
+  return requestJson<NodeTimeSeries[]>(
+    `${WF_BASE}/timeseries/throughput?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}&group_by=${encodeURIComponent(groupBy)}${dp}`,
+  );
+}
+
+export async function fetchWfTimeseriesWindows(
+  startTime: string, endTime: string, metric: string, maxDataPoints?: number,
+) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  const dp = maxDataPoints ? `&max_data_points=${maxDataPoints}` : '';
+  return requestJson<NodeTimeSeries[]>(
+    `${WF_BASE}/timeseries/windows?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}&metric=${encodeURIComponent(metric)}${dp}`,
+  );
+}
+
+export async function fetchWfTimeseriesAlerts(
+  startTime: string, endTime: string, groupBy: string, metric?: string, maxDataPoints?: number,
+) {
+  const { start, end } = normalizeTimeRange(startTime, endTime);
+  const dp = maxDataPoints ? `&max_data_points=${maxDataPoints}` : '';
+  const mp = metric ? `&metric=${encodeURIComponent(metric)}` : '';
+  return requestJson<NodeTimeSeries[]>(
+    `${WF_BASE}/timeseries/alerts?start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}&group_by=${encodeURIComponent(groupBy)}${mp}${dp}`,
+  );
 }

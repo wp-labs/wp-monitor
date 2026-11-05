@@ -9,6 +9,17 @@
   --accent-glow: rgba(228, 77, 38, 0.2);
   --accent-soft: rgba(228, 77, 38, 0.07);
   --border-subtle: rgba(228, 77, 38, 0.08);
+  --chart-border: rgba(228, 77, 38, 0.75);
+  --chart-gridline: rgba(255, 181, 115, 0.11);
+  --chart-axis-line: rgba(255, 181, 115, 0.3);
+  --chart-panel-shadow:
+    inset 0 0 0 1px rgba(255, 236, 214, 0.04),
+    0 10px 30px rgba(0, 0, 0, 0.24);
+  --chart-tooltip-border: rgba(228, 77, 38, 0.75);
+  --chart-tooltip-shadow:
+    0 0 0 1px rgba(255, 236, 214, 0.08),
+    0 12px 30px rgba(0, 0, 0, 0.58),
+    0 0 18px rgba(228, 77, 38, 0.22);
   --detail-heading-color: #fcd9c6;
   --miss-border-style: dashed;
   --close-hover-bg: rgba(224, 72, 72, 0.2);
@@ -64,4 +75,75 @@
   --leaf-accent-rgb: 250, 169, 24;
   --leaf-bg: rgba(250, 169, 24, 0.04);
   --leaf-border: rgba(250, 169, 24, 0.45);
+}
+
+[data-theme="dark-modern"] .metric-badges > .metric-badge:first-child:not(:last-child),
+[data-theme="dark-modern"] .metric-inline-badges > .metric-inline-badge:first-child:not(:last-child),
+[data-theme="dark-modern"] .detail-metric-badges > .detail-metric-badge:first-child:not(:last-child) {
+  border-color: rgba(79, 193, 255, 0.42);
+  background: rgba(24, 56, 92, 0.42);
+  color: #8ecfff;
+}
+
+[data-theme="dark-modern"] .metric-badges > .metric-badge:last-child:not(:first-child),
+[data-theme="dark-modern"] .metric-inline-badges > .metric-inline-badge:last-child:not(:first-child),
+[data-theme="dark-modern"] .detail-metric-badges > .detail-metric-badge:last-child:not(:first-child) {
+  border-color: rgba(196, 143, 255, 0.38);
+  background: rgba(72, 34, 86, 0.4);
+  color: #d9b2ff;
+}
+
+/* ── toolbar quick-range capsule ── */
+
+[data-theme="dark-modern"] .toolbar-right {
+  gap: 10px;
+}
+
+[data-theme="dark-modern"] .wd-quick-inline {
+  gap: 0;
+  padding: 3px;
+  background: rgba(22, 21, 20, 0.88);
+  border: 1px solid rgba(90, 70, 55, 0.45);
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.015);
+}
+
+[data-theme="dark-modern"] .wd-time-quick-btn,
+[data-theme="dark-modern"] .wd-quick-inline .ant-btn {
+  color: #a09890;
+  font-weight: 600;
+}
+
+[data-theme="dark-modern"] .wd-quick-inline .ant-btn {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 7px;
+  padding-inline: 12px;
+}
+
+[data-theme="dark-modern"] .wd-time-quick-btn:hover,
+[data-theme="dark-modern"] .wd-quick-inline .ant-btn:hover:not(:disabled) {
+  background: transparent;
+  color: #f4eeea;
+}
+
+[data-theme="dark-modern"] .wd-time-quick-btn.active,
+[data-theme="dark-modern"] .wd-quick-inline .ant-btn.ant-btn-color-primary {
+  border-color: transparent;
+  background: var(--accent-gradient);
+  color: #fff;
+  box-shadow:
+    0 8px 18px rgba(8, 12, 18, 0.34),
+    0 0 0 1px rgba(228, 120, 80, 0.16) inset,
+    0 0 18px rgba(228, 77, 38, 0.24);
+}
+
+[data-theme="dark-modern"] .wd-quick-inline .ant-btn.ant-btn-color-primary:hover:not(:disabled) {
+  color: #fff;
+  background: var(--accent-gradient);
+  box-shadow:
+    0 8px 18px rgba(8, 12, 18, 0.34),
+    0 0 0 1px rgba(228, 120, 80, 0.16) inset,
+    0 0 18px rgba(228, 77, 38, 0.24);
 }

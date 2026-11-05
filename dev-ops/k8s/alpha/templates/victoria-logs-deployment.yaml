@@ -1,0 +1,70 @@
+{{- if .Values.victoriaLogs.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wp-monitor.componentFullname" (dict "context" . "name" "victoria-logs") }}
+  labels:
+    {{- include "wp-monitor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: victoria-logs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "wp-monitor.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: victoria-logs
+  template:
+    metadata:
+      labels:
+        {{- include "wp-monitor.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: victoria-logs
+    spec:
+      containers:
+        - name: victoria-logs
+          image: "{{ .Values.victoriaLogs.image.repository }}:{{ .Values.victoriaLogs.image.tag }}"
+          imagePullPolicy: {{ .Values.victoriaLogs.image.pullPolicy }}
+          args:
+            - --envflag.enable
+            - --envflag.prefix=VLOGS_
+            - --http.shutdownDelay=15s
+            - --httpListenAddr=:{{ .Values.victoriaLogs.service.port }}
+            - --loggerFormat=json
+            - --retentionPeriod={{ .Values.global.retentionPeriod }}
+            - --storageDataPath=/storage
+            - --retention.maxDiskSpaceUsageBytes={{ .Values.victoriaLogs.maxDiskSpaceUsageBytes }}
+          env:
+            - name: TZ
+              value: {{ .Values.global.timezone | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.victoriaLogs.service.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+          {{- with .Values.victoriaLogs.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.victoriaLogs.persistence.enabled }}
+          volumeMounts:
+            - name: storage
+              mountPath: /storage
+          {{- end }}
+      {{- if .Values.victoriaLogs.persistence.enabled }}
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: {{ include "wp-monitor.componentFullname" (dict "context" . "name" "victoria-logs-data") }}
+      {{- end }}
+{{- end }}

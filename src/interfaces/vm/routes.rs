@@ -7,6 +7,7 @@ pub fn register_vm_routes(cfg: &mut web::ServiceConfig) {
         .service(handlers::get_layers_metrics)
         .service(handlers::get_node_detail)
         .service(handlers::get_node_timeseries)
+        .service(handlers::get_packages_timeseries)
         .service(handlers::get_meta_config)
         .service(handlers::get_meta_version)
         .service(handlers::get_nodes_timeseries)

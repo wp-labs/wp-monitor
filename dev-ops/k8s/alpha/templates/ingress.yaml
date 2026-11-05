@@ -1,0 +1,44 @@
+{{- if .Values.wpMonitor.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "wp-monitor.componentFullname" (dict "context" . "name" "wp-monitor") }}
+  labels:
+    {{- include "wp-monitor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: wp-monitor
+  {{- with .Values.wpMonitor.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.wpMonitor.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.wpMonitor.ingress.tls }}
+  tls:
+    {{- range .Values.wpMonitor.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.wpMonitor.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            {{- with .pathType }}
+            pathType: {{ . }}
+            {{- end }}
+            backend:
+              service:
+                name: {{ include "wp-monitor.componentFullname" (dict "context" $ "name" "wp-monitor") }}
+                port:
+                  number: {{ $.Values.wpMonitor.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}

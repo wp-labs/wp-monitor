@@ -1,6 +1,6 @@
 [package]
 name = "wp_monitor"
-version = "0.6.1" #@gxl:set(version)
+version = "1.0.14" #@gxl:set(version)
 edition = "2024"
 
 [dependencies]
@@ -8,12 +8,17 @@ actix-web = "4.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
-thiserror = "2.0"
+orion-error = { version = "0.8", features = ["serde_json", "toml", "tracing"] }
+derive_more = { version = "2", features = ["from"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 async-trait = "0.1"
 toml = "0.8"
+
+memmap2 = "0.9"
+memchr = "2"
+bstr = "1"
 
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 rust-embed = { version = "8.0", features = ["include-exclude"] }

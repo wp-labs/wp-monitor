@@ -1,0 +1,61 @@
+{{- if .Values.wpMonitor.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wp-monitor.componentFullname" (dict "context" . "name" "wp-monitor") }}
+  labels:
+    {{- include "wp-monitor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: wp-monitor
+spec:
+  replicas: {{ .Values.wpMonitor.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "wp-monitor.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: wp-monitor
+  template:
+    metadata:
+      {{- with .Values.wpMonitor.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "wp-monitor.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: wp-monitor
+        {{- with .Values.wpMonitor.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      containers:
+        - name: wp-monitor
+          image: "{{ .Values.wpMonitor.image.repository }}:{{ .Values.wpMonitor.image.tag }}"
+          imagePullPolicy: {{ .Values.wpMonitor.image.pullPolicy }}
+          env:
+            - name: APP_CONFIG_PATH
+              value: /app/config/app.toml
+          ports:
+            - name: http
+              containerPort: {{ .Values.wpMonitor.service.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.wpMonitor.resources | nindent 12 }}
+          volumeMounts:
+            - name: app-config
+              mountPath: /app/config
+              readOnly: true
+      volumes:
+        - name: app-config
+          configMap:
+            name: {{ include "wp-monitor.componentFullname" (dict "context" . "name" "config") }}
+      {{- with .Values.wpMonitor.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.wpMonitor.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.wpMonitor.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

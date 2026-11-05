@@ -55,8 +55,8 @@ export interface LayerSnapshot {
   miss: {
     id: string;
     name: string;
-    fixed: boolean;
     metrics: MetricsSnapshot;
+    available_sources: string[];
   };
   sys_metrics: {
     cpu_usage_pct: number;
@@ -71,6 +71,11 @@ export interface NodeMetricsItem {
 
 export interface LayersMetricsResponse {
   generated_at: string;
+  layer_versions: {
+    source_version: string;
+    parse_version: string;
+    sink_version: string;
+  };
   items: NodeMetricsItem[];
 }
 
@@ -83,20 +88,12 @@ export interface NodeDetail {
 }
 
 export interface VlogRecord {
-  time: string;
-  stream_id: string;
-  stream: string;
-  msg: string;
-  raw: string;
+  content: string;
 }
 
 export interface MissedLogsPage {
-  start: string;
-  end: string;
-  query: string;
-  page: number;
-  page_size: number;
-  has_more: boolean;
+  source: "vlog" | "file";
+  total: number;
   items: VlogRecord[];
 }
 
@@ -108,17 +105,122 @@ export interface TimePoint {
 export interface NodeTimeSeries {
   node_id: string;
   log_rate_eps: TimePoint[];
+  log_count?: TimePoint[];
   step_secs?: number;
   rate_window_secs?: number;
-  log_count: TimePoint[];
 }
 
+/** 成功响应（code=0 的场景） */
 export interface ApiResp<T> {
   code: number;
   message: string;
   data: T;
 }
 
+/** 错误响应体（orion-error to_http_error_json() 的格式） */
+export interface ApiErrorBody {
+  status: number;
+  code: string;
+  category: string;
+  message: string;
+  visibility: string;
+  hints: string[];
+}
+
+export class ApiError extends Error {
+  status: number;
+  code: string;
+  category: string;
+  hints: string[];
+
+  constructor(body: ApiErrorBody) {
+    super(body.message);
+    this.name = 'ApiError';
+    this.status = body.status;
+    this.code = body.code;
+    this.category = body.category;
+    this.hints = body.hints;
+  }
+}
+
 export interface VersionInfo {
   version: string;
+}
+
+// ── wfusion engine monitoring ──
+
+export interface WfPipelineReceiver {
+  total_rows: number;
+  rate_rows_per_sec: number;
+  route_errors: number;
+  source_count: number;
+}
+
+export interface WfPipelineWindow {
+  window_count: number;
+  total_rows: number;
+  total_memory_bytes: number;
+  late_dropped: number;
+}
+
+export interface WfPipelineRule {
+  rule_count: number;
+  total_state_machines: number;
+  hit_rate_pct: number;
+  total_matched: number;
+  total_emitted: number;
+  send_failed: number;
+  e2e_p99_ms: number;
+}
+
+export interface WfPipelineResponse {
+  generated_at: string;
+  receiver: WfPipelineReceiver;
+  window: WfPipelineWindow;
+  rule: WfPipelineRule;
+}
+
+export interface WfSourceItem {
+  name: string;
+  type: string;
+  rows: number;
+  route_errors: number;
+  consumer_lag: number;
+  machines: string[];
+}
+
+export interface WfSourceMachineItem {
+  machine: string;
+  rows: number;
+  route_errors: number;
+  source_count: number;
+}
+
+export interface WfWindowItem {
+  name: string;
+  rows: number;
+  memory_bytes: number;
+  capacity_bytes: number;
+  late_dropped: number;
+}
+
+export interface WfRuleItem {
+  name: string;
+  matched: number;
+  emitted: number;
+  instances: number;
+  state_machines?: WfStateMachineItem[];
+}
+
+export interface WfStateMachineItem {
+  scope_key: string;
+  matched: number;
+  emitted: number;
+}
+
+export interface WfRuleMachineItem {
+  machine: string;
+  matched: number;
+  emitted: number;
+  rule_count: number;
 }

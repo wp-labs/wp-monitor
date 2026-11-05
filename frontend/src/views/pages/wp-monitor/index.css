@@ -1,1 +1,51 @@
 /* 样式已迁移至 src/styles/ 目录 */
+
+/* Compact header */
+.title {
+  font-size: 20px;
+}
+
+.title-logo {
+  height: 22px;
+}
+
+.title-wrap {
+  margin-bottom: 0;
+  gap: 8px;
+  padding-bottom: 0;
+}
+
+/* Antd Tabs inline after Monitor title */
+.wf-tabs {
+  margin-left: 24px;
+  align-self: flex-end;
+}
+
+.wf-tabs .ant-tabs-nav {
+  margin-bottom: 0 !important;
+}
+
+.wf-tabs .ant-tabs-nav::before {
+  border-bottom: none !important;
+}
+
+.wf-tabs .ant-tabs-tab {
+  padding: 4px 0 8px !important;
+  font-size: 13px;
+}
+
+.wf-tabs .ant-tabs-tab + .ant-tabs-tab {
+  margin-left: 24px;
+}
+
+.wf-tabs .ant-tabs-tab-btn {
+  color: var(--text-muted);
+}
+
+.wf-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--accent) !important;
+}
+
+.wf-tabs .ant-tabs-ink-bar {
+  background: var(--accent);
+}

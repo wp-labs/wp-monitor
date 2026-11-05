@@ -1,56 +1,11 @@
-use crate::interfaces::vlog::handlers::VlogInstantQuery;
-use async_trait::async_trait;
-use chrono::Utc;
+use crate::domain::vlog_repository::{VlogInstantQuery, VlogRecord};
+use crate::shared::error::{AppError, AppReason};
+use orion_error::{OperationContext, prelude::*};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-/// VM 仓储错误：
-/// - Request：网络请求/连接错误；
-/// - InvalidResponse：响应 JSON 结构不符合预期。
-#[derive(Debug, thiserror::Error)]
-pub enum VlogRepoError {
-    #[error("vlog request failed: {0}")]
-    Request(String),
-    #[error("vlog response invalid: {0}")]
-    InvalidResponse(String),
-}
-
-/// VLOG 单条日志记录。
-///
-/// 仅解析业务必需字段：
-/// - `_time`
-/// - `_stream_id`
-/// - `_stream`
-/// - `_msg`
-/// - `raw`
-///
-/// 其余字段由 serde 默认忽略，确保接口对字段扩展兼容。
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct VlogRecord {
-    #[serde(rename = "_time")]
-    pub time: String,
-    #[serde(rename = "_stream_id")]
-    pub stream_id: String,
-    #[serde(rename = "_stream")]
-    pub stream: String,
-    #[serde(rename = "_msg")]
-    pub msg: String,
-    pub raw: String,
-}
-
-/// VLOG 仓储抽象：
-/// - instant_query：查一次“当前时刻”聚合快照；
-/// - fetch_node_timeseries：按节点拉区间序列。
-#[async_trait]
-pub trait VlogRepository: Send + Sync {
-    async fn instant_query(
-        &self,
-        query: VlogInstantQuery,
-    ) -> Result<Vec<VlogRecord>, VlogRepoError>;
-}
-
 /// 基于 HTTP 协议访问 VLOG 的仓储实现。
+#[derive(Clone)]
 pub struct VlogHttpRepository {
     client: Client,
     base_url: String,
@@ -60,17 +15,24 @@ impl VlogHttpRepository {
     /// 创建仓储实例，自动去掉 base_url 尾部 `/`，避免 URL 拼接重复分隔符。
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .build()
+                .expect("reqwest client build"),
             base_url: base_url.into().trim_end_matches('/').to_string(),
         }
     }
 
     /// 执行 instant query（单时刻查询）。
-    async fn instant_query(
+    pub async fn instant_query(
         &self,
         query: &VlogInstantQuery,
-    ) -> Result<Vec<VlogRecord>, VlogRepoError> {
+    ) -> Result<Vec<VlogRecord>, AppError> {
         let url = format!("{}/select/logsql/query", self.base_url);
+        let ctx = OperationContext::doing("log instance query")
+            .with_field("url", url.clone())
+            .with_field("query sql", query.query.clone());
         let params = &[
             ("start", &query.start.to_rfc3339()),
             ("end", &query.end.to_rfc3339()),
@@ -89,11 +51,19 @@ impl VlogHttpRepository {
             .query(params)
             .send()
             .await
-            .map_err(|e| VlogRepoError::Request(e.to_string()))?;
+            .source_raw_err(
+                AppReason::VlogRequestFailed,
+                "vlog instant query http request failed",
+            )
+            .with_context(&ctx)?;
         let body = resp
             .text()
             .await
-            .map_err(|e| VlogRepoError::Request(e.to_string()))?;
+            .source_raw_err(
+                AppReason::VlogRequestFailed,
+                "vlog instant query response body read failed",
+            )
+            .with_context(&ctx)?;
         let records = Self::parse_records(&body)?;
         debug!(
             record_count = records.len(),
@@ -102,43 +72,95 @@ impl VlogHttpRepository {
         Ok(records)
     }
 
+    /// 查询 miss 数据总量。
+    pub async fn count_hits(&self, query: &str) -> Result<u64, AppError> {
+        let url = format!("{}/select/logsql/hits", self.base_url);
+        let ctx = OperationContext::doing("log hits query")
+            .with_field("url", url.clone())
+            .with_field("query", query.to_string());
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("query", query), ("step", "100y")])
+            .send()
+            .await
+            .source_raw_err(
+                AppReason::VlogRequestFailed,
+                "vlog hits query http request failed",
+            )
+            .with_context(&ctx)?;
+        let body = resp
+            .text()
+            .await
+            .source_raw_err(
+                AppReason::VlogRequestFailed,
+                "vlog hits query response body read failed",
+            )
+            .with_context(&ctx)?;
+        let parsed: serde_json::Value = serde_json::from_str(&body)
+            .source_raw_err(AppReason::VlogResponseInvalid, "parse vlog hits response")?;
+        let total = parsed["hits"][0]["total"].as_u64().unwrap_or(0);
+        debug!(total = total, "vlog_repository.count_hits.success");
+        Ok(total)
+    }
+
     /// 解析 VLOG 查询响应：
     /// - 支持 JSON 数组：`[{...}, {...}]`
     /// - 支持多个 JSON 对象拼接：`{...}{...}` 或按换行分隔对象
-    fn parse_records(body: &str) -> Result<Vec<VlogRecord>, VlogRepoError> {
+    fn parse_records(body: &str) -> Result<Vec<VlogRecord>, AppError> {
         let trimmed = body.trim();
         if trimmed.is_empty() {
             return Ok(Vec::new());
         }
 
         if trimmed.starts_with('[') {
-            return serde_json::from_str::<Vec<VlogRecord>>(trimmed)
-                .map_err(|e| VlogRepoError::InvalidResponse(e.to_string()));
+            return serde_json::from_str::<Vec<VlogRecord>>(trimmed).source_err(
+                AppReason::VlogResponseInvalid,
+                "vlog json array response parsing failed",
+            );
         }
 
         let mut records = Vec::new();
         let iter = serde_json::Deserializer::from_str(trimmed).into_iter::<VlogRecord>();
         for item in iter {
-            let record = item.map_err(|e| VlogRepoError::InvalidResponse(e.to_string()))?;
+            let record = item.source_err(
+                AppReason::VlogResponseInvalid,
+                "vlog json record parsing failed",
+            )?;
             records.push(record);
         }
         Ok(records)
     }
-}
 
-#[async_trait]
-impl VlogRepository for VlogHttpRepository {
-    async fn instant_query(
-        &self,
-        query: VlogInstantQuery,
-    ) -> Result<Vec<VlogRecord>, VlogRepoError> {
-        let vlog_query = VlogInstantQuery {
-            query: query.query.clone(),
-            limit: query.limit,
-            start: query.start.with_timezone(&Utc),
-            end: query.end.with_timezone(&Utc),
-        };
-        self.instant_query(&vlog_query).await
+    pub async fn clear_miss_data(&self, query: &str) -> Result<(), AppError> {
+        let url = format!("{}/delete/run_task", self.base_url);
+
+        let ctx = OperationContext::doing("clear miss data").with_field("url", url.clone());
+        let resp = self
+            .client
+            .post(&url)
+            .query(&[("filter", query)])
+            .send()
+            .await
+            .source_raw_err(
+                AppReason::VlogRequestFailed,
+                "vlog clear miss data http request failed",
+            )
+            .with_context(&ctx)?;
+        if !resp.status().is_success() {
+            return Err(AppError::new(
+                AppReason::VlogRequestFailed,
+                format!(
+                    "vlog clear miss data request failed with status: {}",
+                    resp.status()
+                )
+                .into(),
+                None,
+                Vec::new(),
+            ));
+        }
+        debug!("vlog_repository.clear_miss_data.success");
+        Ok(())
     }
 }
 
@@ -146,19 +168,6 @@ impl VlogRepository for VlogHttpRepository {
 pub mod tests {
 
     use super::*;
-
-    // #[tokio::test]
-    // async fn test_instant_query() {
-    //     let repo = VlogHttpRepository::new("http://localhost:9428".to_string());
-    //     let vlog_query = VlogInstantQuery {
-    //         query: "wp_stage:miss".to_string(),
-    //         limit: 100,
-    //         start: Utc.with_ymd_and_hms(2026, 3, 31, 23, 0, 0).unwrap(),
-    //         end: Utc.with_ymd_and_hms(2026, 4, 1, 11, 1, 0).unwrap(),
-    //     };
-    //     let resp = repo.instant_query(&vlog_query).await.unwrap();
-    //     println!("{:#?}", resp);
-    // }
 
     #[test]
     fn test_parse_concatenated_json_records() {

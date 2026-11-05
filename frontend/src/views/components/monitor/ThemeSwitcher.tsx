@@ -1,5 +1,6 @@
 import { Button, Dropdown } from 'antd';
 import { Palette, Sun, Moon, Star, Check } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useTheme, type Theme } from '@/context/ThemeContext';
 
 interface ThemeOption {
@@ -15,6 +16,7 @@ const THEME_OPTIONS: ThemeOption[] = [
 ];
 
 export default function ThemeSwitcher() {
+  const { t } = useTranslation();
   const { theme, setTheme } = useTheme();
 
   return (
@@ -40,7 +42,7 @@ export default function ThemeSwitcher() {
         type="text"
         className="theme-trigger-btn"
         icon={<Palette size={18} />}
-        title="切换主题"
+        title={t('theme.switchTitle')}
       />
     </Dropdown>
   );

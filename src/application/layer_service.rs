@@ -1,11 +1,17 @@
+use crate::application::miss_service::MissSource;
+use crate::domain::miss_repository::MissRepository;
 use crate::domain::model::{
     LayerSnapshot, LayerVersions, LayersMetricsResponse, MetricsSnapshot, MissNode, NodeDetail,
     NodeMetricsItem, NodeTimeSeries, SnapshotMeta, TimeRangeQuery,
 };
-use crate::infrastructure::vm_repository::{VmRepoError, VmRepository, VmSnapshotData};
+use crate::domain::vm_repository::{
+    PackageFilter, TimeSeriesMetricMode, VmRepository, VmSnapshotData,
+};
 use crate::shared::config::AppConfig;
+use crate::shared::error::{AppError, AppReason};
 use crate::shared::hash::stable_hash_json;
 use chrono::Utc;
+use orion_error::conversion::ToStructError;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -268,18 +274,53 @@ impl LayerNodeCache {
 /// - 不直接关心 HTTP/PromQL 细节。
 pub struct LayerService {
     vm_repo: Arc<dyn VmRepository>,
+    file_miss_repo: Option<Arc<dyn MissRepository>>,
+    vlog_miss_repo: Option<Arc<dyn MissRepository>>,
     config: AppConfig,
     node_cache: RwLock<LayerNodeCache>,
 }
 
 impl LayerService {
     /// 通过依赖注入方式接入 VM 仓储抽象，便于后续替换实现/测试。
-    pub fn new(vm_repo: Arc<dyn VmRepository>, config: AppConfig) -> Self {
+    pub fn new(
+        vm_repo: Arc<dyn VmRepository>,
+        file_miss_repo: Option<Arc<dyn MissRepository>>,
+        vlog_miss_repo: Option<Arc<dyn MissRepository>>,
+        config: AppConfig,
+    ) -> Self {
         Self {
             vm_repo,
+            file_miss_repo,
+            vlog_miss_repo,
             config,
             node_cache: RwLock::new(LayerNodeCache::default()),
         }
+    }
+
+    fn resolve_miss_repo(&self, source: MissSource) -> Result<&Arc<dyn MissRepository>, AppError> {
+        match source {
+            MissSource::File => self.file_miss_repo.as_ref().ok_or_else(|| {
+                AppReason::ConfigNotFound
+                    .to_err()
+                    .with_detail("file miss source not configured")
+            }),
+            MissSource::Vlog => self.vlog_miss_repo.as_ref().ok_or_else(|| {
+                AppReason::ConfigNotFound
+                    .to_err()
+                    .with_detail("vlog miss source not configured")
+            }),
+        }
+    }
+
+    fn available_miss_sources(&self) -> Vec<String> {
+        let mut sources = Vec::new();
+        if self.file_miss_repo.is_some() {
+            sources.push("file".to_string());
+        }
+        if self.vlog_miss_repo.is_some() {
+            sources.push("vlog".to_string());
+        }
+        sources
     }
 
     async fn merge_snapshot_with_cache(&self, snapshot_data: VmSnapshotData) -> VmSnapshotData {
@@ -293,14 +334,25 @@ impl LayerService {
     pub async fn get_layers_snapshot(
         &self,
         query: TimeRangeQuery,
-    ) -> Result<LayerSnapshot, VmRepoError> {
+        filters: Option<Vec<PackageFilter>>,
+        miss_source: MissSource,
+    ) -> Result<LayerSnapshot, AppError> {
         debug!(
             start_time = %query.start_time,
             end_time = %query.end_time,
             "layer_service.layers_snapshot.start"
         );
-        let raw_snapshot = self.vm_repo.fetch_snapshot_data(&query).await?;
-        let snapshot_data = self.merge_snapshot_with_cache(raw_snapshot).await;
+        // 有过滤条件时只返回 VM 实际查到的数据，避免缓存填零导致前端震荡。
+        let filters_active = filters.as_ref().is_some_and(|f| !f.is_empty());
+        let raw_snapshot = self.vm_repo.fetch_snapshot_data(&query, filters).await?;
+
+        let snapshot_data = if filters_active {
+            let mut cache = self.node_cache.write().await;
+            cache.upsert_from_snapshot(&raw_snapshot);
+            raw_snapshot
+        } else {
+            self.merge_snapshot_with_cache(raw_snapshot).await
+        };
 
         // 版本号采用“结构稳定哈希”，用于前端识别层结构是否变化。
         let versions = LayerVersions {
@@ -316,14 +368,20 @@ impl LayerService {
             end_time: query.end_time.to_rfc3339(),
         };
 
-        // MISS 节点指标改为走 VM 实时查询（速率 + 时间窗口累计数量）。
-        let miss_metrics = self.vm_repo.fetch_miss_metrics(&query).await?;
+        // MISS 节点总量走 MissRepository（VictoriaLogs），不走 VictoriaMetrics。
+        let miss_repo = self.resolve_miss_repo(miss_source)?;
+        let miss_count = miss_repo.count_total().await?;
+        let miss_metrics = MetricsSnapshot {
+            log_rate_eps: 0.0,
+            log_count: miss_count,
+            collected_at: Utc::now().to_rfc3339(),
+        };
+        let available_sources = self.available_miss_sources();
         debug!(
             source_count = snapshot_data.sources.len(),
             parse_count = snapshot_data.parses.len(),
             sink_group_count = snapshot_data.sinks.len(),
-            miss_rate_eps = miss_metrics.log_rate_eps,
-            miss_count = miss_metrics.log_count,
+            miss_count = miss_count,
             "layer_service.layers_snapshot.success"
         );
 
@@ -335,8 +393,8 @@ impl LayerService {
             miss: MissNode {
                 id: "miss".to_string(),
                 name: "MISS".to_string(),
-                fixed: false,
                 metrics: miss_metrics,
+                available_sources,
             },
             sys_metrics: snapshot_data.sys_metrics,
         })
@@ -348,8 +406,12 @@ impl LayerService {
         &self,
         query: TimeRangeQuery,
         node_ids: Option<Vec<String>>,
-    ) -> Result<LayersMetricsResponse, VmRepoError> {
-        let snapshot = self.get_layers_snapshot(query).await?;
+        filters: Option<Vec<PackageFilter>>,
+        miss_source: MissSource,
+    ) -> Result<LayersMetricsResponse, AppError> {
+        let snapshot = self
+            .get_layers_snapshot(query, filters, miss_source)
+            .await?;
 
         let mut items = Vec::new();
 
@@ -407,6 +469,7 @@ impl LayerService {
         Ok(LayersMetricsResponse {
             generated_at: Utc::now().to_rfc3339(),
             items,
+            layer_versions: snapshot.meta.layer_versions,
         })
     }
 
@@ -416,9 +479,30 @@ impl LayerService {
         &self,
         node_id: &str,
         query: TimeRangeQuery,
-    ) -> Result<NodeDetail, VmRepoError> {
+        miss_source: MissSource,
+    ) -> Result<NodeDetail, AppError> {
         debug!(node_id = %node_id, "layer_service.node_detail.start");
-        let snapshot = self.get_layers_snapshot(query.clone()).await?;
+
+        if node_id == "miss" {
+            let miss_repo = self.resolve_miss_repo(miss_source)?;
+            let miss_count = miss_repo.count_total().await?;
+            debug!(node_id = %node_id, "layer_service.node_detail.miss");
+            return Ok(NodeDetail {
+                id: "miss".to_string(),
+                name: "MISS".to_string(),
+                node_type: "miss".to_string(),
+                package_name: None,
+                metrics: MetricsSnapshot {
+                    log_rate_eps: 0.0,
+                    log_count: miss_count,
+                    collected_at: Utc::now().to_rfc3339(),
+                },
+            });
+        }
+
+        let snapshot = self
+            .get_layers_snapshot(query.clone(), None, miss_source)
+            .await?;
         if let Some(detail) =
             snapshot
                 .sources
@@ -480,18 +564,6 @@ impl LayerService {
             return Ok(detail);
         }
 
-        if node_id == "miss" {
-            let miss_metrics = self.vm_repo.fetch_miss_metrics(&query).await?;
-            debug!(node_id = %node_id, "layer_service.node_detail.miss");
-            return Ok(NodeDetail {
-                id: "miss".to_string(),
-                name: "MISS".to_string(),
-                node_type: "miss".to_string(),
-                package_name: None,
-                metrics: miss_metrics,
-            });
-        }
-
         // 未命中任何已知节点时，返回 unknown（不抛错，保证接口稳定）。
         warn!(node_id = %node_id, "layer_service.node_detail.unknown");
         Ok(NodeDetail {
@@ -515,15 +587,16 @@ impl LayerService {
         node_id: &str,
         query: TimeRangeQuery,
         max_data_points: Option<usize>,
-    ) -> Result<NodeTimeSeries, VmRepoError> {
+        metric_mode: TimeSeriesMetricMode,
+    ) -> Result<NodeTimeSeries, AppError> {
         if node_id == "miss" {
             debug!(node_id = %node_id, "layer_service.node_timeseries.miss_empty");
             return Ok(NodeTimeSeries {
                 node_id: "miss".to_string(),
                 log_rate_eps: Vec::new(),
+                log_count: Vec::new(),
                 step_secs: 0,
                 rate_window_secs: 0,
-                log_count: Vec::new(),
             });
         }
         debug!(
@@ -531,23 +604,62 @@ impl LayerService {
             "layer_service.node_timeseries.start"
         );
         self.vm_repo
-            .fetch_node_timeseries(node_id, &query, max_data_points)
+            .fetch_node_timeseries(node_id, &query, max_data_points, metric_mode)
             .await
+    }
+
+    pub async fn get_packages_timeseries(
+        &self,
+        query: TimeRangeQuery,
+        max_data_points: Option<usize>,
+        filters: Vec<PackageFilter>,
+        metric_mode: TimeSeriesMetricMode,
+    ) -> Result<Vec<NodeTimeSeries>, AppError> {
+        // 传递原始值，PromQL 转义由基础设施层负责。
+        let pairs: Vec<(String, String)> = filters
+            .iter()
+            .filter_map(|f| {
+                if f.rule_names.is_empty() {
+                    return None;
+                }
+                let rule_regex = f.rule_names.join("|");
+                Some((f.package_name.clone(), rule_regex))
+            })
+            .collect();
+
+        if pairs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let timeseries = self
+            .vm_repo
+            .fetch_packages_timeseries(&query, &pairs, max_data_points, metric_mode)
+            .await?;
+
+        Ok(timeseries)
     }
 
     /// 获取 parse 层节点时间序列。
     pub async fn get_parse_timeseries(
         &self,
         query: TimeRangeQuery,
-        package_name: Option<String>,
-        log_type: Option<String>,
+        package_name: Vec<String>,
+        rule_name: Vec<String>,
         max_data_points: Option<usize>,
-    ) -> Result<Vec<NodeTimeSeries>, VmRepoError> {
-        let package_name = package_name.as_deref().unwrap_or(".*");
-        let log_type = log_type.as_deref().unwrap_or(".*");
+        metric_mode: TimeSeriesMetricMode,
+    ) -> Result<Vec<NodeTimeSeries>, AppError> {
+        // 传递原始值，PromQL 转义由基础设施层负责。
+        let package_name = package_name.join("|");
+        let rule_name = rule_name.join("|");
         let timeseries = self
             .vm_repo
-            .fetch_parse_timeseries(&query, package_name, log_type, max_data_points)
+            .fetch_parse_timeseries(
+                &query,
+                &package_name,
+                &rule_name,
+                max_data_points,
+                metric_mode,
+            )
             .await?;
         Ok(timeseries)
     }
@@ -557,9 +669,10 @@ impl LayerService {
         &self,
         query: TimeRangeQuery,
         max_data_points: Option<usize>,
-    ) -> Result<Vec<NodeTimeSeries>, VmRepoError> {
+        metric_mode: TimeSeriesMetricMode,
+    ) -> Result<Vec<NodeTimeSeries>, AppError> {
         self.vm_repo
-            .fetch_source_timeseries(&query, max_data_points)
+            .fetch_source_timeseries(&query, max_data_points, metric_mode)
             .await
     }
 
@@ -569,9 +682,10 @@ impl LayerService {
         query: TimeRangeQuery,
         sink_group: Option<String>,
         max_data_points: Option<usize>,
-    ) -> Result<Vec<NodeTimeSeries>, VmRepoError> {
+        metric_mode: TimeSeriesMetricMode,
+    ) -> Result<Vec<NodeTimeSeries>, AppError> {
         self.vm_repo
-            .fetch_sink_timeseries(&query, sink_group.as_deref(), max_data_points)
+            .fetch_sink_timeseries(&query, sink_group.as_deref(), max_data_points, metric_mode)
             .await
     }
 

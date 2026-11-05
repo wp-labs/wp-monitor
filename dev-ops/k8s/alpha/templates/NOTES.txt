@@ -1,0 +1,22 @@
+1. Get the wp-monitor URL by running these commands:
+{{- if .Values.wpMonitor.ingress.enabled }}
+{{- range $host := .Values.wpMonitor.ingress.hosts }}
+  {{- range .paths }}
+  http{{ if $.Values.wpMonitor.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- else if contains "NodePort" .Values.wpMonitor.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "wp-monitor.componentFullname" (dict "context" . "name" "wp-monitor") }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.wpMonitor.service.type }}
+     NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+            You can watch its status by running 'kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "wp-monitor.componentFullname" (dict "context" . "name" "wp-monitor") }}'
+  export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "wp-monitor.componentFullname" (dict "context" . "name" "wp-monitor") }} --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+  echo http://$SERVICE_IP:{{ .Values.wpMonitor.service.port }}
+{{- else if contains "ClusterIP" .Values.wpMonitor.service.type }}
+  export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "wp-monitor.name" . }},app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=wp-monitor" -o jsonpath="{.items[0].metadata.name}")
+  export CONTAINER_PORT=$(kubectl get pod --namespace {{ .Release.Namespace }} $POD_NAME -o jsonpath="{.spec.containers[0].ports[0].containerPort}")
+  echo "Visit http://127.0.0.1:8080 to use wp-monitor"
+  kubectl --namespace {{ .Release.Namespace }} port-forward $POD_NAME 8080:$CONTAINER_PORT
+{{- end }}
