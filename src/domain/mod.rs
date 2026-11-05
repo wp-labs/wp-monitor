@@ -1,3 +1,4 @@
+pub mod layer_metrics;
 pub mod miss_repository;
 pub mod model;
 pub mod vlog_repository;

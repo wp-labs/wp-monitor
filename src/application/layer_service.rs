@@ -1,4 +1,5 @@
 use crate::application::miss_service::MissSource;
+use crate::domain::layer_metrics::LayerMetrics;
 use crate::domain::miss_repository::MissRepository;
 use crate::domain::model::{
     LayerSnapshot, LayerVersions, LayersMetricsResponse, MetricsSnapshot, MissNode, NodeDetail,
@@ -10,7 +11,8 @@ use crate::domain::vm_repository::{
 use crate::shared::config::AppConfig;
 use crate::shared::error::{AppError, AppReason};
 use crate::shared::hash::stable_hash_json;
-use chrono::Utc;
+use chrono::{DateTime, FixedOffset, Utc};
+use orion_error::UnifiedReason;
 use orion_error::conversion::ToStructError;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -694,5 +696,26 @@ impl LayerService {
         serde_json::json!({
           "vm_base_url": self.config.vm_base_url
         })
+    }
+
+    pub async fn get_layer_metrics(&self) -> Result<LayerMetrics, AppError> {
+        let current_time = DateTime::<FixedOffset>::from(Utc::now());
+        let current_day_time = current_time
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .ok_or(AppReason::General(UnifiedReason::ValidationError))?;
+        let today_query = TimeRangeQuery {
+            start_time: current_day_time
+                .and_utc()
+                .with_timezone(current_time.offset()),
+            end_time: current_time,
+        };
+        let last_minute_query = TimeRangeQuery {
+            start_time: current_time - chrono::Duration::minutes(1),
+            end_time: current_time,
+        };
+        self.vm_repo
+            .get_layer_metrics(&today_query, &last_minute_query)
+            .await
     }
 }

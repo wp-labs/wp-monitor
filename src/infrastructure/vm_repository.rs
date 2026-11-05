@@ -1,4 +1,5 @@
 use super::vm_utils::{align_points_to_grid, ts_to_rfc3339};
+use crate::domain::layer_metrics::LayerMetrics;
 use crate::domain::model::{
     LogTypeNode, MetricsSnapshot, NodeTimeSeries, ParseNode, SinkGroupNode, SinkLeafNode,
     SourceNode, SysMetrics, TimePoint, TimeRangeQuery,
@@ -258,6 +259,50 @@ impl VmHttpRepository {
                 value: Self::parse_value(item.value[1].as_str().unwrap_or("0.00")),
             })
             .collect())
+    }
+
+    /// 为三个首页计数器构造一个带独立标识标签的 MetricsQL instant query。
+    fn layer_metrics_query(today_window_secs: i64, last_minute_window_secs: i64) -> String {
+        format!(
+            r#"label_set(sum(increase(wparse_receive_data[{today_window_secs}s])), "metric", "today_log_total") or label_set(sum(increase(wparse_receive_data[{last_minute_window_secs}s])), "metric", "last_minute_increment") or label_set(sum(increase(wparse_parse_all[{today_window_secs}s])), "metric", "today_analyzed_total")"#
+        )
+    }
+
+    /// 一次查询获取今日接收量、最近一分钟接收增量和今日解析量。
+    async fn query_layer_metrics(
+        &self,
+        today_range: &TimeRangeQuery,
+        last_minute_range: &TimeRangeQuery,
+    ) -> Result<LayerMetrics, AppError> {
+        let today_window_secs =
+            (today_range.end_time.timestamp() - today_range.start_time.timestamp()).max(1);
+        let last_minute_window_secs = (last_minute_range.end_time.timestamp()
+            - last_minute_range.start_time.timestamp())
+        .max(1);
+        let query = Self::layer_metrics_query(today_window_secs, last_minute_window_secs);
+        let rows = self
+            .instant_query(&query, today_range.end_time.timestamp())
+            .await?;
+
+        let mut metrics = LayerMetrics {
+            today_log_total: 0,
+            last_minute_increment: 0,
+            today_analyzed_total: 0,
+        };
+        for row in rows {
+            let count = if row.value.is_finite() {
+                row.value.max(0.0).round() as u64
+            } else {
+                0
+            };
+            match row.metric.get("metric").map(String::as_str) {
+                Some("today_log_total") => metrics.today_log_total = count,
+                Some("last_minute_increment") => metrics.last_minute_increment = count,
+                Some("today_analyzed_total") => metrics.today_analyzed_total = count,
+                _ => {}
+            }
+        }
+        Ok(metrics)
     }
 
     /// 执行 range query（时间区间序列查询）。
@@ -1167,6 +1212,15 @@ impl VmRepository for VmHttpRepository {
         )
         .await
     }
+
+    async fn get_layer_metrics(
+        &self,
+        today_range: &TimeRangeQuery,
+        last_minute_range: &TimeRangeQuery,
+    ) -> Result<LayerMetrics, AppError> {
+        self.query_layer_metrics(today_range, last_minute_range)
+            .await
+    }
 }
 
 /// -------- VictoriaMetrics 响应结构定义（仅用于反序列化） --------
@@ -1287,5 +1341,13 @@ mod tests {
         assert_eq!(VmHttpRepository::rate_window_secs_for_step(2), 4);
         assert_eq!(VmHttpRepository::rate_window_secs_for_step(5), 5);
         assert_eq!(VmHttpRepository::rate_window_secs_for_step(60), 60);
+    }
+
+    #[test]
+    fn layer_metrics_query_combines_counts_with_distinct_labels() {
+        assert_eq!(
+            VmHttpRepository::layer_metrics_query(86_400, 60),
+            r#"label_set(sum(increase(wparse_receive_data[86400s])), "metric", "today_log_total") or label_set(sum(increase(wparse_receive_data[60s])), "metric", "last_minute_increment") or label_set(sum(increase(wparse_parse_all[86400s])), "metric", "today_analyzed_total")"#
+        );
     }
 }

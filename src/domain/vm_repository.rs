@@ -1,3 +1,4 @@
+use crate::domain::layer_metrics::LayerMetrics;
 use crate::domain::model::{
     NodeTimeSeries, ParseNode, SinkGroupNode, SourceNode, SysMetrics, TimeRangeQuery,
 };
@@ -78,4 +79,10 @@ pub trait VmRepository: Send + Sync {
         max_data_points: Option<usize>,
         metric_mode: TimeSeriesMetricMode,
     ) -> Result<Vec<NodeTimeSeries>, AppError>;
+
+    async fn get_layer_metrics(
+        &self,
+        today_range: &TimeRangeQuery,
+        last_minute_range: &TimeRangeQuery,
+    ) -> Result<LayerMetrics, AppError>;
 }
