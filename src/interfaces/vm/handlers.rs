@@ -356,8 +356,8 @@ pub async fn get_health_ready() -> Result<HttpResponse> {
 /// 首页总量指标查询参数。
 #[derive(Debug, Deserialize)]
 pub struct LayerMetricsRequest {
-    /// 可选租户 ID；传入时按此租户统计三个指标。
-    pub tenant_id: Option<String>,
+    /// 必填租户 ID，按此租户统计三个指标。
+    pub tenant_id: String,
 }
 
 /// 获取总量指标（接受日志与解析日志）。
@@ -369,7 +369,7 @@ pub async fn get_layer_metrics(
     debug!("vm.handlers.layer_metrics.request");
     let data = state
         .layer
-        .get_layer_metrics(query.tenant_id.as_deref())
+        .get_layer_metrics(Some(query.tenant_id.as_str()))
         .await
         .map_err(|e| {
             error!(error = %e, "vm.handlers.layer_metrics.failed");
