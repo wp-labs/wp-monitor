@@ -698,7 +698,10 @@ impl LayerService {
         })
     }
 
-    pub async fn get_layer_metrics(&self) -> Result<LayerMetrics, AppError> {
+    pub async fn get_layer_metrics(
+        &self,
+        tenant_id: Option<&str>,
+    ) -> Result<LayerMetrics, AppError> {
         let current_time = DateTime::<FixedOffset>::from(Utc::now());
         let current_day_time = current_time
             .date_naive()
@@ -715,7 +718,7 @@ impl LayerService {
             end_time: current_time,
         };
         self.vm_repo
-            .get_layer_metrics(&today_query, &last_minute_query)
+            .get_layer_metrics(&today_query, &last_minute_query, tenant_id)
             .await
     }
 }

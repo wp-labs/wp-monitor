@@ -11,18 +11,18 @@ mod sys_ver_adm {
   flow tag_stable {
     gx.ver ( file : "${GXL_START_ROOT}/version.txt" ,  inc : "null"  );
     gx.cmd (  "git tag v${VERSION}" );
-    gx.cmd (  "git push --tags" );
+    gx.cmd (  "git push origin v${VERSION}" );
   }
 
   flow tag_beta{
     gx.ver ( file : "${GXL_START_ROOT}/version.txt" ,  inc : "null"  );
     gx.cmd (  "git tag v${VERSION}-beta" );
-    gx.cmd (  "git push --tags" );
+    gx.cmd (  "git push origin v${VERSION}-beta" );
   }
   flow tag_alpha{
     gx.ver ( file : "${GXL_START_ROOT}/version.txt" ,  inc : "null"  );
     gx.cmd (  "git tag v${VERSION}-alpha" );
-    gx.cmd (  "git push --tags" );
+    gx.cmd (  "git push origin v${VERSION}-alpha" );
   }
 }
 mod lib_ver_adm {
@@ -37,7 +37,7 @@ mod lib_ver_adm {
   flow tag_stable{
     gx.ver ( file : "${GXL_START_ROOT}/version.txt" ,  inc : "null"  );
     gx.cmd (  "git tag v${VERSION}" );
-    gx.cmd (  "git push --tags" );
+    gx.cmd (  "git push origin v${VERSION}" );
   }
 }
 

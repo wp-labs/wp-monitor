@@ -269,10 +269,35 @@ impl VmHttpRepository {
             .collect())
     }
 
+    #[cfg(test)]
+
     /// 为三个首页计数器构造一个带独立标识标签的 MetricsQL instant query。
     fn layer_metrics_query(today_window_secs: i64, last_minute_window_secs: i64) -> String {
+        Self::layer_metrics_query_for_tenant(today_window_secs, last_minute_window_secs, None)
+    }
+
+    /// 按租户过滤三项首页总量指标并构造查询。
+    fn layer_metrics_query_for_tenant(
+        today_window_secs: i64,
+        last_minute_window_secs: i64,
+        tenant_id: Option<&str>,
+    ) -> String {
+        let (receive_metric, parse_metric) = tenant_id
+            .map(|tenant_id| {
+                let tenant_id = Self::escape_promql_string(tenant_id);
+                (
+                    format!(r#"wparse_receive_data{{tenant_id="{}"}}"#, tenant_id),
+                    format!(r#"wparse_parse_all{{tenant_id="{}"}}"#, tenant_id),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    "wparse_receive_data".to_string(),
+                    "wparse_parse_all".to_string(),
+                )
+            });
         format!(
-            r#"label_set(sum(increase(wparse_receive_data[{today_window_secs}s])), "metric", "today_log_total") or label_set(sum(increase(wparse_receive_data[{last_minute_window_secs}s])), "metric", "last_minute_increment") or label_set(sum(increase(wparse_parse_all[{today_window_secs}s])), "metric", "today_analyzed_total")"#
+            r#"label_set(sum(increase({receive_metric}[{today_window_secs}s])), "metric", "today_log_total") or label_set(sum(increase({receive_metric}[{last_minute_window_secs}s])), "metric", "last_minute_increment") or label_set(sum(increase({parse_metric}[{today_window_secs}s])), "metric", "today_analyzed_total")"#
         )
     }
 
@@ -296,13 +321,18 @@ impl VmHttpRepository {
         &self,
         today_range: &TimeRangeQuery,
         last_minute_range: &TimeRangeQuery,
+        tenant_id: Option<&str>,
     ) -> Result<LayerMetrics, AppError> {
         let today_window_secs =
             (today_range.end_time.timestamp() - today_range.start_time.timestamp()).max(1);
         let last_minute_window_secs = (last_minute_range.end_time.timestamp()
             - last_minute_range.start_time.timestamp())
         .max(1);
-        let query = Self::layer_metrics_query(today_window_secs, last_minute_window_secs);
+        let query = Self::layer_metrics_query_for_tenant(
+            today_window_secs,
+            last_minute_window_secs,
+            tenant_id,
+        );
         let rows = self
             .instant_query(&query, today_range.end_time.timestamp())
             .await?;
@@ -1245,8 +1275,9 @@ impl VmRepository for VmHttpRepository {
         &self,
         today_range: &TimeRangeQuery,
         last_minute_range: &TimeRangeQuery,
+        tenant_id: Option<&str>,
     ) -> Result<LayerMetrics, AppError> {
-        self.query_layer_metrics(today_range, last_minute_range)
+        self.query_layer_metrics(today_range, last_minute_range, tenant_id)
             .await
     }
 }

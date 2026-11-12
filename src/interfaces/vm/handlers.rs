@@ -353,13 +353,27 @@ pub async fn get_health_ready() -> Result<HttpResponse> {
     })))
 }
 
-/// 获取图层指标。
+/// 首页总量指标查询参数。
+#[derive(Debug, Deserialize)]
+pub struct LayerMetricsRequest {
+    /// 可选租户 ID；传入时按此租户统计三个指标。
+    pub tenant_id: Option<String>,
+}
+
+/// 获取总量指标（接受日志与解析日志）。
 #[get("/layers/metrics")]
-pub async fn get_layer_metrics(state: web::Data<AppState>) -> Result<HttpResponse> {
+pub async fn get_layer_metrics(
+    state: web::Data<AppState>,
+    query: web::Query<LayerMetricsRequest>,
+) -> Result<HttpResponse> {
     debug!("vm.handlers.layer_metrics.request");
-    let data = state.layer.get_layer_metrics().await.map_err(|e| {
-        error!(error = %e, "vm.handlers.layer_metrics.failed");
-        AppErrorResponse::from(e)
-    })?;
+    let data = state
+        .layer
+        .get_layer_metrics(query.tenant_id.as_deref())
+        .await
+        .map_err(|e| {
+            error!(error = %e, "vm.handlers.layer_metrics.failed");
+            AppErrorResponse::from(e)
+        })?;
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data)))
 }

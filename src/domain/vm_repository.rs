@@ -84,5 +84,6 @@ pub trait VmRepository: Send + Sync {
         &self,
         today_range: &TimeRangeQuery,
         last_minute_range: &TimeRangeQuery,
+        tenant_id: Option<&str>,
     ) -> Result<LayerMetrics, AppError>;
 }
