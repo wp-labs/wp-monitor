@@ -147,6 +147,8 @@ victoriaLogs:
 ```yaml
 wpMonitor:
   replicaCount: 1
+  wparseExcludeLabels:
+    - tenant_id
   image:
     repository: ghcr.io/wp-labs/wp-monitor
     tag: latest
@@ -155,6 +157,8 @@ wpMonitor:
     port: 18080
     nodePort: 30428
 ```
+
+`wparseExcludeLabels` 控制普通 wparse source/parse/sink 图表排除的标签，默认是 `tenant_id`。可以配置多个标签；设置为空列表 `[]` 可关闭排除。按标签缺失或为空匹配，因此不带这些标签的旧指标仍会保留。按租户统计的 `/layers/metrics?tenant_id=...` 接口不受此配置影响。
 
 ## 自定义 values
 
@@ -174,6 +178,9 @@ victoriaLogs:
   maxDiskSpaceUsageBytes: 20GiB
 
 wpMonitor:
+  wparseExcludeLabels:
+    - tenant_id
+    - customer_id
   service:
     type: NodePort
     nodePort: 30428

@@ -27,7 +27,10 @@ impl AppState {
     pub fn build(cfg: &AppConfig) -> Result<Self, AppError> {
         // ── 基础设施层 ──
 
-        let vm_repo: Arc<dyn VmRepository> = Arc::new(VmHttpRepository::new(&cfg.vm_base_url));
+        let vm_repo: Arc<dyn VmRepository> = Arc::new(VmHttpRepository::new(
+            &cfg.vm_base_url,
+            cfg.wparse_exclude_labels.clone(),
+        ));
 
         let vlog_repo = VlogHttpRepository::new(cfg.vlog_base_url.clone().unwrap_or_default());
 

@@ -44,6 +44,8 @@ victoriaLogs:
 
 wpMonitor:
   enabled: true
+  wparseExcludeLabels:
+    - tenant_id
   replicaCount: 1
   image:
     repository: ghcr.io/wp-labs/wp-monitor

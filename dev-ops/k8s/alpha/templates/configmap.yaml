@@ -7,5 +7,6 @@ metadata:
 data:
   app.toml: |
     vm_base_url = "http://{{ include "wp-monitor.componentFullname" (dict "context" . "name" "victoria-metrics") }}:{{ .Values.victoriaMetrics.service.port }}"
+    wparse_exclude_labels = {{ .Values.wpMonitor.wparseExcludeLabels | toJson }}
     vlog_base_url = "http://{{ include "wp-monitor.componentFullname" (dict "context" . "name" "victoria-logs") }}:{{ .Values.victoriaLogs.service.port }}"
     log_level = "info"

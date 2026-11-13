@@ -43,6 +43,7 @@ fn escape_pipe_separated(s: &str) -> String {
 pub struct VmHttpRepository {
     client: Client,
     base_url: String,
+    wparse_exclude_labels: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,9 +59,13 @@ impl VmHttpRepository {
     const SAFE_LAG_SECS: i64 = 10;
     /// 节点详情趋势图固定步长策略按 VictoriaMetrics 默认上限 30000 的 2/3 保守取值。
     const DETAIL_MAX_DATA_POINTS: usize = 20_000;
+    const SINK_GROUP_EXCLUDE_MATCHER: &str = r#"sink_group!~"monitor|default|miss|residue|error""#;
 
     /// 创建仓储实例，自动去掉 base_url 尾部 `/`，避免 URL 拼接重复分隔符。
-    pub fn new(base_url: impl Into<String>) -> Self {
+    pub fn new(base_url: impl Into<String>, wparse_exclude_labels: Vec<String>) -> Self {
+        let mut wparse_exclude_labels = wparse_exclude_labels;
+        wparse_exclude_labels.sort_unstable();
+        wparse_exclude_labels.dedup();
         Self {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
@@ -68,6 +73,23 @@ impl VmHttpRepository {
                 .build()
                 .expect("reqwest client build"),
             base_url: base_url.into().trim_end_matches('/').to_string(),
+            wparse_exclude_labels,
+        }
+    }
+
+    /// 从指标名和已有标签条件构造 wparse 选择器，并排除配置标签的非空值。
+    /// `get_layer_metrics` 是显式租户查询，不使用此构造器。
+    fn wparse_selector(&self, metric: &str, mut matchers: Vec<String>) -> String {
+        matchers.extend(
+            self.wparse_exclude_labels
+                .iter()
+                .map(|label| format!("{}=\"\"", label)),
+        );
+
+        if matchers.is_empty() {
+            metric.to_string()
+        } else {
+            format!("{}{{{}}}", metric, matchers.join(","))
         }
     }
 
@@ -733,62 +755,59 @@ impl VmRepository for VmHttpRepository {
         );
         let window = format!("{}s", (at_end - at_start).max(1));
 
+        let source_selector = self.wparse_selector("wparse_receive_data", Vec::new());
         let source_count_q = format!(
             r#"sum by (source_type, source_name) ({})"#,
-            Self::counter_increase_expr("wparse_receive_data", &window)
+            Self::counter_increase_expr(&source_selector, &window)
         );
 
-        let parse_count_q = if let Some(filters) = filters {
-            let subqueries: Vec<String> = filters
-                .iter()
-                .map(|f| {
-                    let rule_regex = if f.rule_names.is_empty() {
-                        ".*".to_string()
-                    } else {
-                        f.rule_names
-                            .iter()
-                            .map(|r| escape_regex_chars(r))
-                            .collect::<Vec<_>>()
-                            .join("|")
-                    };
-                    let selector = format!(
-                        r#"wparse_parse_all{{package_name="{}", rule_name=~"^{}$"}}"#,
-                        f.package_name, rule_regex
-                    );
-                    format!(
-                        r#"sum by (package_name, rule_name) ({})"#,
-                        Self::counter_increase_expr(&selector, &window)
-                    )
-                })
-                .collect();
-            if subqueries.is_empty() {
+        let parse_subqueries: Vec<String> = filters
+            .unwrap_or_default()
+            .iter()
+            .map(|f| {
+                let rule_regex = if f.rule_names.is_empty() {
+                    ".*".to_string()
+                } else {
+                    f.rule_names
+                        .iter()
+                        .map(|r| escape_regex_chars(r))
+                        .collect::<Vec<_>>()
+                        .join("|")
+                };
+                let selector = self.wparse_selector(
+                    "wparse_parse_all",
+                    vec![
+                        format!(r#"package_name="{}""#, f.package_name),
+                        format!(r#"rule_name=~"^{}$""#, rule_regex),
+                    ],
+                );
                 format!(
                     r#"sum by (package_name, rule_name) ({})"#,
-                    Self::counter_increase_expr("wparse_parse_all", &window)
+                    Self::counter_increase_expr(&selector, &window)
                 )
-            } else {
-                subqueries.join(" or ")
-            }
-        } else {
+            })
+            .collect();
+        let parse_count_q = if parse_subqueries.is_empty() {
+            let selector = self.wparse_selector("wparse_parse_all", Vec::new());
             format!(
                 r#"sum by (package_name, rule_name) ({})"#,
-                Self::counter_increase_expr("wparse_parse_all", &window)
+                Self::counter_increase_expr(&selector, &window)
             )
+        } else {
+            parse_subqueries.join(" or ")
         };
 
+        let sink_selector = self.wparse_selector(
+            "wparse_send_to_sink",
+            vec![Self::SINK_GROUP_EXCLUDE_MATCHER.to_string()],
+        );
         let sink_group_count_q = format!(
             r#"sum by (sink_group) ({})"#,
-            Self::counter_increase_expr(
-                r#"wparse_send_to_sink{sink_group!~"monitor|default|miss|residue|error"}"#,
-                &window,
-            )
+            Self::counter_increase_expr(&sink_selector, &window)
         );
         let sink_count_q = format!(
             r#"sum by (sink_group, sink_name) ({})"#,
-            Self::counter_increase_expr(
-                r#"wparse_send_to_sink{sink_group!~"monitor|default|miss|residue|error"}"#,
-                &window,
-            )
+            Self::counter_increase_expr(&sink_selector, &window)
         );
 
         let combined_query = [
@@ -905,9 +924,12 @@ impl VmRepository for VmHttpRepository {
                 let source_name = parts[1];
                 let source_type = Self::escape_promql_string(source_type);
                 let source_name = Self::escape_promql_string(source_name);
-                Some(format!(
-                    r#"wparse_receive_data{{source_type="{}",source_name="{}"}}"#,
-                    source_type, source_name
+                Some(self.wparse_selector(
+                    "wparse_receive_data",
+                    vec![
+                        format!(r#"source_type="{}""#, source_type),
+                        format!(r#"source_name="{}""#, source_name),
+                    ],
                 ))
             }
             "log" if parts.len() >= 2 => {
@@ -915,17 +937,23 @@ impl VmRepository for VmHttpRepository {
                 let rule = parts[1];
                 let package = Self::escape_promql_string(package);
                 let rule = Self::escape_promql_string(rule);
-                Some(format!(
-                    r#"wparse_parse_all{{package_name="{}",rule_name="{}"}}"#,
-                    package, rule
+                Some(self.wparse_selector(
+                    "wparse_parse_all",
+                    vec![
+                        format!(r#"package_name="{}""#, package),
+                        format!(r#"rule_name="{}""#, rule),
+                    ],
                 ))
             }
             "group" if !parts.is_empty() => {
                 let g = parts[0];
                 let g = Self::escape_promql_string(g);
-                Some(format!(
-                    r#"wparse_send_to_sink{{sink_group="{}",sink_group!~"monitor|default|miss|residue|error"}}"#,
-                    g
+                Some(self.wparse_selector(
+                    "wparse_send_to_sink",
+                    vec![
+                        format!(r#"sink_group="{}""#, g),
+                        Self::SINK_GROUP_EXCLUDE_MATCHER.to_string(),
+                    ],
                 ))
             }
             "sink" if parts.len() >= 2 => {
@@ -933,9 +961,13 @@ impl VmRepository for VmHttpRepository {
                 let s = parts[1];
                 let g = Self::escape_promql_string(g);
                 let s = Self::escape_promql_string(s);
-                Some(format!(
-                    r#"wparse_send_to_sink{{sink_group="{}",sink_name="{}",sink_group!~"monitor|default|miss|residue|error"}}"#,
-                    g, s
+                Some(self.wparse_selector(
+                    "wparse_send_to_sink",
+                    vec![
+                        format!(r#"sink_group="{}""#, g),
+                        format!(r#"sink_name="{}""#, s),
+                        Self::SINK_GROUP_EXCLUDE_MATCHER.to_string(),
+                    ],
                 ))
             }
             _ => None,
@@ -1044,9 +1076,12 @@ impl VmRepository for VmHttpRepository {
         } else {
             format!("^{}$", escape_pipe_separated(rule_names))
         };
-        let base_selector = format!(
-            r#"wparse_parse_all{{package_name=~"{}",rule_name=~"{}"}}"#,
-            package_selector, rule_selector
+        let base_selector = self.wparse_selector(
+            "wparse_parse_all",
+            vec![
+                format!(r#"package_name=~"{}""#, package_selector),
+                format!(r#"rule_name=~"{}""#, rule_selector),
+            ],
         );
         let query_prom = match metric_mode {
             TimeSeriesMetricMode::Rate => Self::guard_timeseries_expr(
@@ -1115,9 +1150,12 @@ impl VmRepository for VmHttpRepository {
             .map(|(pkg_regex, rule_regex)| {
                 let escaped_pkg = escape_regex_chars(pkg_regex);
                 let escaped_rule = escape_pipe_separated(rule_regex);
-                let selector = format!(
-                    r#"wparse_parse_all{{package_name=~"^{}$",rule_name=~"^{}$"}}"#,
-                    escaped_pkg, escaped_rule
+                let selector = self.wparse_selector(
+                    "wparse_parse_all",
+                    vec![
+                        format!(r#"package_name=~"^{}$""#, escaped_pkg),
+                        format!(r#"rule_name=~"^{}$""#, escaped_rule),
+                    ],
                 );
                 match metric_mode {
                     TimeSeriesMetricMode::Rate => Self::guard_timeseries_expr(
@@ -1170,23 +1208,24 @@ impl VmRepository for VmHttpRepository {
             .trim_end_matches('s')
             .parse::<i64>()
             .unwrap_or(0);
+        let selector = self.wparse_selector("wparse_receive_data", Vec::new());
         let query_prom = match metric_mode {
             TimeSeriesMetricMode::Rate => Self::guard_timeseries_expr(
                 format!(
                     r#"(sum by (source_type, source_name) ({}))/{}"#,
-                    Self::counter_increase_expr("wparse_receive_data", &rate_window),
+                    Self::counter_increase_expr(&selector, &rate_window),
                     rate_window_secs
                 ),
-                "wparse_receive_data",
+                &selector,
                 &rate_window,
                 &["source_type", "source_name"],
             ),
             TimeSeriesMetricMode::Count => Self::guard_timeseries_expr(
                 format!(
                     r#"sum by (source_type, source_name) ({})"#,
-                    Self::counter_increase_expr("wparse_receive_data", &step)
+                    Self::counter_increase_expr(&selector, &step)
                 ),
-                "wparse_receive_data",
+                &selector,
                 &step,
                 &["source_type", "source_name"],
             ),
@@ -1223,13 +1262,11 @@ impl VmRepository for VmHttpRepository {
             .trim_end_matches('s')
             .parse::<i64>()
             .unwrap_or(0);
-        let group_selector = sink_group
-            .map(|g| format!(r#",sink_group=~"^{}$""#, escape_regex_chars(g)))
-            .unwrap_or_default();
-        let selector = format!(
-            r#"wparse_send_to_sink{{sink_group!~"monitor|default|miss|residue|error"{} }}"#,
-            group_selector
-        );
+        let mut sink_matchers = vec![Self::SINK_GROUP_EXCLUDE_MATCHER.to_string()];
+        if let Some(group) = sink_group {
+            sink_matchers.push(format!(r#"sink_group=~"^{}$""#, escape_regex_chars(group)));
+        }
+        let selector = self.wparse_selector("wparse_send_to_sink", sink_matchers);
         let query_prom = match metric_mode {
             TimeSeriesMetricMode::Rate => Self::guard_timeseries_expr(
                 format!(
