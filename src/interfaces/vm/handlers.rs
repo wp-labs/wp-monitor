@@ -2,9 +2,10 @@ use crate::application::miss_service::MissSource;
 use crate::domain::model::TimeRangeQuery;
 use crate::domain::vm_repository::{PackageFilter, TimeSeriesMetricMode};
 use crate::shared::api::{ApiResponse, ReadyResponse, VersionResponse};
-use crate::shared::error::AppErrorResponse;
+use crate::shared::error::{AppErrorResponse, AppReason};
 use crate::state::AppState;
 use actix_web::{HttpResponse, Result, get, post, web};
+use orion_error::conversion::ToStructError;
 use serde::Deserialize;
 use std::str::FromStr;
 use tracing::{debug, error};
@@ -367,9 +368,19 @@ pub async fn get_layer_metrics(
     query: web::Query<LayerMetricsRequest>,
 ) -> Result<HttpResponse> {
     debug!("vm.handlers.layer_metrics.request");
+    let tenant_id = query.tenant_id.trim();
+    if tenant_id.is_empty() {
+        return Err(AppErrorResponse(
+            AppReason::validation_error()
+                .to_err()
+                .with_detail("tenant_id 不能为空"),
+        )
+        .into());
+    }
+
     let data = state
         .layer
-        .get_layer_metrics(Some(query.tenant_id.as_str()))
+        .get_layer_metrics(tenant_id)
         .await
         .map_err(|e| {
             error!(error = %e, "vm.handlers.layer_metrics.failed");

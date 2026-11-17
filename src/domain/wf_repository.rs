@@ -148,6 +148,8 @@ pub enum WfAlertMetrics {
 ///
 /// 所有即时查询使用 VictoriaMetrics `/api/v1/query`，
 /// 时序查询使用 `/api/v1/query_range`。
+// async_trait 展开会重复标记 Future 的 must_use，仅在此 trait 上抑制该 lint。
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait WfRepository: Send + Sync {
     /// 流水线概览：三阶段聚合指标 + 实体计数。

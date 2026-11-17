@@ -32,6 +32,8 @@ pub struct VmSnapshotData {
 /// VM 仓储抽象：
 /// - fetch_snapshot_data：查一次"当前时刻"聚合快照；
 /// - fetch_node_timeseries：按节点拉区间序列。
+// async_trait 展开会重复标记 Future 的 must_use，仅在此 trait 上抑制该 lint。
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait VmRepository: Send + Sync {
     async fn fetch_snapshot_data(
@@ -84,6 +86,6 @@ pub trait VmRepository: Send + Sync {
         &self,
         today_range: &TimeRangeQuery,
         last_minute_range: &TimeRangeQuery,
-        tenant_id: Option<&str>,
+        tenant_id: &str,
     ) -> Result<LayerMetrics, AppError>;
 }

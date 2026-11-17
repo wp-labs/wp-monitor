@@ -698,10 +698,7 @@ impl LayerService {
         })
     }
 
-    pub async fn get_layer_metrics(
-        &self,
-        tenant_id: Option<&str>,
-    ) -> Result<LayerMetrics, AppError> {
+    pub async fn get_layer_metrics(&self, tenant_id: &str) -> Result<LayerMetrics, AppError> {
         let current_time = DateTime::<FixedOffset>::from(Utc::now());
         let current_day_time = current_time
             .date_naive()

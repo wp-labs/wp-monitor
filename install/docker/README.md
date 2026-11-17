@@ -16,6 +16,8 @@ VLOG_MAX_DISK_SPACE_USAGE_BYTES=50GiB
 - `RETENTION_PERIOD`: 指标和日志数据保留时间
 - `VLOG_MAX_DISK_SPACE_USAGE_BYTES`: 日志最大磁盘空间使用量，超过后会触发数据清理
 
+`wp-monitor` 的今日接收量按接收指标增量统计，今日解析量按接收增量减去 MISS sink 增量统计；两项查询都会按请求中的 `tenant_id` 过滤，MISS 指标缺失时按 0 计算。
+
 `wp-monitor` 镜像版本由仓库内的 [version.txt](/Users/zuowenjian/devspace/wp-labs/developer/wparse/wp-monitor/version.txt:1) 统一管理，
 并通过版本同步流程写入 [docker-compose-main.yml](/Users/zuowenjian/devspace/wp-labs/developer/wparse/wp-monitor/install/docker/docker-compose-main.yml:71) 等 compose 文件。
 

@@ -291,35 +291,31 @@ impl VmHttpRepository {
             .collect())
     }
 
+    /// 为必填租户构造三个带独立标识标签的 MetricsQL instant query。
     #[cfg(test)]
-
-    /// 为三个首页计数器构造一个带独立标识标签的 MetricsQL instant query。
-    fn layer_metrics_query(today_window_secs: i64, last_minute_window_secs: i64) -> String {
-        Self::layer_metrics_query_for_tenant(today_window_secs, last_minute_window_secs, None)
+    fn layer_metrics_query(
+        today_window_secs: i64,
+        last_minute_window_secs: i64,
+        tenant_id: &str,
+    ) -> String {
+        Self::layer_metrics_query_for_tenant(today_window_secs, last_minute_window_secs, tenant_id)
     }
 
-    /// 按租户过滤三项首页总量指标并构造查询。
+    /// 按必填租户过滤接收量与 MISS 量，并构造三个首页总量指标查询。
     fn layer_metrics_query_for_tenant(
         today_window_secs: i64,
         last_minute_window_secs: i64,
-        tenant_id: Option<&str>,
+        tenant_id: &str,
     ) -> String {
-        let (receive_metric, parse_metric) = tenant_id
-            .map(|tenant_id| {
-                let tenant_id = Self::escape_promql_string(tenant_id);
-                (
-                    format!(r#"wparse_receive_data{{tenant_id="{}"}}"#, tenant_id),
-                    format!(r#"wparse_parse_all{{tenant_id="{}"}}"#, tenant_id),
-                )
-            })
-            .unwrap_or_else(|| {
-                (
-                    "wparse_receive_data".to_string(),
-                    "wparse_parse_all".to_string(),
-                )
-            });
+        let tenant_id = Self::escape_promql_string(tenant_id);
+        let receive_metric = format!(r#"wparse_receive_data{{tenant_id="{}"}}"#, tenant_id);
+        let miss_metric = format!(
+            r#"wparse_send_to_sink{{sink_group="miss",tenant_id="{}"}}"#,
+            tenant_id
+        );
+
         format!(
-            r#"label_set(sum(increase({receive_metric}[{today_window_secs}s])), "metric", "today_log_total") or label_set(sum(increase({receive_metric}[{last_minute_window_secs}s])), "metric", "last_minute_increment") or label_set(sum(increase({parse_metric}[{today_window_secs}s])), "metric", "today_analyzed_total")"#
+            r#"label_set(sum(increase({receive_metric}[{today_window_secs}s])), "metric", "today_log_total") or label_set(sum(increase({receive_metric}[{last_minute_window_secs}s])), "metric", "last_minute_increment") or label_set((sum(increase({receive_metric}[{today_window_secs}s])) - (sum(increase({miss_metric}[{today_window_secs}s])) or vector(0))), "metric", "today_analyzed_total")"#
         )
     }
 
@@ -343,7 +339,7 @@ impl VmHttpRepository {
         &self,
         today_range: &TimeRangeQuery,
         last_minute_range: &TimeRangeQuery,
-        tenant_id: Option<&str>,
+        tenant_id: &str,
     ) -> Result<LayerMetrics, AppError> {
         let today_window_secs =
             (today_range.end_time.timestamp() - today_range.start_time.timestamp()).max(1);
@@ -1312,7 +1308,7 @@ impl VmRepository for VmHttpRepository {
         &self,
         today_range: &TimeRangeQuery,
         last_minute_range: &TimeRangeQuery,
-        tenant_id: Option<&str>,
+        tenant_id: &str,
     ) -> Result<LayerMetrics, AppError> {
         self.query_layer_metrics(today_range, last_minute_range, tenant_id)
             .await
@@ -1442,8 +1438,8 @@ mod tests {
     #[test]
     fn layer_metrics_query_combines_counts_with_distinct_labels() {
         assert_eq!(
-            VmHttpRepository::layer_metrics_query(86_400, 60),
-            r#"label_set(sum(increase(wparse_receive_data[86400s])), "metric", "today_log_total") or label_set(sum(increase(wparse_receive_data[60s])), "metric", "last_minute_increment") or label_set(sum(increase(wparse_parse_all[86400s])), "metric", "today_analyzed_total")"#
+            VmHttpRepository::layer_metrics_query(86_400, 60, "tenant-1"),
+            r#"label_set(sum(increase(wparse_receive_data{tenant_id="tenant-1"}[86400s])), "metric", "today_log_total") or label_set(sum(increase(wparse_receive_data{tenant_id="tenant-1"}[60s])), "metric", "last_minute_increment") or label_set((sum(increase(wparse_receive_data{tenant_id="tenant-1"}[86400s])) - (sum(increase(wparse_send_to_sink{sink_group="miss",tenant_id="tenant-1"}[86400s])) or vector(0))), "metric", "today_analyzed_total")"#
         );
     }
 

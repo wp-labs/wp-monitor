@@ -18,6 +18,8 @@ pub struct MissQuery {
 }
 
 /// Miss 数据仓储抽象（领域层定义，基础设施层实现）。
+// async_trait 展开会重复标记 Future 的 must_use，仅在此 trait 上抑制该 lint。
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait MissRepository: Send + Sync {
     /// 获取 miss 记录。
